@@ -200,11 +200,11 @@ export function toMatlab(inv, c) {
   if (consts.length) { L.push('', '%% constants'); consts.forEach(k => L.push(`${safe(k.sym)} = ${String(k.value)};  % ${k.name} [${k.unit}]`)); }
   L.push('', '%% explicit relations');
   plan.forEach(it => L.push(`% ${it.q.name} (${it.q.kind})`, `${safe(it.L.n)} = ${E.toCode(it.R, 'matlab', safe)};`));
-  if (odes.length) { const st = odes.map(o => o.L.args[0].n); L.push('', '%% ordinary differential equations', `rhs = @(t, y) [${odes.map(o => E.toCode(o.R, 'matlab', s => (st.includes(s) ? `y(${st.indexOf(s) + 1})` : safe(s)))).join(';\n             ')}];`, `y0 = [${st.map(() => '0').join('; ')}];  % set the initial state`, `opts = odeset('RelTol', 1e-8, 'AbsTol', 1e-10);`, '[t, y] = ode45(rhs, [0 1], y0, opts);'); }
+  if (odes.length) { const st = odes.map(o => o.L.args[0].n); L.push('', '%% ordinary differential equations', `rhs = @(t, y) [${odes.map(o => E.toCode(o.R, 'matlab', s => (st.includes(s) ? `y(${st.indexOf(s) + 1})` : safe(s)))).join(';\n             ')}];`, `% to integrate, set the initial state (order: ${st.join(', ')}) and the end time, then run:`, `%   opts = odeset('RelTol', 1e-8, 'AbsTol', 1e-10);`, `%   [t, y] = ode15s(rhs, [0 t_end], y0, opts);   % ode45 for non-stiff problems`); }
   if (skipped.length) { L.push('', '%% relations not reducible to an explicit assignment'); skipped.forEach(q => L.push(`% ${q.name}: ${q.lhs} = ${q.rhs}   [${q.kind}]`)); }
   L.push('', '%% reference results from the in-app solver', 'reference = struct();');
   c.result.scalars.filter(s => Number.isFinite(s.value)).forEach(s => L.push(`reference.${safe(s.sym)} = ${String(s.value)};  % ${s.name} [${s.unit}]`));
-  L.push('', 'names = fieldnames(reference);', 'for k = 1:numel(names)', '    if exist(names{k}, \'var\')', '        got = eval(names{k});', '        fprintf(\'%12s  script % .6e   in-app % .6e\\n\', names{k}, got, reference.(names{k}));', '    else', '        fprintf(\'%12s  in-app % .6e\\n\', names{k}, reference.(names{k}));', '    end', 'end', '');
+  L.push('', 'ref_names__ = fieldnames(reference);', 'for idx__ = 1:numel(ref_names__)', '    nm__ = ref_names__{idx__};', '    if exist(nm__, \'var\') && isnumeric(eval(nm__)) && isscalar(eval(nm__))', '        fprintf(\'%12s  script % .6e   in-app % .6e\\n\', nm__, eval(nm__), reference.(nm__));', '    else', '        fprintf(\'%12s  in-app % .6e\\n\', nm__, reference.(nm__));', '    end', 'end', '');
   return L.join('\n');
 }
 export function toCpp(inv, c) {

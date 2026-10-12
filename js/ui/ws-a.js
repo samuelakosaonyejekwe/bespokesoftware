@@ -17,6 +17,7 @@ import * as Store from '../core/store.js';
 import * as Conn from '../core/connectors.js';
 import { lineChart, view3d, drawing2d } from '../core/plot.js';
 import { leanLiveUrl } from '../core/lean.js';
+import { checkLean, cached as leanCached, sourceHash } from '../core/leancheck.js';
 import { download, slug } from '../core/exporters.js';
 
 const para = t => join([].concat(t || []), p => html`<p>${p}</p>`);
@@ -214,17 +215,34 @@ function foundations(X) {
 
 // =================================================================== equations
 function leanPanel(X) {
-  return html`<div class="card"><div class="row spread"><h3>Machine-checkable proof file (Lean 4)</h3><span class="row"><button class="btn sm" id="lean-copy">Copy</button><button class="btn sm" id="lean-dl">Download .lean</button><a class="btn sm primary" id="lean-open" target="_blank" rel="noopener noreferrer">Check in the Lean web editor ↗</a></span></div>
-    <p class="small dim" id="lean-stats"></p><pre id="lean-src" style="max-height:340px"></pre>
-    <p class="small dim">What the file establishes: that each equation is dimensionally homogeneous (by computation in the proof kernel); that denominators and logarithm arguments stay away from their singular sets when the quantities are positive; and that each regularised term is bounded and smooth, by lemmas proved in the file. What it cannot establish: that the equations describe nature. That is the job of the benchmarks, measurements and your own data in the evaluation workspace.</p></div>`;
+  return html`<div class="card"><div class="row spread"><h3>Machine check by Lean 4</h3><span class="row"><button class="btn sm primary" id="lean-run">Check with Lean now</button><button class="btn sm" id="lean-copy">Copy</button><button class="btn sm" id="lean-dl">Download .lean</button><a class="btn sm" id="lean-open" target="_blank" rel="noopener noreferrer">Open in the Lean editor ↗</a></span></div>
+    <div id="lean-result" class="note">Preparing…</div>
+    <p class="small dim" id="lean-stats"></p>
+    <details><summary>Proof file</summary><div class="body"><pre id="lean-src" style="max-height:340px"></pre></div></details>
+    <p class="small dim">Every equation here is translated into Lean theorems and checked by the Lean kernel with the Mathlib library, on the Lean community's public server, as soon as this workspace opens and again whenever an equation or assumption changes. What Lean establishes: each equation is dimensionally homogeneous; denominators and logarithm arguments stay away from their singular sets when the quantities are positive; each regularised term and each capped rate is bounded, so nothing can reach infinity. What Lean cannot establish: that the equations describe nature. That is the job of the benchmarks, measurements and your own data in the evaluation workspace.</p></div>`;
 }
 function bindLean(root, X) {
-  const { source, stats } = Eng.leanSource(X.inv, X.c);
+  const { source, stats } = Eng.leanSource(X.inv, X.c), out = $('#lean-result', root);
   $('#lean-src', root).textContent = source;
-  $('#lean-stats', root).textContent = `${stats.dim} dimensional theorems, ${stats.reg} regularity theorems proved by positivity, ${stats.hyp} domain conditions stated as hypotheses, ${stats.soft} regularised bounds${stats.logic ? ', 1 logical theorem' : ''}.`;
+  $('#lean-stats', root).textContent = `${stats.dim} dimensional theorems, ${stats.reg} regularity theorems proved by positivity, ${stats.hyp} domain conditions carried as hypotheses, ${stats.soft} regularised bounds${stats.capped ? `, ${stats.capped} capped-rate guarantees` : ''}${stats.logic ? ', 1 logical theorem' : ''}.`;
   $('#lean-copy', root).addEventListener('click', () => copy(source));
   $('#lean-dl', root).addEventListener('click', () => download(`${slug(X.inv.title)}.lean`, source));
   const url = leanLiveUrl(source); const a = $('#lean-open', root); if (url.length < 60000) a.href = url; else { a.removeAttribute('href'); a.addEventListener('click', () => { copy(source); window.open('https://live.lean-lang.org/', '_blank', 'noopener'); toast('The file is long: it has been copied. Paste it into the editor that just opened.'); }); }
+  let alive = true; X.onDispose(() => { alive = false; });
+  const show = r => {
+    if (!alive) return;
+    out.className = `note ${r.ok ? 'ok' : 'bad'}`;
+    out.innerHTML = r.ok
+      ? `<b>✓ Checked by Lean 4: all ${r.theorems} theorems accepted, no errors.</b> <span class="small">Lean kernel with Mathlib, ${r.cached ? `result of ${esc(when(r.at))}` : `${(r.ms / 1000).toFixed(1)} s`}${r.warnings ? `; ${r.warnings} style warning(s)` : ''}.</span>`
+      : `<b>✕ Lean rejected ${r.errors.length} statement(s).</b> The equations concerned are not verified and should be corrected in the equation laboratory.<ul class="clean small">${r.errors.slice(0, 8).map(e => `<li><code>${esc(e.theorem)}</code> (line ${e.line}): ${esc(e.message.split('\n').slice(0, 3).join(' '))}</li>`).join('')}</ul>`;
+    if (X.inv.audit[X.inv.audit.length - 1].action.indexOf(r.hash) < 0 && !r.cached) { Eng.log(X.inv, `Lean 4 check ${r.ok ? 'passed' : 'FAILED'}: ${r.theorems} theorems, ${r.errors.length} errors (file ${r.hash})`); X.save(); }
+  };
+  const run = force => {
+    out.className = 'note'; out.innerHTML = '<span class="busy"></span> Connecting to Lean…';
+    checkLean(source, { force, onStatus: s => { if (alive) out.innerHTML = `<span class="busy"></span> ${esc(s)}`; } }).then(show).catch(e => { if (!alive) return; out.className = 'note warn'; out.innerHTML = `<b>Lean has not checked this file yet.</b> ${esc(e.message)} The on-device checks above (dimensions, closure, finiteness) are complete and do not depend on a connection.`; });
+  };
+  $('#lean-run', root).addEventListener('click', () => run(true));
+  run(false);
 }
 function equationLab(X) {
   const { inv } = X, c = X.c, cv = c.customVerification;
