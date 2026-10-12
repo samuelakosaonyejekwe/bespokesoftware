@@ -8,7 +8,7 @@ import { refreshAll } from './core/connectors.js';
 const main = $('#main');
 const routes = {
   '': Pages.home, m1: () => Pages.promptPage(1), m2: () => Pages.promptPage(2), re: Pages.reversePage, saved: Pages.savedPage,
-  library: Pages.libraryPage, fields: Pages.fieldsPage, sources: Pages.sourcesPage, settings: Pages.settingsPage, help: Pages.helpPage, i: investigationView,
+  library: Pages.libraryPage, fields: Pages.fieldsPage, sources: Pages.sourcesPage, settings: Pages.settingsPage, help: Pages.helpPage, refresh: Pages.refreshPage, i: investigationView,
 };
 let cleanup = null, pos = 0, max = 0;
 

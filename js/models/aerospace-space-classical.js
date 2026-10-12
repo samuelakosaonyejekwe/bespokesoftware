@@ -185,17 +185,18 @@ const wing = {
     return [
       a.isa ? eq('rho', 'Air density', 'rho', 'p_a/(R_air*T_a)', { kind: 'closure', origin: 'Ideal-gas law with standard-atmosphere pressure and temperature', needs: ['isa'] })
         : eq('rho', 'Air density', 'rho', 'rho_sl', { kind: 'closure', origin: 'Sea-level standard value 1.225 kg/m³' }),
-      ...(a.incompressible ? [] : [eq('mach', 'Mach number', 'M', 'V/a_s', { kind: 'definition' }), eq('pg', 'Prandtl–Glauert correction', 'a_c', 'a_0/sqrt(1 - M^2)', { kind: 'derived', origin: 'Linearised subsonic potential flow (Glauert 1928)' })]),
+      ...(a.incompressible ? [] : [eq('mach', 'Mach number', 'M', 'V/a_s', { kind: 'definition' }), eq('pg', 'Prandtl–Glauert correction', 'a_c', 'a_0/sqrt(1 - min(M, 0.85)^2)', { kind: 'derived', origin: 'Linearised subsonic potential flow (Glauert 1928)', note: 'The Mach number in the correction is capped at 0.85, where the linear theory has already failed.' })]),
       a.lifting_line
         ? eq('slope', 'Finite-wing lift-curve slope', 'a_w', `${a0}/(1 + ${a0}/(pi*${e}AR))`, { kind: 'derived', origin: 'Prandtl lifting-line theory', needs: ['lifting_line'] })
         : eq('slope', 'Lift-curve slope', 'a_w', a0, { kind: 'closure', origin: 'Two-dimensional section value' }),
-      eq('cl', 'Lift coefficient', 'C_L', 'a_w*(alpha - alpha_0)', { kind: 'derived', origin: 'Linear lift below stall' }),
+      eq('cl', 'Lift coefficient', 'C_L', 'max(-C_Lmax, min(C_Lmax, a_w*(alpha - alpha_0)))', { kind: 'derived', origin: 'Linear lift below stall, held at the maximum lift coefficient beyond it' }),
       eq('cd', 'Parabolic drag polar', 'C_D', `C_D0 + C_L^2/(pi*${e}AR)`, { kind: 'derived', origin: 'Induced drag of a lifting line plus constant parasitic drag' }),
       eq('lift', 'Lift', 'L', '0.5*rho*V^2*S*C_L', { kind: 'definition' }),
       eq('drag', 'Drag', 'D', '0.5*rho*V^2*S*C_D', { kind: 'definition' }),
       eq('vs', 'Stall speed', 'V_s', 'sqrt(2*m*g/(rho*S*C_Lmax))', { kind: 'derived', origin: 'Lift equals weight at maximum lift coefficient' }),
       eq('ldmax', 'Maximum lift-to-drag ratio', 'LD_max', `0.5*sqrt(pi*${e}AR/C_D0)`, { kind: 'derived', origin: 'Induced drag equals parasitic drag at minimum total drag' }),
       eq('preq', 'Power required in level flight', 'P_req', `0.5*rho*V^3*S*C_D0 + 2*(m*g)^2/(pi*${e}AR*rho*V*S)`, { kind: 'derived', origin: 'Drag times speed with lift equal to weight' }),
+      eq('ld', 'Lift-to-drag ratio in level flight', 'LD', 'm*g*V/P_req', { kind: 'derived', origin: 'Weight over the drag in level flight at the stated speed' }),
       a.prop ? eq('range', 'Breguet range (propeller)', 'R_b', 'eta_p/(g*c_b)*LD*ln(1/(1 - zeta))', { kind: 'derived', origin: 'Breguet range equation', needs: ['prop'] })
         : eq('range', 'Breguet range (jet)', 'R_b', 'V/(g*c_T)*LD*ln(1/(1 - zeta))', { kind: 'derived', origin: 'Breguet range equation at constant speed and lift coefficient' }),
     ];
@@ -389,7 +390,7 @@ const nozzle = {
     eq('ien', 'Energy (stagnation temperature)', 'T_0/T', '1 + (gamma - 1)/2*M^2', { kind: 'law', origin: 'Steady adiabatic energy equation for a perfect gas' }),
     eq('isen', 'Isentropic pressure ratio', 'p_0/p', '(1 + (gamma - 1)/2*M^2)^(gamma/(gamma - 1))', { kind: 'law', origin: 'Second law with zero entropy change' }),
     ...(a.cd_nozzle ? [eq('area', 'Area–Mach relation', 'A/A_star', '1/M*(2/(gamma + 1)*(1 + (gamma - 1)/2*M^2))^((gamma + 1)/(2*(gamma - 1)))', { kind: 'derived', origin: 'Continuity with isentropic relations' }), eq('ae', 'Exit area', 'A_e', 'eps*A_t', { kind: 'definition' })] : [eq('ae', 'Exit area', 'A_e', 'A_t', { kind: 'definition' })]),
-    eq('mdot', 'Choked mass flow', 'mdot', `${a.cd_unity ? '' : 'C_d*'}A_t*p_0*sqrt(gamma/(R_g*T_0))*(2/(gamma + 1))^((gamma + 1)/(2*(gamma - 1)))`, { kind: 'derived', origin: 'Sonic conditions at the throat' }),
+    eq('mdot', 'Choked mass flow', 'mdot', `${a.cd_unity ? '' : 'C_d*'}A_t*p_0*sqrt(gamma/(R_g*T_0))*(2/(gamma + 1))^((gamma + 1)/(2*(gamma - 1)))`, { kind: 'derived', origin: 'Sonic conditions at the throat', note: 'Applies once the throat is sonic. At higher back pressures the nozzle is not choked and the mass flow is the exit-plane value ρ_e V_e A_e.' }),
     ...(a.shock ? [
       eq('sp', 'Shock pressure ratio', 'p_2/p_1', '1 + 2*gamma/(gamma + 1)*(M_1^2 - 1)', { kind: 'law', origin: 'Rankine–Hugoniot jump conditions', needs: ['shock'] }),
       eq('sr', 'Shock density ratio', 'rho_2/rho_1', '(gamma + 1)*M_1^2/((gamma - 1)*M_1^2 + 2)', { kind: 'law', origin: 'Rankine–Hugoniot jump conditions', needs: ['shock'] }),
@@ -429,7 +430,7 @@ const nozzle = {
     const warnings = [];
     if (f.regime === 0) warnings.push('The back pressure is not below the stagnation pressure, so there is no flow through the nozzle; reverse flow is not modelled.');
     if (f.regime === 3 && f.pe < 0.35 * v.p_b) warnings.push('The exit pressure is well below ambient: in practice the jet separates from the wall inside the nozzle (Summerfield criterion, exit pressure below roughly 0.35–0.4 of ambient), which the model does not capture.');
-    if (!a.shock && f.pr > f.pSup && f.pr < f.pSub) warnings.push('With the shock switched off the supersonic branch is forced to the exit even though this back pressure would place a normal shock inside or at the exit of the nozzle.');
+    if (!a.shock && eps > 1 + 1e-9 && f.pr >= f.pNse && f.pr < f.pSub) warnings.push('With the shock switched off the supersonic branch is forced to the exit even though this back pressure would place a normal shock inside or at the exit of the nozzle.');
     return {
       scalars: [
         scalar('regime', 'Operating regime', f.regime, '1', { text: NOZ_REGIMES[f.regime] }),
@@ -507,7 +508,7 @@ const nozzle = {
   hazards: [{ hazard: 'Over-pressure of the supply vessel', cause: 'Regulator failure or blocked exit', mitigation: 'Relief valve and burst disc sized for full supply flow' }, { hazard: 'Noise', cause: 'Shock-associated and jet-mixing noise', mitigation: 'Silencer, enclosure, hearing protection' }, { hazard: 'Side loads', cause: 'Asymmetric flow separation in an over-expanded nozzle', mitigation: 'Avoid sustained operation between shock-at-exit and design pressure ratios; structural margin' }],
   standards: ['ISO 9300 (measurement of gas flow by critical-flow Venturi nozzles)', 'ASME MFC-7 (measurement of gas flow by means of critical flow Venturi nozzles)', 'NASA SP-8120 (liquid rocket engine nozzles)'],
   limits: 'Steady quasi-one-dimensional flow of a calorically perfect gas, adiabatic and frictionless apart from a thin normal shock. Not valid where the boundary layer separates, where the gas condenses or reacts, or for strongly two-dimensional contours. The plotted contour uses a fixed inlet contraction ratio of 3.',
-  numerics: { method: 'Closed-form isentropic and shock relations; bisection on the area–Mach relation and on the shock location', stability: 'Bracketed root finding, guaranteed to converge' },
+  numerics: { method: 'Closed-form isentropic and shock relations; Newton iteration on the area–Mach relation and bisection on the shock location', stability: 'Monotonic Newton iteration on each branch of the area–Mach relation; bracketed root finding for the shock location' },
   optimise: { objective: 'F', sense: 'max', vars: ['eps'], note: 'Thrust is greatest when the area ratio expands the flow exactly to ambient pressure.' },
   inverse: { series: 'pressure', fit: ['eps', 'p_b'] },
   extensions: ['Oblique shocks and Prandtl–Meyer expansions in the jet outside the nozzle', 'Friction and heat transfer (Fanno, Rayleigh) in the duct', 'Chemically reacting or frozen-flow expansion for rocket propellants'],
@@ -583,8 +584,8 @@ const rocket = {
     eq('mom', 'Equation of motion', 'm*d(v,t)', `F${a.drag ? ' - D' : ''}${a.gravity ? ' - m*g_h' : ''}`, { kind: 'law', origin: 'Newton\'s second law for a variable-mass body', needs: ['gravity', 'drag'].filter(k => a[k]) }),
     eq('kin', 'Kinematics', 'd(z,t)', 'v', { kind: 'definition' }),
     a.const_thrust ? eq('thr', 'Thrust', 'F', 'F_v', { kind: 'closure', origin: 'Vacuum thrust at all altitudes', needs: ['const_thrust'] })
-      : eq('thr', 'Thrust with ambient back-pressure', 'F', 'F_v - p_a*A_e', { kind: 'law', origin: 'Momentum balance on the nozzle' }),
-    ...(a.const_thrust ? [] : [eq('pa', 'Ambient pressure', 'p_a', 'p_s*exp(-z/H)', { kind: 'closure', origin: 'Isothermal hydrostatic atmosphere' })]),
+      : eq('thr', 'Thrust with ambient back-pressure', 'F', 'max(F_v - p_a*A_e, 0)', { kind: 'law', origin: 'Momentum balance on the nozzle' }),
+    ...(a.const_thrust ? [] : [eq('ps', 'Surface pressure', 'p_s', '101325*rho_0/1.225', { kind: 'closure', origin: 'Standard sea-level pressure scaled in proportion to the launch-site density' }), eq('pa', 'Ambient pressure', 'p_a', 'p_s*exp(-z/H)', { kind: 'closure', origin: 'Isothermal hydrostatic atmosphere' })]),
     ...(a.drag ? [eq('drag', 'Drag', 'D', '0.5*rho*v*abs(v)*C_D*A_ref', { kind: 'empirical', origin: 'Quadratic drag law', needs: ['drag'] }), eq('rho', 'Air density', 'rho', 'rho_0*exp(-z/H)', { kind: 'closure', origin: 'Isothermal hydrostatic atmosphere', needs: ['drag'] })] : []),
     ...(a.gravity ? [a.g_varies ? eq('grav', 'Local gravity', 'g_h', 'g_s*(R_p/(R_p + z))^2', { kind: 'law', origin: 'Newton\'s law of gravitation', needs: ['g_varies'] }) : eq('grav', 'Local gravity', 'g_h', 'g_s', { kind: 'closure', origin: 'Uniform field' })] : []),
   ],
@@ -687,7 +688,7 @@ function transfer(v, a) {
   const di = a.coplanar ? 0 : v.di, vd = a.circular ? vc1 : Math.sqrt(mu * (1 + v.e_1) / r1);
   const hoh = () => { const at = (r1 + r2) / 2; return { kind: 'hohmann', dv: [Math.abs(vis(r1, at) - vd), comb(vis(r2, at), vc2, di)], tof: Math.PI * Math.sqrt(at ** 3 / mu), legs: [[r1, r2]], sweep: Math.PI }; };
   const bi = () => { const a1 = (r1 + v.r_b) / 2, a2 = (r2 + v.r_b) / 2; return { kind: 'bi-elliptic', dv: [Math.abs(vis(r1, a1) - vd), comb(vis(v.r_b, a1), vis(v.r_b, a2), di), Math.abs(vis(r2, a2) - vc2)], tof: Math.PI * (Math.sqrt(a1 ** 3 / mu) + Math.sqrt(a2 ** 3 / mu)), legs: [[r1, v.r_b], [v.r_b, r2]], sweep: 2 * Math.PI }; };
-  const low = () => { const dv = comb(vc1, vc2, Math.PI / 2 * di); return { kind: 'low-thrust', dv: [dv], tof: v.m_0 * ve * (1 - Math.exp(-dv / ve)) / v.F_T, legs: [], sweep: NaN }; };
+  const low = () => { const dv = comb(vc1, vc2, Math.min(Math.PI / 2 * di, Math.PI)); return { kind: 'low-thrust', dv: [dv], tof: v.m_0 * ve * (1 - Math.exp(-dv / ve)) / v.F_T, legs: [], sweep: NaN }; };
   const main = !a.impulsive ? low() : a.hohmann ? hoh() : bi(), other = a.hohmann ? bi() : hoh();
   return { mu, r1, r2, vc1, vc2, ve, vis, main, other, dvTot: N.sum(main.dv), dvOther: N.sum(other.dv) };
 }
@@ -719,7 +720,7 @@ const hohmann = {
   assumptions: [
     asm('hohmann', 'The transfer is a two-impulse Hohmann ellipse tangent to both orbits.', { why: 'Minimum two-impulse velocity increment', alt: 'Three-impulse bi-elliptic transfer through the stated intermediate apoapsis.' }),
     asm('impulsive', 'Each burn is short enough to be treated as an instantaneous change of velocity.', { why: 'Chemical propulsion: burn arc small against the orbit period', alt: 'Continuous low tangential thrust: a slow spiral between circular orbits (Edelbaum), with the initial orbit taken as circular.' }),
-    asm('coplanar', 'Initial and final orbits lie in the same plane.', { why: 'Simplest case', alt: 'A plane change is combined with the burn made farthest from the body, by the law of cosines.' }),
+    asm('coplanar', 'Initial and final orbits lie in the same plane.', { why: 'Simplest case', alt: 'A plane change is combined, by the law of cosines, with the second burn: the one at the final radius for a Hohmann transfer, or at the intermediate apoapsis for a bi-elliptic transfer.' }),
     asm('circular', 'The initial orbit is circular.', { why: 'Parking orbit', alt: 'The initial orbit is an ellipse with the stated eccentricity; the first burn is made at its periapsis, whose radius is the initial radius.' }),
   ],
   symbols: { v: ['Orbital speed', 'm/s'], r: ['Orbital radius', 'm'], a_o: ['Semi-major axis of the orbit', 'm'], a_t: ['Semi-major axis of the transfer ellipse', 'm'], a_1: ['Semi-major axis of the first ellipse', 'm'], a_2: ['Semi-major axis of the second ellipse', 'm'], v_c1: ['Circular speed at the initial radius', 'm/s'], v_c2: ['Circular speed at the final radius', 'm/s'], v_d: ['Speed in the initial orbit at departure', 'm/s'], v_tp: ['Transfer-orbit speed at the initial radius', 'm/s'], v_ta: ['Transfer-orbit speed at the final radius', 'm/s'], v_b1: ['Speed at the intermediate apoapsis, first ellipse', 'm/s'], v_b2: ['Speed at the intermediate apoapsis, second ellipse', 'm/s'], dv_1: ['First velocity increment', 'm/s'], dv_2: ['Second velocity increment', 'm/s'], dv_3: ['Third velocity increment', 'm/s'], dv_tot: ['Total velocity increment', 'm/s'], t_f: ['Time of flight', 's'], m_p: ['Propellant mass', 'kg'], g: ['Standard gravity', 'm/s^2'] },
@@ -731,7 +732,8 @@ const hohmann = {
     ];
     if (!a.impulsive) {
       out.push(a.coplanar ? eq('dvt', 'Low-thrust velocity increment', 'dv_tot', 'abs(v_c1 - v_c2)', { kind: 'derived', origin: 'Quasi-circular spiral under tangential thrust' })
-        : eq('dvt', 'Low-thrust velocity increment with plane change', 'dv_tot', 'sqrt(v_c1^2 + v_c2^2 - 2*v_c1*v_c2*cos(pi/2*di))', { kind: 'derived', origin: 'Edelbaum (1961)' }));
+        : eq('dvt', 'Low-thrust velocity increment with plane change', 'dv_tot', 'sqrt(v_c1^2 + v_c2^2 - 2*v_c1*v_c2*cos(min(pi/2*di, pi)))', { kind: 'derived', origin: 'Edelbaum (1961)', note: 'Edelbaum\'s expression holds for plane changes up to 2 rad (114.6°); beyond that the cost saturates at v_c1 + v_c2.' }));
+      out.push(eq('mp', 'Propellant mass', 'm_p', 'm_0*(1 - exp(-dv_tot/(g*I_sp)))', { kind: 'law', origin: 'Tsiolkovsky rocket equation' }));
       out.push(eq('tf', 'Thrusting time', 't_f', 'm_p*g*I_sp/F_T', { kind: 'derived', origin: 'Constant propellant flow F/(g₀ I_sp)' }));
     } else {
       out.push(a.circular ? eq('vd', 'Departure speed', 'v_d', 'v_c1', { kind: 'definition', needs: ['circular'] }) : eq('vd', 'Periapsis speed of the initial ellipse', 'v_d', 'sqrt(GM*(1 + e_1)/r_1)', { kind: 'derived', origin: 'Vis-viva at periapsis' }));
@@ -755,13 +757,13 @@ const hohmann = {
         out.push(eq('tf', 'Time of flight', 't_f', 'pi*(sqrt(a_1^3/GM) + sqrt(a_2^3/GM))', { kind: 'law', origin: 'Kepler\'s third law, two half periods' }));
       }
     }
-    out.push(eq('mp', 'Propellant mass', 'm_p', 'm_0*(1 - exp(-dv_tot/(g*I_sp)))', { kind: 'law', origin: 'Tsiolkovsky rocket equation' }));
+    if (a.impulsive) out.push(eq('mp', 'Propellant mass', 'm_p', 'm_0*(1 - exp(-dv_tot/(g*I_sp)))', { kind: 'law', origin: 'Tsiolkovsky rocket equation' }));
     return out;
   },
   derivation: a => [
     { text: 'For motion under an inverse-square attraction the specific orbital energy depends only on the semi-major axis. Equating it to kinetic plus potential energy gives the vis-viva equation.', tex: '\\frac{v^2}{2} - \\frac{GM}{r} = -\\frac{GM}{2a}\\quad\\Rightarrow\\quad v^2 = GM\\left(\\frac{2}{r}-\\frac{1}{a}\\right)' },
     { text: 'A circular orbit has a = r, so its speed is fixed by the radius.', tex: 'v_c = \\sqrt{GM/r}' },
-    ...(!a.impulsive ? [{ text: 'Under continuous tangential thrust that is small against gravity the orbit stays nearly circular while its radius changes slowly. The velocity increment delivered equals the change in circular speed; with a simultaneous plane change Edelbaum\'s result applies.', tex: '\\Delta v = \\sqrt{v_{c1}^2 + v_{c2}^2 - 2 v_{c1}v_{c2}\\cos\\!\\left(\\tfrac{\\pi}{2}\\Delta i\\right)}' }]
+    ...(!a.impulsive ? [{ text: 'Under continuous tangential thrust that is small against gravity the orbit stays nearly circular while its radius changes slowly. The velocity increment delivered equals the change in circular speed; with a simultaneous plane change Edelbaum\'s result applies.', tex: '\\Delta v = \\sqrt{v_{c1}^2 + v_{c2}^2 - 2 v_{c1}v_{c2}\\cos\\!\\left(\\tfrac{\\pi}{2}\\Delta i\\right)}\\qquad(\\Delta i \\le 2\\ \\text{rad})' }]
       : a.hohmann ? [
         { text: 'The Hohmann ellipse touches the inner orbit at periapsis and the outer at apoapsis, so its major axis is the sum of the two radii.', tex: 'a_t = \\tfrac12(r_1 + r_2)' },
         { text: 'Each impulse is the difference between the transfer-orbit speed and the local orbital speed.', tex: '\\Delta v_1 = \\sqrt{\\frac{GM}{r_1}}\\left(\\sqrt{\\frac{2r_2}{r_1+r_2}}-1\\right),\\qquad \\Delta v_2 = \\sqrt{\\frac{GM}{r_2}}\\left(1-\\sqrt{\\frac{2r_1}{r_1+r_2}}\\right)' },
@@ -804,6 +806,7 @@ const hohmann = {
     const warnings = [];
     if (a.impulsive && !a.hohmann && v.r_b < Math.max(r1, r2)) warnings.push('The intermediate apoapsis lies inside the larger orbit; a bi-elliptic transfer is normally flown with it well outside both orbits.');
     if (!a.impulsive && v.F_T / v.m_0 > 0.01 * mu / Math.max(r1, r2) ** 2) warnings.push('The thrust acceleration is not small against local gravity, so the quasi-circular spiral approximation is poor.');
+    if (!a.impulsive && !a.coplanar && v.di > 2) warnings.push('The plane change exceeds 2 rad (114.6°), the limit of Edelbaum\'s expression; the velocity increment is held at its saturated value, the sum of the two circular speeds.');
     if (!a.impulsive && !a.circular) warnings.push('The low-thrust estimate treats the initial orbit as circular at the stated radius.');
     return {
       scalars: [
@@ -943,13 +946,13 @@ const entry = {
     asm('exp_atm', 'Density falls exponentially with altitude with a single scale height.', { why: 'Needed for the closed-form solution', alt: 'ISO standard-atmosphere density below 32 km, continued exponentially above.' }),
     asm('ballistic', 'The body generates no lift.', { why: 'Axisymmetric body at zero incidence', alt: 'A constant lift-to-drag ratio turns the path upward (lifting entry).' }),
   ],
-  symbols: { V: ['Speed', 'm/s'], gamma: ['Flight-path angle below the horizontal', 'rad'], z: ['Altitude', 'm'], t: ['Time', 's'], rho: ['Atmospheric density', 'kg/m^3'], g_h: ['Local gravitational acceleration', 'm/s^2'], a_max: ['Peak deceleration', 'm/s^2'], q_s: ['Stagnation-point heat flux', 'W/m^2'], k_SG: ['Sutton–Graves constant, 1.7415×10⁻⁴', 'kg^0.5/m'], T_w: ['Radiative-equilibrium wall temperature', 'K'], z_a: ['Altitude of peak deceleration', 'm'] },
+  symbols: { V: ['Speed', 'm/s'], gamma: ['Flight-path angle below the horizontal', 'rad'], z: ['Altitude', 'm'], t: ['Time', 's'], rho: ['Atmospheric density', 'kg/m^3'], g_h: ['Local gravitational acceleration', 'm/s^2'], a_AE: ['Peak deceleration from the Allen–Eggers solution', 'm/s^2'], q_s: ['Stagnation-point heat flux', 'W/m^2'], k_SG: ['Sutton–Graves constant, 1.7415×10⁻⁴', 'kg^0.5/m'], T_w: ['Radiative-equilibrium wall temperature', 'K'], z_AE: ['Altitude of peak deceleration from the Allen–Eggers solution', 'm'], rho_32: ['Standard-atmosphere density at 32 km', 'kg/m^3'] },
   equations: a => {
     const ae = a.no_gravity && a.straight && a.ballistic;
     const turn = [...(a.straight ? [] : [a.no_gravity ? '-V/(R_p + z)*cos(gamma)' : '(g_h/V - V/(R_p + z))*cos(gamma)']), ...(a.ballistic ? [] : ['- rho*V*LD/(2*beta)'])].join(' ');
     return [
       a.exp_atm ? eq('rho', 'Atmospheric density', 'rho', 'rho_0*exp(-z/H)', { kind: 'closure', origin: 'Isothermal hydrostatic atmosphere', needs: ['exp_atm'] })
-        : eq('rho', 'Atmospheric density above 32 km', 'rho', 'rho_0*exp(-z/H)', { kind: 'closure', origin: 'Exponential continuation; ISO 2533 tabulated density is used below 32 km', note: 'ρ₀ is replaced by the value that matches the standard atmosphere at 32 km.' }),
+        : eq('rho', 'Atmospheric density above 32 km', 'rho', 'rho_32*exp(-(z - 32000)/H)', { kind: 'closure', origin: 'Exponential continuation of the standard atmosphere', exportable: false, note: 'ρ₃₂ is the ISO 2533 density at 32 km. Below 32 km the tabulated standard-atmosphere density is used instead, and the stated surface density plays no part.' }),
       eq('drag', 'Along-path momentum', 'd(V,t)', `-rho*V^2/(2*beta)${a.no_gravity ? '' : ' + g_h*sin(gamma)'}`, { kind: 'law', origin: 'Newton\'s second law along the flight path', needs: a.no_gravity ? ['no_gravity'] : [] }),
       eq('alt', 'Altitude rate', 'd(z,t)', '-V*sin(gamma)', { kind: 'definition' }),
       turn ? eq('turn', 'Flight-path angle rate', 'd(gamma,t)', turn, { kind: 'law', origin: 'Newton\'s second law normal to the flight path over a spherical planet' })
@@ -957,8 +960,8 @@ const entry = {
       ...(a.no_gravity ? [] : [eq('grav', 'Local gravity', 'g_h', 'g_s*(R_p/(R_p + z))^2', { kind: 'law', origin: 'Newton\'s law of gravitation' })]),
       ...(ae && a.exp_atm ? [
         eq('ae', 'Allen–Eggers velocity', 'V', 'V_E*exp(-rho*H/(2*beta*sin(gamma_E)))', { kind: 'derived', origin: 'Allen & Eggers (1958)', needs: ['no_gravity', 'straight', 'exp_atm', 'ballistic'] }),
-        eq('amax', 'Peak deceleration', 'a_max', 'V_E^2*sin(gamma_E)/(2*exp(1)*H)', { kind: 'derived', origin: 'Maximum of ρV²/(2β) along the Allen–Eggers solution', needs: ['no_gravity', 'straight', 'exp_atm', 'ballistic'] }),
-        eq('za', 'Altitude of peak deceleration', 'z_a', 'H*ln(rho_0*H/(beta*sin(gamma_E)))', { kind: 'derived', origin: 'Density at the peak equals β sin γ / H', needs: ['no_gravity', 'straight', 'exp_atm', 'ballistic'] }),
+        eq('amax', 'Peak deceleration (Allen–Eggers)', 'a_AE', 'V_E^2*sin(gamma_E)/(2*exp(1)*H)', { kind: 'derived', origin: 'Maximum of ρV²/(2β) along the Allen–Eggers solution', needs: ['no_gravity', 'straight', 'exp_atm', 'ballistic'] }),
+        eq('za', 'Altitude of peak deceleration (Allen–Eggers)', 'z_AE', 'H*ln(rho_0*H/(beta*sin(gamma_E)))', { kind: 'derived', origin: 'Density at the peak equals β sin γ / H', needs: ['no_gravity', 'straight', 'exp_atm', 'ballistic'] }),
       ] : []),
       eq('heat', 'Stagnation-point convective heat flux', 'q_s', 'k_SG*sqrt(rho/R_n)*V^3', { kind: 'empirical', origin: 'Sutton & Graves (1971), cold-wall, Earth air' }),
       eq('wall', 'Radiative-equilibrium wall temperature', 'q_s', 'eps_w*sigma_SB*T_w^4', { kind: 'law', origin: 'Stefan–Boltzmann law with convective heating balanced by re-radiation' }),
@@ -1386,11 +1389,13 @@ const threeBody = {
     const lg = threeRun({ figure8: false, equal: true, point: true, adaptive: true }, base, 2 * Math.PI / om, 3), sl = lg.A[lg.A.length - 1];
     const errL = gap(sl, lg.A[0]);
     const i8 = threeInv([1, 1, 1], q0[0], q0[1], 0);
+    const icL = threeIC({ figure8: false, equal: true }, base), aL = new Array(6).fill(0);
+    threeAcc(icL.m, 0)(icL.q, aL);
     return [
       bench('Figure-eight orbit returns to its start after one period (1 = exact)', 1 + err, 1, 'Period 6.32591398 √(L³/Gm), Simó (2002)', 1e-6),
       bench('Lagrange triangle returns to its start after one rotation (1 = exact)', 1 + errL, 1, 'Rigid rotation with ω² = G·3m/s³', 1e-6),
       bench('Figure-eight total angular momentum (1 = exactly zero)', 1 + Math.abs(i8.Lz), 1, 'Chenciner & Montgomery (2000): zero angular momentum', 1e-7),
-      bench('Lagrange solution: centripetal balance', om * om * 1, 3 / Math.pow(3, 1.5), 'ω²R = G·3m·R/s³ with s = √3 R', 1e-12),
+      bench('Lagrange solution: summed pairwise attraction on one body vs the centripetal requirement', Math.hypot(aL[0], aL[1]) / Math.hypot(icL.q[0], icL.q[1]), 1 / Math.sqrt(3), 'ω² = G·3m/s³ = Gm/(√3 R³) for side s = √3 R', 1e-12),
     ];
   },
   validation: [],
@@ -1452,7 +1457,7 @@ const projectile = {
   ],
   phenomena: ['Uniform gravitational acceleration', 'Quadratic aerodynamic drag', 'Advection by wind', 'Magnus lift on a spinning ball'],
   laws: ['newton2', 'momentum', 'energy'],
-  refs: ['Galilei, G. (1638). Discorsi e dimostrazioni matematiche intorno a due nuove scienze. Elzevir, Leiden.', 'Marion, J. B. & Thornton, S. T. (2004). Classical Dynamics of Particles and Systems, 5th ed., Brooks/Cole.', 'Hoerner, S. F. (1965). Fluid-Dynamic Drag. Published by the author.', 'Adair, R. K. (2002). The Physics of Baseball, 3rd ed., HarperCollins.', 'de Mestre, N. (1990). The Mathematics of Projectiles in Sport. Cambridge University Press.'],
+  refs: ['Galilei, G. (1638). Discorsi e dimostrazioni matematiche intorno a due nuove scienze. Elzevir, Leiden.', 'Thornton, S. T. & Marion, J. B. (2004). Classical Dynamics of Particles and Systems, 5th ed., Brooks/Cole.', 'Hoerner, S. F. (1965). Fluid-Dynamic Drag. Published by the author.', 'Adair, R. K. (2002). The Physics of Baseball, 3rd ed., HarperCollins.', 'de Mestre, N. (1990). The Mathematics of Projectiles in Sport. Cambridge University Press.'],
   inputs: [
     inp('v_0', 'Launch speed', 'm/s', 45, { min: 1, max: 1000, aliases: ['launch speed', 'initial speed', 'initial velocity', 'muzzle velocity', 'speed', 'velocity'] }),
     inp('theta', 'Launch angle above the horizontal', 'deg', 40, { min: 1, max: 89, aliases: ['launch angle', 'elevation', 'angle'] }),
@@ -1784,7 +1789,7 @@ const doublePendulum = {
       eq('e2', 'Lower arm', `${B}${cD}*d(omega_1,t) + ${Cc}*d(omega_2,t)`, `${a.nonlinear ? `${B}*omega_1^2*sin(phi_1 - phi_2) ` : ''}- ${G2}*${s(2)}${d2}`, { kind: 'law', origin: 'Euler–Lagrange equation for the second coordinate', needs: ['nonlinear', 'frictionless'].filter(k => a[k]) }),
       eq('k1', 'Kinematics, upper arm', 'd(phi_1,t)', 'omega_1', { kind: 'definition' }), eq('k2', 'Kinematics, lower arm', 'd(phi_2,t)', 'omega_2', { kind: 'definition' }),
       eq('i1', 'Initial upper angle', 'phi_1', 'theta_1', { kind: 'initial' }), eq('i2', 'Initial lower angle', 'phi_2', 'theta_2', { kind: 'initial' }),
-      eq('en', 'Mechanical energy', 'E', `0.5*${A}*omega_1^2 + 0.5*${Cc}*omega_2^2 + ${B}${cD}*omega_1*omega_2 ${a.nonlinear ? `- ${G1}*cos(phi_1) - ${G2}*cos(phi_2)` : `+ 0.5*${G1}*phi_1^2 + 0.5*${G2}*phi_2^2`}`, { kind: 'law', origin: 'Kinetic plus potential energy', needs: a.frictionless ? ['frictionless'] : [] }),
+      eq('en', 'Mechanical energy', 'E', `0.5*${A}*omega_1^2 + 0.5*${Cc}*omega_2^2 + ${B}${cD}*omega_1*omega_2 ${a.nonlinear ? `+ ${G1}*(1 - cos(phi_1)) + ${G2}*(1 - cos(phi_2))` : `+ 0.5*${G1}*phi_1^2 + 0.5*${G2}*phi_2^2`}`, { kind: 'law', origin: 'Kinetic plus potential energy, measured from the hanging position', needs: a.frictionless ? ['frictionless'] : [] }),
       ...(p ? [eq('modes', 'Normal modes for equal masses and lengths', 'omega_n^2', '(2 + sqrt(2))*g/L_1', { kind: 'derived', origin: 'Eigenvalues of the linearised equations; the second mode has 2 − √2', note: 'Shown for m₁ = m₂ and L₁ = L₂.' })] : [eq('modes', 'Normal modes for equal uniform rods', 'omega_n^2', '(3 + 6/sqrt(7))*g/L_1', { kind: 'derived', origin: 'Eigenvalues of the linearised equations; the second mode has 3 − 6/√7', note: 'Shown for m₁ = m₂ and L₁ = L₂.' })]),
       eq('lyap', 'Growth of the twin separation', 'd(delta_s,t)', 'lambda*delta_s', { kind: 'definition', origin: 'Definition of the (finite-time) Lyapunov exponent' }),
     ];
@@ -2144,7 +2149,7 @@ const collision = {
       ...(a.head_on ? [] : [eq('tan', 'Tangential velocity unchanged', 'v_1t', 'u_1t', { kind: 'law', origin: 'Smooth surfaces transmit no tangential impulse' })]),
       ...(a.instantaneous ? [] : [
         eq('contact', 'Contact dynamics', 'm_red*d2(delta_c,t)', '-c_c*d(delta_c,t) - k_c*delta_c', { kind: 'closure', origin: 'Linear spring–dashpot contact model' }),
-        eq('zc', 'Contact damping ratio', 'zeta_c', `-ln(${E})/sqrt(pi^2 + ln(${E})^2)`, { kind: 'derived', origin: 'Half-cycle of a damped oscillator reproducing the restitution coefficient' }),
+        eq('zc', 'Contact damping ratio', 'zeta_c', `-ln(max(${E}, 0.001))/sqrt(pi^2 + ln(max(${E}, 0.001))^2)`, { kind: 'derived', origin: 'Half-cycle of a damped oscillator reproducing the restitution coefficient', note: 'A linear spring and dashpot cannot give exactly zero restitution, so the coefficient is floored at 0.001.' }),
         eq('cc', 'Contact damping coefficient', 'c_c', '2*zeta_c*sqrt(k_c*m_red)', { kind: 'definition' }),
         eq('tc', 'Contact duration', 't_c', 'pi/sqrt(k_c/m_red*(1 - zeta_c^2))', { kind: 'derived', origin: 'Half the damped period' }),
       ]),
@@ -2339,7 +2344,7 @@ const cannonball = {
       ...(a.vacuum ? [eq('range', 'Range of a horizontal shot', 'x_R', 'v_i*sqrt(2*h_m/g_s)', { kind: 'derived', origin: 'Galileo\'s parabola: always finite', note: 'For an elevated barrel the time of flight is longer; the range remains finite.' })] : [eq('mx', 'Horizontal motion', 'd2(x,t)', '-rho*v*d(x,t)/(2*beta)', { kind: 'law', origin: 'Newton\'s second law with quadratic drag' })]),
     ];
     return [...common,
-      eq('mx', 'Equation of motion', 'd2(x,t)', `-GM*x/r^3${drag('v_x')}`, { kind: 'law', origin: 'Newton\'s second law with universal gravitation', note: 'Holds for each Cartesian component.' }),
+      eq('mx', 'Equation of motion', 'd2(x,t)', `-GM*x/r^3${drag('v_x')}`, { kind: 'law', origin: 'Newton\'s second law with universal gravitation', note: `Holds for each Cartesian component.${!a.vacuum && !a.non_rotating ? ' In the drag term the speed and the velocity component are taken relative to the air, which turns with the planet.' : ''}` }),
       eq('vc', 'Circular speed', 'v_c', 'sqrt(GM/r_0)', { kind: 'derived', origin: 'Gravity supplies exactly the centripetal acceleration v²/r' }),
       eq('ve', 'Escape speed', 'v_e', 'sqrt(2*GM/r_0)', { kind: 'derived', origin: 'Zero total energy' }),
       eq('vmin', 'Least speed that clears the planet', 'v_min', 'sqrt(2*GM*R_p/(r_0*(R_p + r_0)))', { kind: 'derived', origin: 'Ellipse with apoapsis at the cannon and periapsis grazing the surface' }),
@@ -2528,17 +2533,19 @@ const galileo = {
     asm('uniform_g', 'Gravity is uniform over the height of the drop.', { why: 'Height tiny against the Earth\'s radius', alt: 'Gravity varies with height as the inverse square of distance from the Earth\'s centre.' }),
     asm('equivalence', 'Gravitational and inertial mass are equal for every body.', { why: 'Universality of free fall, verified to parts in 10¹⁴', alt: 'Counterfactual: the light body has slightly more gravitational than inertial mass, so it falls faster even in vacuum.' }),
   ],
-  symbols: { m: ['Mass of a falling body', 'kg'], v: ['Downward speed', 'm/s'], t: ['Time', 's'], y: ['Height above the ground', 'm'], A: ['Frontal area', 'm^2'], V_b: ['Volume of the body', 'm^3'], d_b: ['Diameter of the body', 'm'], v_t: ['Terminal velocity', 'm/s'], t_f: ['Time of fall', 's'], g_h: ['Gravitational acceleration at height', 'm/s^2'], R_E: ['Earth radius', 'm'], t_A1: ['Aristotelian fall time of the heavy body', 's'], t_A2: ['Aristotelian fall time of the light body', 's'] },
+  symbols: { m: ['Mass of a falling body', 'kg'], v: ['Downward speed', 'm/s'], t: ['Time', 's'], y: ['Height above the ground', 'm'], A: ['Frontal area', 'm^2'], V_b: ['Volume of the body', 'm^3'], d_b: ['Diameter of the body', 'm'], v_t: ['Terminal velocity', 'm/s'], t_f: ['Time of fall', 's'], g_h: ['Gravitational acceleration at height', 'm/s^2'], g_e: ['Net downward acceleration without drag', 'm/s^2'], R_E: ['Earth radius', 'm'], t_A1: ['Aristotelian fall time of the heavy body', 's'], t_A2: ['Aristotelian fall time of the light body', 's'] },
   equations: a => {
-    const g = a.uniform_g ? 'g' : 'g_h';
+    const g = a.uniform_g ? 'g' : 'g_h', plain = a.equivalence && a.no_buoyancy, ge = plain ? 'g' : 'g_e';
     return [
       eq('mom', 'Equation of motion of each body', 'm*d(v,t)', `m*${a.equivalence ? '' : '(1 + eta)*'}${g}${a.no_buoyancy ? '' : ` - rho*V_b*${g}`}${a.drag ? ' - 0.5*rho*C_D*A*v^2' : ''}`, { kind: 'law', origin: 'Newton\'s second law: weight, buoyancy and drag', needs: ['equivalence', 'no_buoyancy'].filter(k => a[k]), note: a.equivalence ? undefined : 'The factor (1 + η) applies to the light body only.' }),
       eq('kin', 'Kinematics', 'd(y,t)', '-v', { kind: 'definition' }),
       eq('mass', 'Mass of a solid sphere', 'm', 'rho_b*pi*d_b^3/6', { kind: 'definition' }),
-      ...(a.drag ? [eq('area', 'Frontal area', 'A', 'pi*d_b^2/4', { kind: 'definition' }), eq('vt', 'Terminal velocity', 'v_t', 'sqrt(2*m*g/(rho*C_D*A))', { kind: 'derived', origin: 'Drag equals weight' })] : []),
+      ...(a.drag ? [eq('area', 'Frontal area', 'A', 'pi*d_b^2/4', { kind: 'definition' })] : []),
       ...(a.no_buoyancy ? [] : [eq('vol', 'Volume', 'V_b', 'pi*d_b^3/6', { kind: 'definition' })]),
-      ...(a.uniform_g ? [a.drag ? eq('tf', 'Time of fall with quadratic drag', 't_f', 'v_t/g*ln(exp(g*h_d/v_t^2) + sqrt(exp(2*g*h_d/v_t^2) - 1))', { kind: 'derived', origin: 'Closed-form integral of the equation of motion', needs: ['uniform_g'] })
-        : eq('tf', 'Time of fall in vacuum', 't_f', 'sqrt(2*h_d/g)', { kind: 'derived', origin: 'Uniform acceleration from rest: independent of mass', needs: ['uniform_g'] })]
+      ...(plain ? [] : [eq('ge', 'Net downward acceleration without drag', 'g_e', `${a.equivalence ? '' : '(1 + eta)*'}g${a.no_buoyancy ? '' : ' - rho*V_b*g/m'}`, { kind: 'derived', origin: a.no_buoyancy ? 'Weight per unit inertial mass' : 'Weight less buoyancy, per unit inertial mass', note: a.equivalence ? undefined : 'The factor (1 + η) applies to the light body only.' })]),
+      ...(a.drag ? [eq('vt', 'Terminal velocity', 'v_t', `sqrt(2*m*${ge}/(rho*C_D*A))`, { kind: 'derived', origin: plain ? 'Drag equals weight' : 'Drag equals the net downward force' })] : []),
+      ...(a.uniform_g ? [a.drag ? eq('tf', 'Time of fall with quadratic drag', 't_f', `v_t/${ge}*ln(exp(${ge}*h_d/v_t^2) + sqrt(exp(2*${ge}*h_d/v_t^2) - 1))`, { kind: 'derived', origin: 'Closed-form integral of the equation of motion', needs: ['uniform_g'] })
+        : eq('tf', 'Time of fall in vacuum', 't_f', `sqrt(2*h_d/${ge})`, { kind: 'derived', origin: plain ? 'Uniform acceleration from rest: independent of mass' : 'Uniform acceleration from rest', needs: ['uniform_g'] })]
         : [eq('grav', 'Gravity with height', 'g_h', 'g*(R_E/(R_E + y))^2', { kind: 'law', origin: 'Newton\'s law of gravitation' })]),
       eq('aris', 'Aristotelian doctrine under test', 't_A2/t_A1', 'm_1/m_2', { kind: 'hypothesis', origin: 'Aristotle: speed of fall proportional to weight. Shown to be self-contradictory by the tied-bodies argument and refuted by experiment.' }),
     ];

@@ -1,6 +1,7 @@
 {
   "name": "Bespoke",
   "mirrors": [
-    "https://raw.githack.com/samuelakosaonyejekwe/bespokesoftware/main/"
+    "https://bespokesoftware.pages.dev/",
+    "https://samuelakosaonyejekwe.github.io/bespokesoftware/"
   ]
 }

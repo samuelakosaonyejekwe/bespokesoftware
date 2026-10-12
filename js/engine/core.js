@@ -34,7 +34,7 @@ const modelClass = m => (Array.isArray(m.klass) ? m.klass : [m.klass]);
 /** Create a new investigation from a prompt. */
 export function createInvestigation({ module, mode = 'A', prompt, modelId = null }) {
   const ranked = P.rankModels(prompt, MODELS, module);
-  const chosen = modelId || (ranked[0] && ranked[0].score >= 4 ? ranked[0].id : null);
+  const chosen = modelId || (P.strongMatch(ranked[0]) ? ranked[0].id : null);
   const model = chosen ? modelById(chosen) : null;
   const inv = {
     id: uid(), v: 1, module, mode, prompt, title: P.titleFrom(prompt), created: Date.now(), updated: Date.now(),
@@ -48,16 +48,33 @@ export function createInvestigation({ module, mode = 'A', prompt, modelId = null
   if (!model) {
     const found = findEquations(prompt.replace(/[?!]/g, '.').replace(/,?\s+\b(where|with|and|if|when|for|given|starting|from)\b/gi, ';').replace(/:\s/g, ';'), E.parse).filter(q => /[a-zA-Z]/.test(q.rhs));
     found.slice(0, 6).forEach(q => inv.custom.equations.push({ lhs: q.lhs, rhs: q.rhs, name: 'From your prompt' }));
-    if (found.length) inv.audit.push({ ts: Date.now(), action: `${Math.min(found.length, 6)} equation(s) read from the prompt and made computable` });
+    if (found.length) {
+      inv.audit.push({ ts: Date.now(), action: `${Math.min(found.length, 6)} equation(s) read from the prompt and made computable` });
+      // values stated in the prompt for the symbols of those equations: "a = 2", "x starting at 1", "alpha of 0.1 m"
+      const syms = new Set(); inv.custom.equations.forEach(q => { try { [...E.symbols(E.parse(q.rhs)), ...E.symbols(E.parse(q.lhs))].forEach(x => syms.add(x)); } catch { /* skip */ } });
+      for (const sy of syms) {
+        const m = new RegExp(`(?:^|[^A-Za-z0-9_])${sy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(?:=|is|of|equal to|equals|starting at|starts at|starting from|initially)\\s*(-?\\d+\\.?\\d*(?:[eE][-+]?\\d+)?)\\s*([A-Za-zµ°%/^0-9.]{0,10})`).exec(prompt);
+        if (!m || /[a-zA-Z(*/^]/.test(prompt.slice(m.index + m[0].length - (m[2] || '').length).replace(m[2] || '', '').slice(0, 1)) && !m[2]) { if (!m) continue; }
+        const unit = m[2] && tryUnit(m[2].replace(/[.,;]$/, '')) && !/^\d/.test(m[2]) ? m[2].replace(/[.,;]$/, '') : '1';
+        inv.custom.symbols[sy] = { ...(inv.custom.symbols[sy] || {}), value: parseFloat(m[1]), unit, name: `${sy} (value stated in your prompt)` };
+      }
+    } else if (ranked[0] || MODELS.length) {
+      // nothing matched strongly and the prompt holds no equations: rather than stop, run the closest model in the
+      // library and say plainly that it is only the nearest available one
+      const sem = P.semanticScores(prompt, MODELS), pool = MODELS.map((m, i) => ({ m, s: sem[i] })).filter(x => module === 1 || [].concat(x.m.module).includes(2)).sort((x, y) => y.s - x.s);
+      const pick = ranked[0] ? modelById(ranked[0].id) : (pool[0] && pool[0].s > 0.015 ? pool[0].m : null);
+      if (pick) { inv.modelId = pick.id; inv.match = { confidence: 'low', note: 'No model in the library corresponds closely to this prompt. The nearest one has been run so that there is something concrete to examine; check that it is the system you meant, pick another, or enter your own equations.' }; inv.klass = P.classifyClass(prompt, pick); inv.audit.push({ ts: Date.now(), action: `Nearest model selected with low confidence: ${pick.title}` }); }
+    }
   }
-  if (!inv.domains.length && model) inv.domains = model.domains.map(k => ({ key: k, name: DOMAINS[k].name, score: 1, hits: [] }));
+  const model2 = modelById(inv.modelId);
+  if (!inv.domains.length && model2) inv.domains = model2.domains.map(k => ({ key: k, name: DOMAINS[k].name, score: 1, hits: [] }));
   applyPrompt(inv);
-  if (inv.klass.tags.includes('II') || !model) {
+  if (inv.klass.tags.includes('II') || !model2) {
     const f = Logic.fromText(prompt);
     if (f.premises.length || f.conclusion) inv.logic = f;
   }
   // thought experiments in the library carry a vetted formal structure; prefer it to a thin reading of the prompt
-  if (model && model.logicPreset && (!inv.logic || inv.logic.premises.length < 2 || !inv.logic.conclusion)) inv.logic = { ...JSON.parse(JSON.stringify(model.logicPreset)), notes: ['Formal structure taken from the model library. Edit it freely.'] };
+  if (model2 && model2.logicPreset && (!inv.logic || inv.logic.premises.length < 2 || !inv.logic.conclusion)) inv.logic = { ...JSON.parse(JSON.stringify(model2.logicPreset)), notes: ['Formal structure taken from the model library. Edit it freely.'] };
   return inv;
 }
 

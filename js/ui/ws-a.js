@@ -55,6 +55,7 @@ function concept(X) {
           <p class="small">${k.hybrid ? 'This is a hybrid investigation: each part is treated according to its own class.' : P.CLASS_BLURB[k.primary]}</p>
           <div class="note ${feas[1] === 'ok' ? 'ok' : feas[1] === 'hypo' ? 'hypo' : feas[1]}"><b>Feasibility: ${feas[0]}.</b> ${feas[2]}</div></div>
       </div>
+      ${inv.match && inv.match.confidence === 'low' && inv.modelId ? html`<div class="note warn"><b>Nearest available model, low confidence.</b> ${inv.match.note} <button class="btn sm" data-ws="equations">Enter my own equations</button> <a class="btn sm" href="#/library">Browse the library</a></div>` : ''}
       <div class="card"><h3>Consolidated scenario</h3>
         ${m ? html`<p>${m.custom ? 'No library model was needed: the equations found in your prompt or entered by you have been assembled into a computable model.' : html`The prompt is read as a question about <b>${m.title.toLowerCase()}</b>.`} ${m.summary}</p>${para(m.background)}${m.diagram && inv.module === 2 ? raw(`<div style="max-width:720px">${m.diagram(c.v, c.a)}</div>`) : ''}`
           : html`<p>The prompt has been recorded and analysed, but it does not correspond closely enough to a model in the library for equations to be solved automatically. You can choose a model below, enter your own equations in the Equations workspace, or continue with the logical and dimensional analysis that needs no model.</p>`}
@@ -91,10 +92,10 @@ function concept(X) {
       $('#prompt-save', root).addEventListener('click', () => {
         const t = $('#prompt-ta', root).value.trim(); if (t.length < 3) return;
         inv.prompt = t; inv.candidates = P.rankModels(t, MODELS, inv.module).slice(0, 8); inv.domains = P.rankDomains(t).slice(0, 6); inv.location = P.locate(t) || inv.location; inv.bodies = P.celestial(t).map(b => b.key);
-        const best = inv.candidates[0] && inv.candidates[0].score >= 4 ? inv.candidates[0].id : inv.modelId;
+        const best = P.strongMatch(inv.candidates[0]) ? inv.candidates[0].id : inv.modelId;
         Eng.selectModel(inv, best); const f = Logic.fromText(t); if (f.premises.length) inv.logic = f; Eng.log(inv, 'Prompt edited and re-read'); X.refresh();
       });
-      const pick = id => { Eng.selectModel(inv, id || null); const mm = modelById(id); if (mm && mm.logicPreset && (!inv.logic || inv.logic.premises.length < 2)) inv.logic = JSON.parse(JSON.stringify(mm.logicPreset)); X.refresh(); toast(id ? 'Model changed: equations and results re-derived.' : 'Model removed.'); };
+      const pick = id => { delete inv.match; Eng.selectModel(inv, id || null); const mm = modelById(id); if (mm && mm.logicPreset && (!inv.logic || inv.logic.premises.length < 2)) inv.logic = JSON.parse(JSON.stringify(mm.logicPreset)); X.refresh(); toast(id ? 'Model changed: equations and results re-derived.' : 'Model removed.'); };
       on(root, 'click', '[data-model]', (_, el) => pick(el.dataset.model));
       $('#any-model', root).addEventListener('change', e => { if (e.target.value) pick(e.target.value); });
     },

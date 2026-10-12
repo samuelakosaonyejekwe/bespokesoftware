@@ -5,7 +5,7 @@ const SHELL = `bespoke-shell-${VERSION}`;
 const DATA = 'bespoke-data-v1';
 const RUNTIME = 'bespoke-runtime-v1';
 const ASSETS = __ASSETS__;
-const DATA_HOSTS = ['api.open-meteo.com', 'marine-api.open-meteo.com', 'geocoding-api.open-meteo.com', 'gis.ngdc.noaa.gov', 'power.larc.nasa.gov', 'services.swpc.noaa.gov', 'api.nasa.gov', 'api.wheretheiss.at', 'eonet.gsfc.nasa.gov', 'earthquake.usgs.gov', 'api.crossref.org', 'api.openalex.org', 'en.wikipedia.org', 'pubchem.ncbi.nlm.nih.gov'];
+const DATA_HOSTS = ['api.open-meteo.com', 'marine-api.open-meteo.com', 'geocoding-api.open-meteo.com', 'gis.ngdc.noaa.gov', 'power.larc.nasa.gov', 'services.swpc.noaa.gov', 'api.nasa.gov', 'api.wheretheiss.at', 'eonet.gsfc.nasa.gov', 'earthquake.usgs.gov', 'api.crossref.org', 'api.openalex.org', 'en.wikipedia.org', 'pubchem.ncbi.nlm.nih.gov', 'erddap.emodnet-physics.eu'];
 const RUNTIME_HOSTS = ['cdn.jsdelivr.net'];
 
 self.addEventListener('install', event => {

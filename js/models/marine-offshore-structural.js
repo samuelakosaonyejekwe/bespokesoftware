@@ -244,7 +244,7 @@ const shipStability = {
       : eq('gz', 'Small-angle righting lever', 'GZ', 'GM*sin(phi)', { kind: 'derived', origin: 'Fixed metacentre' }),
     eq('kxx', 'Roll radius of gyration', 'k_xx', 'k_B*B', { kind: 'empirical', origin: 'Weight distribution plus added inertia' }),
     eq('tr', 'Natural roll period', 'T_r', '2*pi*k_xx/sqrt(g*GM)', { kind: 'derived', origin: 'Linearised roll equation' }),
-    eq('wr', 'Natural roll frequency', 'omega_r', 'sqrt(g*GM)/k_xx', { kind: 'definition' }),
+    eq('wr', 'Natural roll frequency', 'omega_r', 'sqrt(g*abs(GM))/k_xx', { kind: 'definition', note: 'The magnitude of GM is used so that the damping term stays defined when the upright hull is unstable.' }),
     eq('roll', 'Free roll equation', 'd2(phi,t)', `-2*zeta*omega_r*d(phi,t)${a.quad_damp ? ' - beta_q*abs(d(phi,t))*d(phi,t)' : ''} - g*${a.nonlinear ? 'GZ' : 'GM*phi'}/k_xx^2`, { kind: 'law', origin: 'Angular momentum about the roll axis', needs: a.nonlinear ? ['nonlinear'] : [] }),
   ],
   derivation: a => [
@@ -441,16 +441,16 @@ const wavesMorison = {
     if (r.H < v.H) warnings.push(`The stated wave height exceeds the breaking limit for this period and depth; it has been limited to ${lab(r.H, 'm')} (Miche steepness limit and H ≤ 0.78·d).`);
     const DL = v.D / r.Lw;
     if (a.slender && DL > 0.2) warnings.push('D/L exceeds 0.2: the pile diffracts the wave and Morison\'s equation over-predicts the inertia load. Switch off the slender-member assumption.');
-    const uMax = r.A * r.sig * r.ch(0) + v.U_c, KC = uMax * v.T / v.D;
+    const uOrb = r.A * r.sig * r.ch(0), uMax = uOrb + v.U_c, KC = uOrb * v.T / v.D;
     const absF = r.F.map(Math.abs), iF = absF.indexOf(N.maxOf(absF)), Fmax = absF[iF], Mmax = N.maxOf(r.M.map(Math.abs));
-    const c = 2 * Math.PI / v.T / r.k, x2 = 2 * r.kd, cg = a.finite_depth ? 0.5 * c * (1 + (x2 > 600 ? 0 : x2 / Math.sinh(x2))) : 0.5 * c;
+    const c = 2 * Math.PI / v.T / r.k, x2 = 2 * r.kd, cRel = r.sig / r.k, cg = (a.no_doppler ? 0 : v.U_c) + (a.finite_depth ? 0.5 * cRel * (1 + (x2 > 600 ? 0 : x2 / Math.sinh(x2))) : 0.5 * cRel);
     const deg = r.th.map(x => x / DEG), zProf = r.zGrid, uProf = zProf.map(z => r.A * r.sig * r.ch(z) + v.U_c);
     const regime = r.kd < Math.PI / 10 ? 'shallow water' : r.kd > Math.PI ? 'deep water' : 'intermediate depth';
     return {
       scalars: [
         scalar('k', 'Wave number', r.k, '1/m'), scalar('L_w', 'Wavelength', r.Lw, 'm'), scalar('c_p', 'Phase speed', c, 'm/s'), scalar('c_g', 'Group speed', cg, 'm/s'),
         scalar('kd', 'Relative depth k·d', a.finite_depth ? r.kd : r.k * v.d, '1', { note: regime }), scalar('H_used', 'Wave height used', r.H, 'm'),
-        scalar('u_max', 'Peak horizontal velocity at still-water level', uMax, 'm/s'), scalar('KC', 'Keulegan–Carpenter number', KC, '1', { note: KC < 5 ? 'inertia-dominated' : KC > 25 ? 'drag-dominated' : 'drag and inertia both matter' }),
+        scalar('u_max', 'Peak horizontal velocity at still-water level', uMax, 'm/s'), scalar('KC', 'Keulegan–Carpenter number (orbital velocity amplitude at still-water level)', KC, '1', { note: KC < 5 ? 'inertia-dominated' : KC > 25 ? 'drag-dominated' : 'drag and inertia both matter' }),
         scalar('DL', 'Diameter to wavelength ratio D/L', DL, '1'), scalar('C_Me', 'Inertia coefficient used', r.CM, '1'),
         scalar('F_D', 'Peak drag force', N.maxOf(r.FD.map(Math.abs)), 'N', { show: 'kN' }), scalar('F_I', 'Peak inertia force', N.maxOf(r.FI.map(Math.abs)), 'N', { show: 'kN' }),
         scalar('F', 'Maximum base shear', Fmax, 'N', { show: 'kN' }), scalar('M_b', 'Maximum overturning moment', Mmax, 'N m', { show: 'kN m' }),
@@ -557,7 +557,7 @@ const catenaryMooring = {
   refs: ['Irvine, H. M. (1981). Cable Structures. MIT Press.', 'Faltinsen, O. M. (1990). Sea Loads on Ships and Offshore Structures. Cambridge University Press.', 'Barltrop, N. D. P. (ed.) (1998). Floating Structures: A Guide for Design and Analysis. Oilfield Publications / CMPT.', 'DNV-OS-E301. Position mooring. DNV, Høvik.', 'API RP 2SK. Design and analysis of stationkeeping systems for floating structures. American Petroleum Institute.'],
   inputs: [
     inp('d', 'Water depth below the fairlead', 'm', 100, { min: 10, max: 3000, kind: 'environment', env: 'water_depth', aliases: ['water depth', 'depth', 'deep'] }),
-    inp('w', 'Submerged weight of line per unit length', 'N/m', 1200, { min: 10, max: 10000, kind: 'geometry', aliases: ['submerged weight', 'weight per metre', 'line weight', 'weight in water'], src: 'About 76 mm studless chain in sea water' }),
+    inp('w', 'Submerged weight of line per unit length', 'N/m', 1200, { min: 10, max: 10000, kind: 'geometry', aliases: ['submerged weight', 'weight per metre', 'line weight', 'weight in water'], src: 'Roughly 84 mm studless chain in sea water' }),
     inp('scope', 'Line length as a multiple of water depth (scope)', '1', 6, { min: 1.5, max: 20, kind: 'geometry', aliases: ['scope', 'line length ratio'] }),
     inp('T_0', 'Specified line tension', 'kN', 500, { min: 1, max: 20000, aliases: ['tension', 'horizontal tension', 'top tension', 'pretension'] }),
     inp('EA', 'Axial stiffness of the line', 'MN', 600, { min: 10, max: 5000, kind: 'geometry', aliases: ['axial stiffness', 'ea'] }),
@@ -569,20 +569,21 @@ const catenaryMooring = {
     asm('h_given', 'The specified tension is the horizontal component at the fairlead.', { why: 'Natural variable of the catenary equations', alt: 'The specified tension is the total tension at the fairlead; the horizontal component is found from it.' }),
     asm('no_friction', 'Seabed friction on the grounded length is neglected, so the anchor sees the full horizontal tension.', { why: 'Conservative for anchor load', alt: 'Coulomb friction μ·w per unit length reduces the tension along the grounded line towards the anchor.' }),
   ],
-  symbols: { T_H: ['Horizontal tension', 'N'], T_top: ['Tension at the fairlead', 'N'], T_a: ['Tension at the anchor', 'N'], a_c: ['Catenary parameter', 'm'], s_s: ['Suspended (unstretched) length', 'm'], x_s: ['Horizontal span of the suspended length', 'm'], X: ['Horizontal distance from anchor to fairlead', 'm'], L_t: ['Total line length', 'm'], theta_top: ['Line angle to the horizontal at the fairlead', 'rad'], k_h: ['Horizontal restoring stiffness', 'N/m'] },
+  symbols: { T_H: ['Horizontal tension', 'N'], T_top: ['Tension at the fairlead', 'N'], T_a: ['Tension at the anchor', 'N'], a_c: ['Catenary parameter', 'm'], s_s: ['Suspended (unstretched) length', 'm'], l_f: ['Grounded length over which friction is mobilised', 'm'], x_s: ['Horizontal span of the suspended length', 'm'], X: ['Horizontal distance from anchor to fairlead', 'm'], L_t: ['Total line length', 'm'], theta_top: ['Line angle to the horizontal at the fairlead', 'rad'], k_h: ['Horizontal restoring stiffness', 'N/m'] },
   equations: a => [
     a.h_given ? eq('spec', 'Specified tension', 'T_H', 'T_0', { kind: 'boundary', needs: ['h_given'] }) : eq('spec', 'Specified tension', 'T_top', 'T_0', { kind: 'boundary' }),
     eq('ac', 'Catenary parameter', 'a_c', 'T_H/w', { kind: 'definition' }),
     eq('lt', 'Total line length', 'L_t', 'scope*d', { kind: 'definition' }),
     a.inelastic
-      ? eq('ss', 'Suspended length', 's_s', 'sqrt(d*(d + 2*a_c))', { kind: 'derived', origin: 'Vertical equilibrium and geometry of the catenary with zero slope at touchdown', needs: ['inelastic'] })
+      ? eq('ss', 'Suspended length', 's_s', 'sqrt(d*(d + 2*a_c))', { kind: 'derived', origin: 'Vertical equilibrium and geometry of the catenary with zero slope at touchdown', needs: ['inelastic'], note: 'Holds while some line rests on the seabed (s_s ≤ L_t). Once the whole line is lifted the anchor carries uplift and the solver finds the anchor vertical force numerically.' })
       : eq('ss', 'Vertical span of the elastic catenary', 'd', 'a_c*(sqrt(1 + (w*s_s/T_H)^2) - 1) + w*s_s^2/(2*EA)', { kind: 'derived', origin: 'Irvine (1981), elastic catenary' }),
     eq('xs', 'Horizontal span of the suspended line', 'x_s', `a_c*ln(w*s_s/T_H + sqrt(1 + (w*s_s/T_H)^2))${a.inelastic ? '' : ' + T_H*s_s/EA'}`, { kind: 'derived', origin: 'Integration of the catenary slope along the line' }),
     a.inelastic
       ? eq('tt', 'Tension at the fairlead', 'T_top', 'T_H + w*d', { kind: 'derived', origin: 'Force equilibrium of the suspended line', needs: ['inelastic'] })
       : eq('tt', 'Tension at the fairlead', 'T_top', 'sqrt(T_H^2 + (w*s_s)^2)', { kind: 'law', origin: 'Force equilibrium of the suspended line' }),
     eq('ang', 'Line angle at the fairlead', 'tan(theta_top)', 'w*s_s/T_H', { kind: 'law', origin: 'Ratio of vertical to horizontal tension' }),
-    eq('X', 'Anchor-to-fairlead distance', 'X', `(L_t - s_s)${a.inelastic ? '' : '*(1 + T_H/EA)'} + x_s`, { kind: 'derived', origin: 'Grounded length plus suspended span' }),
+    ...(a.inelastic || a.no_friction ? [] : [eq('lf', 'Grounded length carrying tension', 'l_f', 'min(L_t - s_s, T_H/(mu_s*w))', { kind: 'derived', origin: 'Friction reduces the tension to zero a distance T_H/(μ·w) behind the touchdown point' })]),
+    eq('X', 'Anchor-to-fairlead distance', 'X', `(L_t - s_s)${a.inelastic ? '' : a.no_friction ? '*(1 + T_H/EA)' : ' + (T_H*l_f - mu_s*w*l_f^2/2)/EA'} + x_s`, { kind: 'derived', origin: 'Grounded length' + (a.inelastic ? '' : ', its elastic stretch') + ' plus suspended span' }),
     a.no_friction ? eq('ta', 'Anchor tension', 'T_a', 'T_H', { kind: 'law', origin: 'Horizontal equilibrium', needs: ['no_friction'] }) : eq('ta', 'Anchor tension with seabed friction', 'T_a', 'max(T_H - mu_s*w*(L_t - s_s), 0)', { kind: 'law', origin: 'Coulomb friction on the grounded length' }),
     a.inelastic
       ? eq('kh', 'Horizontal stiffness', 'k_h', 'w/(ln(1 + d/a_c + sqrt((1 + d/a_c)^2 - 1)) - 2/sqrt(1 + 2*a_c/d))', { kind: 'derived', origin: 'Derivative of the anchor-to-fairlead distance with respect to horizontal tension', needs: ['inelastic'] })
@@ -897,14 +898,14 @@ const pipeConveying = {
   ],
   assumptions: [
     asm('one_mode', 'The response is represented by the first sinusoidal mode alone.', { why: 'Gives the classical closed form; the Coriolis term then drops out', alt: 'A two-mode Galerkin model retains the Coriolis coupling between the first and second modes.' }),
-    asm('no_pressure', 'Internal pressure does not contribute to the axial force balance (ends free to slide, or pressure negligible).', { why: 'Low-pressure service', alt: 'With the ends restrained axially the pressure adds an effective compression p·A_i.' }),
+    asm('no_pressure', 'Internal pressure does not reduce the effective axial tension (pressure negligible, or the pressure end-load is carried as tension in the pipe wall, as with closed ends).', { why: 'Low-pressure service or a capped span', alt: 'The pressure end-load is not carried by the wall (sliding joint or bellows at one end), so the pressure acts as an effective compression p·A_i. Axially fixed ends would reduce this to (1 − 2ν)·p·A_i through the Poisson effect, which is not modelled.' }),
     asm('in_air', 'The pipe vibrates in air: the surrounding fluid adds no mass.', { why: 'Topside or in-plant piping', alt: 'The pipe is submerged and the displaced external fluid is added to the vibrating mass (added-mass coefficient 1).' }),
   ],
   symbols: { y: ['Lateral deflection', 'm'], x: ['Distance along the pipe', 'm'], t: ['Time', 's'], I_b: ['Second moment of area of the pipe wall', 'm^4'], A_i: ['Internal flow area', 'm^2'], m_f: ['Fluid mass per unit length', 'kg/m'], m_p: ['Pipe mass per unit length', 'kg/m'], m_t: ['Total vibrating mass per unit length', 'kg/m'], N_e: ['Effective axial tension', 'N'], U_c: ['Critical flow velocity', 'm/s'], omega_0: ['Natural frequency at zero flow', '1/s'], omega_1: ['First natural frequency at velocity U', '1/s'], k_1: ['First modal stiffness', 'N/m^2'], k_2: ['Second modal stiffness', 'N/m^2'], g_c: ['Coriolis coupling coefficient', 'kg/(m s)'] },
   equations: a => [
     eq('mf', 'Fluid mass per unit length', 'm_f', 'rho_f*A_i', { kind: 'definition' }),
     eq('mt', 'Vibrating mass per unit length', 'm_t', `m_p + m_f${a.in_air ? '' : ' + rho_e*pi*D_o^2/4'}`, { kind: 'definition', needs: a.in_air ? ['in_air'] : [] }),
-    eq('ne', 'Effective axial tension', 'N_e', a.no_pressure ? 'T_0' : 'T_0 - p*A_i', { kind: 'law', origin: 'Axial equilibrium of pipe wall and fluid column', needs: a.no_pressure ? ['no_pressure'] : [] }),
+    eq('ne', 'Effective axial tension', 'N_e', a.no_pressure ? 'T_0' : 'T_0 - p*A_i', { kind: 'law', origin: 'Effective tension: wall tension less internal pressure times bore area', needs: a.no_pressure ? ['no_pressure'] : [] }),
     eq('eom', 'Equation of motion', 'm_t*pd2(y,t)', '-E*I_b*pd2(pd2(y,x),x) - (m_f*U^2 - N_e)*pd2(y,x) - 2*m_f*U*pd(pd(y,x),t)', { kind: 'law', origin: 'Newton\'s second law for pipe and fluid elements; Housner (1952), Païdoussis (2014)' }),
     eq('uc', 'Critical velocity for divergence', 'U_c', 'sqrt((E*I_b*(pi/L)^2 + N_e)/m_f)', { kind: 'derived', origin: 'Centrifugal force equal to the Euler load of the first mode' }),
     eq('w0', 'Natural frequency at zero flow', 'omega_0', 'pi/L*sqrt((E*I_b*(pi/L)^2 + N_e)/m_t)', { kind: 'derived', origin: 'Pinned–pinned Euler–Bernoulli beam with axial force' }),
@@ -1072,8 +1073,8 @@ const onBottom = {
       ...(a.lift ? [eq('fl', 'Lift force', 'F_L', '0.5*rho*D_h*C_L*(u_w*cos(theta) + U_e)^2', { kind: 'empirical', origin: 'Lift on a cylinder at a plane boundary', needs: ['lift'] })] : []),
       eq('ws', 'Submerged weight', 'w_s', 'g*(rho_s*A_s + rho_i*A_i + rho_c*A_c - rho*pi*D_h^2/4)', { kind: 'law', origin: 'Weight less buoyancy (Archimedes)' }),
       a.in_phase
-        ? eq('req', 'Required submerged weight', 'w_req', `gamma_sc*(abs(F_D + F_I)/mu_s${lift})${fr}`, { kind: 'law', origin: 'Horizontal and vertical equilibrium with Coulomb friction at the governing phase', needs: ['in_phase'] })
-        : eq('req', 'Required submerged weight', 'w_req', `gamma_sc*((F_Dm + F_Im)/mu_s${liftm})${fr}`, { kind: 'law', origin: 'Equilibrium with peak loads taken as simultaneous' }),
+        ? eq('req', 'Required submerged weight', 'w_req', a.coulomb ? `gamma_sc*(abs(F_D + F_I)/mu_s${lift})` : `max(gamma_sc*(abs(F_D + F_I)/mu_s${lift})${fr}, 0)`, { kind: 'law', origin: 'Horizontal and vertical equilibrium with Coulomb friction at the governing phase', needs: ['in_phase'] })
+        : eq('req', 'Required submerged weight', 'w_req', a.coulomb ? `gamma_sc*((F_Dm + F_Im)/mu_s${liftm})` : `max(gamma_sc*((F_Dm + F_Im)/mu_s${liftm})${fr}, 0)`, { kind: 'law', origin: 'Equilibrium with peak loads taken as simultaneous' }),
       eq('sf', 'Factor of safety against sliding', 'SF', `(mu_s*w_s${a.coulomb ? '' : ' + F_R'})/(${a.in_phase ? 'abs(F_D + F_I)' : 'F_Dm + F_Im'}${a.lift ? (a.in_phase ? ' + mu_s*F_L' : ' + mu_s*F_Lm') : ''})`, { kind: 'definition' }),
     ];
   },
@@ -1124,6 +1125,12 @@ const onBottom = {
     out.push(bench('Drag-only required weight', rd.wReq, v.gamma_sc * 0.5 * v.rho * rd.D * v.C_D * rd.uw ** 2 / v.mu_s, 'γ·½ρ·D·C_D·u_w²/μ', 1e-12));
     const ri = obsRun({ ...v, U_c: 0, C_D: 0, C_L: 0 }, b0, v.t_c);
     out.push(bench('Inertia-only required weight', ri.wReq, v.gamma_sc * v.rho * Math.PI * ri.D ** 2 / 4 * v.C_M * ri.aw / v.mu_s, 'γ·ρ·(πD²/4)·C_M·a_w/μ', 1e-12));
+    const rc = obsRun({ ...v, C_M: 0, C_L: 0 }, b0, v.t_c);
+    out.push(bench('Drag-only required weight with a following current', rc.wReq, v.gamma_sc * 0.5 * v.rho * rc.D * v.C_D * (rc.uw + v.U_c) ** 2 / v.mu_s, 'γ·½ρ·D·C_D·(u_w + U_c)²/μ under the crest', 1e-12));
+    const rl = obsRun({ ...v, C_D: 0, C_M: 0 }, b0, v.t_c);
+    out.push(bench('Lift-only required weight', rl.wReq, v.gamma_sc * 0.5 * v.rho * rl.D * v.C_L * (rl.uw + v.U_c) ** 2, 'γ·½ρ·D·C_L·(u_w + U_c)²: weight must exceed the factored peak lift', 1e-12));
+    const bl = { ...b0, uniform_current: false }, re = obsRun({ ...v, z_r: v.D_s + 2 * v.t_c }, bl, v.t_c);
+    out.push(bench('Power-law current averaged over a pipe as tall as the reference height', re.Ue, 7 / 8 * v.U_c, 'Mean of (z/z_r)^(1/7) over 0 ≤ z ≤ z_r is 7/8', 1e-12));
     out.push(bench('Potential-flow inertia coefficient of a cylinder on a wall', 3.29, Math.PI ** 2 / 3, 'C_M = π²/3 (added mass π²/3 − 1 plus Froude–Krylov)', 1e-3));
     return out;
   },
@@ -1217,9 +1224,9 @@ const mudmat = {
     if (a.undrained) {
       out.push(eq('nc', 'Prandtl bearing-capacity factor', 'N_c', 'pi + 2', { kind: 'law', origin: 'Exact plasticity solution for a strip on a weightless Tresca material; Prandtl (1921)' }));
       if (a.shape) out.push(eq('sc', 'Shape term', 's_ca', '0.2*B/L', { kind: 'empirical', origin: 'Skempton (1951); Brinch Hansen (1970)', needs: ['shape'] }));
-      if (!a.no_depth) out.push(eq('dc', 'Depth term', 'd_ca', '0.4*D_f/B', { kind: 'empirical', origin: 'Brinch Hansen (1970), D ≤ B' }));
-      if (a.incl) out.push(eq('ic', 'Inclination term', 'i_ca', '0.5 - 0.5*sqrt(1 - H/(B*L*s_u))', { kind: 'empirical', origin: 'Brinch Hansen (1970)', needs: ['incl'] }));
-      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `N_c*s_u*(1${a.shape ? ' + s_ca' : ''}${a.no_depth ? '' : ' + d_ca'}${a.incl ? ' - i_ca' : ''}) + gamma_sub*D_f`, { kind: 'closure', origin: 'Brinch Hansen (1970) for φ = 0', needs: ['undrained'] }));
+      if (!a.no_depth) out.push(eq('dc', 'Depth term', 'd_ca', '0.4*D_f/B', { kind: 'empirical', origin: 'Brinch Hansen (1970), D ≤ B', note: 'For embedment deeper than the width the solver uses 0.4·atan(D_f/B), as Brinch Hansen gives.' }));
+      if (a.incl) out.push(eq('ic', 'Inclination term', 'i_ca', '0.5 - 0.5*sqrt(max(1 - H/(B*L*s_u), 0))', { kind: 'empirical', origin: 'Brinch Hansen (1970)', needs: ['incl'] }));
+      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `N_c*s_u*(1${a.shape ? ' + s_ca' : ''}${a.no_depth ? '' : ' + d_ca'}${a.incl ? ' - i_ca' : ''}) + gamma_sub*D_f`, { kind: 'closure', origin: 'Brinch Hansen (1970) for φ = 0', needs: ['undrained'], note: 'B is the shorter and L the longer plan dimension; the solver swaps them if they are entered the other way round.' }));
       out.push(eq('hu', 'Sliding resistance', 'H_u', 'alpha_s*s_u*B*L', { kind: 'closure', origin: 'Base shear at a fraction of the undrained strength' }));
     } else {
       out.push(eq('kp', 'Passive coefficient', 'K_p', 'tan(pi/4 + phi/2)^2', { kind: 'definition' }));
@@ -1227,9 +1234,9 @@ const mudmat = {
       out.push(eq('ng', 'Self-weight factor', 'N_gamma', '(N_q - 1)*tan(1.4*phi)', { kind: 'empirical', origin: 'Meyerhof (1963)' }));
       if (a.shape) out.push(eq('sg', 'Shape factor', 's_g', '1 + 0.1*K_p*B/L', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['shape'] }));
       if (!a.no_depth) out.push(eq('dg', 'Depth factor', 'd_g', '1 + 0.1*sqrt(K_p)*D_f/B', { kind: 'empirical', origin: 'Meyerhof (1963)' }));
-      if (a.incl) { out.push(eq('th', 'Load inclination', 'tan(theta_l)', 'H/V', { kind: 'definition' })); out.push(eq('iq', 'Inclination factor on surcharge', 'i_q', '(1 - 2*theta_l/pi)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); out.push(eq('ig', 'Inclination factor on self-weight', 'i_g', '(1 - theta_l/phi)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); }
+      if (a.incl) { out.push(eq('th', 'Load inclination', 'tan(theta_l)', 'H/V', { kind: 'definition' })); out.push(eq('iq', 'Inclination factor on surcharge', 'i_q', '(1 - 2*theta_l/pi)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); out.push(eq('ig', 'Inclination factor on self-weight', 'i_g', 'max(1 - theta_l/phi, 0)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); }
       const f = `${a.shape ? '*s_g' : ''}${a.no_depth ? '' : '*d_g'}`;
-      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `0.5*gamma_sub*B*N_gamma${f}${a.incl ? '*i_g' : ''} + gamma_sub*D_f*N_q${f}${a.incl ? '*i_q' : ''}`, { kind: 'closure', origin: 'Terzaghi superposition with Meyerhof factors, c′ = 0' }));
+      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `0.5*gamma_sub*B*N_gamma${f}${a.incl ? '*i_g' : ''} + gamma_sub*D_f*N_q${f}${a.incl ? '*i_q' : ''}`, { kind: 'closure', origin: 'Terzaghi superposition with Meyerhof factors, c′ = 0', note: 'B is the shorter and L the longer plan dimension; the solver swaps them if they are entered the other way round.' }));
       out.push(eq('hu', 'Sliding resistance', 'H_u', 'alpha_s*V*tan(phi)', { kind: 'law', origin: 'Coulomb friction on the base' }));
     }
     out.push(eq('Qu', 'Ultimate vertical capacity', 'Q_u', 'q_u*B*L', { kind: 'definition' }));
@@ -1280,7 +1287,9 @@ const mudmat = {
     const f30 = bearingFactors(30 * DEG);
     return [
       bench('N_c in the limit φ → 0', bearingFactors(1e-5).Nc, Math.PI + 2, 'Prandtl (1921): N_c = π + 2', 1e-4),
-      bench('N_q at φ = 30°', f30.Nq, Math.exp(Math.PI * Math.tan(Math.PI / 6)) * 3, 'N_q = e^{π tan φ}·tan²(45° + φ/2) = 18.40', 1e-12),
+      bench('N_q at φ = 30°', f30.Nq, 18.40, 'Tabulated Prandtl–Reissner value: e^{π tan φ}·tan²(45° + φ/2) = 18.40', 1e-3),
+      bench('Surface strip on clay: q_u = (π + 2)·s_u', mudmatRun({ B: 1, L: 1e9, D_f: 0, s_u: 1e4, gamma_sub: 6e3, phi: 0.5, alpha_s: 1, V: 1e4, H: 0 }, { undrained: true, shape: true, incl: true, no_depth: false }).qu / 1e4, Math.PI + 2, 'Prandtl (1921), exact for a strip on a Tresca soil', 1e-8),
+      bench('Strip with full base shear mobilised: q_u = (1 + π/2)·s_u', mudmatRun({ B: 1, L: 1, D_f: 0, s_u: 1e4, gamma_sub: 6e3, phi: 0.5, alpha_s: 1, V: 1e4, H: 1e4 }, { undrained: true, shape: false, incl: true, no_depth: true }).qu / 1e4, 1 + Math.PI / 2, 'Exact plasticity solution for a strip sliding at H = A·s_u', 1e-12),
       bench('N_c at φ = 30°', f30.Nc, 30.14, 'Tabulated Prandtl–Reissner value', 1e-3),
       bench('Meyerhof N_γ at φ = 30°', f30.Ng, 15.67, 'Tabulated value, Meyerhof (1963)', 1e-3),
     ];
@@ -1377,7 +1386,7 @@ const consolidation = {
     ...(a.instant ? [eq('ic', 'Initial condition', 'u', a.uniform ? 'dq' : 'dq*(1 - z/H_c)', { kind: 'initial', origin: 'Pore water carries the whole stress increment at first' })] : []),
     eq('dr', 'Drainage path', 'd_r', a.double ? 'H_c/2' : 'H_c', { kind: 'definition', needs: a.double ? ['double'] : [] }),
     eq('tv', 'Time factor', 'T_v', 'c_v*t_end/d_r^2', { kind: 'definition' }),
-    eq('U', 'Average degree of consolidation', 'U_avg', `1 - int(u, z)/(${a.uniform ? '' : '0.5*'}dq*H_c)`, { kind: 'definition', origin: 'Fraction of the applied excess pore pressure that has dissipated' }),
+    eq('U', 'Average degree of consolidation', 'U_avg', `${a.instant ? '1' : 'min(t_end/t_c, 1)'} - int(u, z)/(${a.uniform ? '' : '0.5*'}dq*H_c)`, { kind: 'definition', origin: a.instant ? 'Fraction of the applied excess pore pressure that has dissipated' : 'Effective-stress increase so far as a fraction of the final load; the first term is the fraction of the load applied' }),
     a.mv
       ? eq('sinf', 'Final settlement', 's_inf', `${a.uniform ? '' : '0.5*'}m_v*dq*H_c`, { kind: 'law', origin: 'One-dimensional strain of a linear skeleton', needs: ['mv'] })
       : eq('sinf', 'Final settlement', 's_inf', `C_c/(1 + e_0)*H_c*log10((sigma_0 + ${a.uniform ? '' : '0.5*'}dq)/sigma_0)`, { kind: 'empirical', origin: 'Linear void ratio–log stress relation of normally consolidated clay' }),
@@ -1426,6 +1435,12 @@ const consolidation = {
     out.push(bench('Single drainage vs Fourier series', val(r1, 'U_avg'), val(r1, 'U_exact'), 'Terzaghi (1943)', 2e-3));
     const r2 = this.solve(v, { ...b0, uniform: false });
     out.push(bench('Linear initial pressure with double drainage', val(r2, 'U_avg'), val(r, 'U_exact'), 'Same U–T_v curve as the uniform case (Taylor 1948)', 2e-3));
+    const dr = v.H_c / 2, Tv = v.c_v * v.t_end / dr ** 2, Tc = v.c_v * v.t_c / dr ** 2;
+    if (Tv > Tc) {
+      let sr = 0; for (let j = 0; j < 400; j++) { const M = Math.PI * (2 * j + 1) / 2; sr += 2 / M ** 4 * (Math.exp(-M * M * (Tv - Tc)) - Math.exp(-M * M * Tv)); }
+      const r3 = this.solve(v, { ...b0, instant: false });
+      out.push(bench('Ramp loading after the end of construction', val(r3, 'U_avg'), 1 - sr / Tc, 'Superposition of Terzaghi\'s series over a linear ramp (Olson 1977)', 3e-3));
+    }
     out.push(bench('Time factor for 50 % consolidation', consolSeries(0.197), 0.5, 'T_50 = 0.197', 2e-3));
     out.push(bench('Time factor for 90 % consolidation', consolSeries(0.848), 0.9, 'T_90 = 0.848', 1e-3));
     return out;
@@ -1520,7 +1535,7 @@ const slopeStability = {
       eq('tau', 'Shear stress on the slip plane', 'tau', `gamma_a*z*sin(beta)*cos(beta)${kh ? ' + k_h*gamma_a*z*cos(beta)^2' : ''}`, { kind: 'law', origin: 'Force equilibrium of a slice parallel to the slope', needs: kh ? [] : ['static'] }),
       ...(wet && a.drained ? [eq('u', 'Pore pressure', 'u_p', 'gamma_w*m_w*z*cos(beta)^2', { kind: 'derived', origin: 'Flow net for seepage parallel to the slope', needs: ['seepage'] })] : []),
       a.drained
-        ? eq('tf', 'Shear strength', 'tau_f', `${a.cohesion ? 'c_eff + ' : ''}(sigma_n${wet ? ' - u_p' : ''})*tan(phi)`, { kind: 'closure', origin: 'Mohr–Coulomb failure criterion in effective stress', needs: ['drained'] })
+        ? eq('tf', 'Shear strength', 'tau_f', `${a.cohesion ? 'c_eff + ' : ''}max(sigma_n${wet ? ' - u_p' : ''}, 0)*tan(phi)`, { kind: 'closure', origin: 'Mohr–Coulomb failure criterion in effective stress', needs: ['drained'] })
         : eq('tf', 'Shear strength', 'tau_f', 's_u', { kind: 'closure', origin: 'Undrained (total-stress) strength' }),
       eq('fs', 'Factor of safety', 'FS', 'tau_f/tau', { kind: 'definition' }),
     ];
@@ -1561,6 +1576,8 @@ const slopeStability = {
     const b0 = { ...a, drained: true, static: true }, out = [];
     out.push(bench('Dry cohesionless slope FS = tan φ / tan β', slopeFS(v, { ...b0, seepage: false, cohesion: false }).FS, Math.tan(v.phi) / Math.tan(v.beta), 'Lambe & Whitman (1969)', 1e-12));
     out.push(bench('Seepage to the surface, cohesionless: FS = (γ′/γ_sat)·tan φ / tan β', slopeFS(v, { ...b0, seepage: true, cohesion: false }, v.beta, v.z, 1).FS, (v.gamma_sat - GAMMA_W) / v.gamma_sat * Math.tan(v.phi) / Math.tan(v.beta), 'Skempton & DeLory (1957)', 1e-12));
+    const kh = Math.max(v.k_h, 0.05), psi = Math.atan(kh);
+    out.push(bench('Pseudo-static dry cohesionless slope: FS = tan φ / tan(β + ψ)', slopeFS({ ...v, k_h: kh }, { ...b0, static: false, seepage: false, cohesion: false }).FS, Math.tan(v.phi) / Math.tan(v.beta + psi), 'Resultant body force rotated by ψ = atan k_h', 1e-12));
     out.push(bench('Limiting angle of a dry cohesionless slope', slopeCritAngle(v, { ...b0, seepage: false, cohesion: false }), v.phi, 'Angle of repose equals the friction angle', 1e-9));
     return out;
   },
@@ -1673,7 +1690,7 @@ const beamBending = {
     eq('sig', 'Bending stress', 'sigma_max', 'M_max*c_y/I_b', { kind: 'derived', origin: 'Linear strain distribution over the depth' }),
     a.simply
       ? eq('f1', 'First natural frequency', 'f_1', 'pi/(2*L^2)*sqrt(E*I_b/m_l)', { kind: 'derived', origin: 'Free vibration of a pinned–pinned beam', needs: ['simply'] })
-      : eq('f1', 'First natural frequency', 'f_1', '1.8751^2/(2*pi*L^2)*sqrt(E*I_b/m_l)', { kind: 'derived', origin: 'Free vibration of a cantilever; 1.8751 is the first root of cos λ·cosh λ = −1' }),
+      : eq('f1', 'First natural frequency', 'f_1', '1.8751040687^2/(2*pi*L^2)*sqrt(E*I_b/m_l)', { kind: 'derived', origin: 'Free vibration of a cantilever; 1.8751 is the first root of cos λ·cosh λ = −1' }),
   ],
   derivation: a => [
     { text: 'Vertical and moment equilibrium of an element of length dx relate load, shear force and bending moment.', tex: '\\frac{\\mathrm{d}V}{\\mathrm{d}x} = -w,\\qquad \\frac{\\mathrm{d}M}{\\mathrm{d}x} = V' },
@@ -1808,7 +1825,7 @@ const columnBuckling = {
     eq('pe', 'Euler critical load', 'P_E', 'pi^2*E*I_b/(K*L)^2', { kind: 'law', origin: 'Bifurcation of the elastic beam–column equation; Euler (1744)' }),
     eq('lc', 'Transition slenderness', 'lambda_c', 'pi*sqrt(2*E/sigma_y)', { kind: 'derived', origin: 'Tangency of the Johnson parabola and the Euler hyperbola at half the yield strength' }),
     a.johnson
-      ? eq('scr', 'Johnson parabola (λ < λ_c)', 'sigma_cr', 'sigma_y*(1 - sigma_y*lambda^2/(4*pi^2*E))', { kind: 'empirical', origin: 'J. B. Johnson\'s parabolic column formula', needs: ['johnson'] })
+      ? eq('scr', 'Johnson parabola (λ < λ_c)', 'sigma_cr', 'sigma_y*(1 - sigma_y*lambda^2/(4*pi^2*E))', { kind: 'empirical', origin: 'J. B. Johnson\'s parabolic column formula', needs: ['johnson'], note: 'Applies below the transition slenderness; for λ ≥ λ_c the solver uses the Euler stress π²E/λ².' })
       : eq('scr', 'Critical stress', 'sigma_cr', 'min(sigma_y, pi^2*E/lambda^2)', { kind: 'closure', origin: 'Euler stress limited by yield' }),
     ...(a.imperfect ? [
       a.bow
@@ -2065,7 +2082,9 @@ const shearBuilding = {
 
 // ------------------------------------------------------------------ fatigue: S–N curve and Miner's rule
 function fatigueRun(v, a) {
-  const aSN = Math.pow(10, v.log_a) / (a.in_air ? 1 : 2.5), m = v.m, m2 = 2 * m - 1, Sk = Math.pow(aSN / 1e7, 1 / m), a2 = 1e7 * Math.pow(Sk, m2);
+  // the second slope is anchored to the in-air curve at 10⁷ cycles and is not reduced in sea water, so the knee of the
+  // cathodically protected curve moves to about 10⁶ cycles (as in the tabulated bilinear design curves)
+  const aAir = Math.pow(10, v.log_a), aSN = aAir / (a.in_air ? 1 : 2.5), m = v.m, m2 = 2 * m - 1, a2 = 1e7 * Math.pow(aAir / 1e7, m2 / m), Sk = Math.pow(a2 / aSN, 1 / (m2 - m));
   const fT = a.no_thick ? 1 : Math.pow(Math.max(v.t_pl, 0.025) / 0.025, v.k_th), fG = a.goodman ? 1 / (1 - Math.min(v.sigma_m / v.sigma_u, 0.95)) : 1, fS = v.K_t * fT * fG;
   const Nf = S => (a.single_slope || S >= Sk ? aSN * Math.pow(S, -m) : a2 * Math.pow(S, -m2));
   const S = [v.S_1, v.S_2, v.S_3].map(s => fS * s / 1e6), n = [v.n_1, v.n_2, v.n_3], Ni = S.map(Nf), d = n.map((q, i) => q / Ni[i]), D = N.sum(d);
@@ -2102,17 +2121,17 @@ const fatigueMiner = {
     inp('T_d', 'Design life', 'yr', 25, { min: 1, max: 100, aliases: ['design life', 'service life'] }),
   ],
   assumptions: [
-    asm('single_slope', 'The S–N curve is a single straight line on logarithmic axes with no endurance limit.', { why: 'Basic Basquin form', alt: 'A second, shallower slope 2m − 1 applies beyond 10⁷ cycles (Haibach extension, as in bilinear design curves).' }),
+    asm('single_slope', 'The S–N curve is a single straight line on logarithmic axes with no endurance limit.', { why: 'Basic Basquin form', alt: 'A second, shallower slope 2m − 1 applies below the knee of the curve, which lies at 10⁷ cycles in air (Haibach extension, as in bilinear design curves).' }),
     asm('goodman', 'Tensile mean stress is allowed for with the Goodman relation.', { why: 'Unwelded, stress-relieved material', alt: 'No mean-stress correction: appropriate for as-welded joints, where residual stress makes the range alone govern.' }),
-    asm('no_thick', 'No thickness correction is applied.', { why: 'Thickness at or below the 25 mm reference', alt: 'Stress ranges are multiplied by (t/25 mm)^k for plate thicker than the reference.' }),
-    asm('in_air', 'The detail is in air or fully protected from the environment.', { why: 'Curve as tested', alt: 'Sea water with cathodic protection: the intercept is divided by 2.5.' }),
+    asm('no_thick', 'No thickness correction is applied.', { why: 'Thickness at or below the 25 mm reference', alt: 'Stress ranges are multiplied by (t/25 mm)^k for plate thicker than the reference; thinner plate is not credited.' }),
+    asm('in_air', 'The detail is in air or fully protected from the environment.', { why: 'Curve as tested', alt: 'Sea water with cathodic protection: the first-slope intercept is divided by 2.5. The second slope of a bilinear curve is left unchanged, so its knee moves from 10⁷ to about 10⁶ cycles.' }),
   ],
   symbols: { S_i: ['Nominal stress range of block i', 'Pa'], S_ref: ['Reference stress of the S–N curve (1 MPa)', 'Pa'], f_s: ['Combined stress factor', '1'], a_sn: ['S–N intercept', '1'], a_2: ['Intercept of the second slope', '1'], N_i: ['Cycles to failure at block i', '1'], N_1: ['Cycles to failure at block 1', '1'], N_2: ['Cycles to failure at block 2', '1'], N_3: ['Cycles to failure at block 3', '1'], D_r: ['Damage rate', '1/s'], T_f: ['Fatigue life', 's'], t_ref: ['Reference thickness (25 mm)', 'm'] },
   equations: a => [
-    eq('fs', 'Combined stress factor', 'f_s', `K_t${a.no_thick ? '' : '*(t_pl/t_ref)^k_th'}${a.goodman ? '/(1 - sigma_m/sigma_u)' : ''}`, { kind: 'closure', origin: 'Stress concentration' + (a.no_thick ? '' : ', thickness effect') + (a.goodman ? ', Goodman mean-stress correction' : ''), needs: a.goodman ? ['goodman'] : [] }),
+    eq('fs', 'Combined stress factor', 'f_s', `K_t${a.no_thick ? '' : '*(max(t_pl, t_ref)/t_ref)^k_th'}${a.goodman ? '/(1 - sigma_m/sigma_u)' : ''}`, { kind: 'closure', origin: 'Stress concentration' + (a.no_thick ? '' : ', thickness effect') + (a.goodman ? ', Goodman mean-stress correction' : ''), needs: a.goodman ? ['goodman'] : [] }),
     eq('asn', 'S–N intercept', 'a_sn', a.in_air ? '10^log_a' : '10^log_a/2.5', { kind: 'empirical', origin: 'Regression of constant-amplitude fatigue tests', needs: a.in_air ? ['in_air'] : [] }),
     eq('sn', 'S–N curve', 'N_i', 'a_sn*(f_s*S_i/S_ref)^(-m)', { kind: 'empirical', origin: 'Basquin (1910) power law', needs: a.single_slope ? ['single_slope'] : [] }),
-    ...(a.single_slope ? [] : [eq('sn2', 'Second slope beyond 10⁷ cycles', 'N_i', 'a_2*(f_s*S_i/S_ref)^(-(2*m - 1))', { kind: 'empirical', origin: 'Haibach extension of the S–N curve below the knee' })]),
+    ...(a.single_slope ? [] : [eq('sn2', 'Second slope below the knee', 'N_i', 'a_2*(f_s*S_i/S_ref)^(-(2*m - 1))', { kind: 'empirical', origin: 'Haibach extension of the S–N curve below the knee', note: 'Used for effective stress ranges below the knee, where the two branches intersect; a_2 makes the in-air branches meet at 10⁷ cycles.' })]),
     eq('miner', 'Linear damage accumulation', 'D_r', 'n_1/N_1 + n_2/N_2 + n_3/N_3', { kind: 'hypothesis', origin: 'Palmgren (1924), Miner (1945): damage fractions add independently of sequence' }),
     eq('life', 'Fatigue life', 'T_f', '1/(DFF*D_r)', { kind: 'derived', origin: 'Failure when the damage sum reaches one, with a design fatigue factor' }),
   ],
@@ -2133,7 +2152,7 @@ const fatigueMiner = {
       scalars: [
         scalar('f_s', 'Combined stress factor', r.fS, '1'), scalar('S_e1', 'Effective stress range, block 1', r.S[0] * 1e6, 'Pa', { show: 'MPa' }),
         scalar('N_1', 'Cycles to failure at block 1', r.Ni[0], '1'), scalar('N_2', 'Cycles to failure at block 2', r.Ni[1], '1'), scalar('N_3', 'Cycles to failure at block 3', r.Ni[2], '1'),
-        scalar('S_knee', 'Stress range at 10⁷ cycles', r.Sk * 1e6, 'Pa', { show: 'MPa' }), scalar('S_eq', 'Equivalent constant-amplitude stress range', Seq * 1e6, 'Pa', { show: 'MPa' }),
+        scalar('S_knee', 'Stress range at the knee of the bilinear curve', r.Sk * 1e6, 'Pa', { show: 'MPa' }), scalar('S_eq', 'Equivalent constant-amplitude stress range', Seq * 1e6, 'Pa', { show: 'MPa' }),
         scalar('D_r', 'Damage rate', r.D, '1/s', { show: '1/yr' }), scalar('i_dom', 'Block contributing most damage', iMax + 1, '1'),
         scalar('T_f', 'Fatigue life (with design fatigue factor)', life, 's', { show: 'yr', text: Number.isFinite(life) ? undefined : 'Unlimited — no cycles applied' }),
         scalar('D_life', 'Factored damage over the design life', Dlife, '1', { note: Dlife <= 1 ? 'acceptable' : 'exceeds one' }),
@@ -2153,7 +2172,11 @@ const fatigueMiner = {
     out.push(bench('Single block: life = a/(n·Sᵐ)', 1 / r.D, Math.pow(10, v.log_a) / (n1 * Math.pow(v.S_1 / 1e6, v.m)), 'Closed form for constant-amplitude loading', 1e-10));
     out.push(bench('Design curve D in air at its knee', Math.pow(10, 12.164) * Math.pow(52.63, -3), 1e7, 'DNV-RP-C203: 52.63 MPa at 10⁷ cycles', 2e-3));
     const rb = fatigueRun(v, { ...b0, single_slope: false });
-    out.push(bench('Bilinear curve is continuous at the knee', rb.a2 * Math.pow(rb.Sk, -rb.m2), rb.aSN * Math.pow(rb.Sk, -rb.m), 'Both branches give 10⁷ cycles', 1e-10));
+    out.push(bench('Bilinear curve is continuous at the knee', rb.a2 * Math.pow(rb.Sk, -rb.m2), rb.aSN * Math.pow(rb.Sk, -rb.m), 'Both branches give the same life', 1e-10));
+    const dD = { ...v, m: 3, log_a: 12.164 }, ra = fatigueRun(dD, { ...b0, single_slope: false }), rw = fatigueRun(dD, { ...b0, single_slope: false, in_air: false });
+    out.push(bench('Design curve D in air: second-slope intercept', Math.log10(ra.a2), 15.606, 'DNV-RP-C203 tabulated log ā₂ for m₂ = 5', 1e-4));
+    out.push(bench('Design curve D with cathodic protection: first-slope intercept', Math.log10(rw.aSN), 11.764, 'DNV-RP-C203 tabulated log ā₁ in sea water (a factor 10^0.4 ≈ 2.5 below air)', 5e-4));
+    out.push(bench('Design curve D with cathodic protection: life at the knee', rw.Nf(rw.Sk), 1e6, 'DNV-RP-C203: slope changes at 10⁶ cycles in sea water', 2e-2));
     const r2 = fatigueRun({ ...v, K_t: 2 }, b0), r1 = fatigueRun({ ...v, K_t: 1 }, b0);
     out.push(bench('Doubling the stress multiplies damage by 2ᵐ', r1.D > 0 ? r2.D / r1.D : Math.pow(2, v.m), Math.pow(2, v.m), 'Power-law scaling', 1e-10));
     return out;
@@ -2243,7 +2266,7 @@ const pressureVessel = {
       ? (a.closed
         ? eq('eq', 'Von Mises equivalent stress', 'sigma_eq', `sqrt(0.5*((sigma_theta - ${a.thick ? 'sigma_r' : '0'})^2 + (${a.thick ? 'sigma_r' : '0'} - sigma_z)^2 + (sigma_z - sigma_theta)^2))`, { kind: 'closure', origin: 'Distortion-energy yield criterion', needs: ['von_mises'] })
         : eq('eq', 'Von Mises equivalent stress (zero axial stress)', 'sigma_eq', a.thick ? 'sqrt(sigma_theta^2 - sigma_theta*sigma_r + sigma_r^2)' : 'abs(sigma_theta)', { kind: 'closure', origin: 'Distortion-energy yield criterion', needs: ['von_mises'] }))
-      : eq('eq', 'Tresca equivalent stress', 'sigma_eq', a.thick ? (a.closed ? 'sigma_theta - sigma_r' : 'max(sigma_theta, 0) - min(sigma_r, 0)') : (a.closed ? 'max(sigma_theta, sigma_z) - min(min(sigma_theta, sigma_z), 0)' : 'abs(sigma_theta)'), { kind: 'closure', origin: 'Maximum shear-stress yield criterion' }),
+      : eq('eq', 'Tresca equivalent stress', 'sigma_eq', a.thick ? (a.closed ? 'abs(sigma_theta - sigma_r)' : 'max(max(sigma_theta, sigma_r), 0) - min(min(sigma_theta, sigma_r), 0)') : (a.closed ? 'max(max(sigma_theta, sigma_z), 0) - min(min(sigma_theta, sigma_z), 0)' : 'abs(sigma_theta)'), { kind: 'closure', origin: 'Maximum shear-stress yield criterion' }),
     a.faupel
       ? eq('pb', 'Burst pressure', 'p_b', '2/sqrt(3)*sigma_y*(2 - sigma_y/sigma_u)*ln(r_o/r_i)', { kind: 'empirical', origin: 'Faupel (1956)', needs: ['faupel'] })
       : eq('pb', 'Fully plastic pressure at the tensile strength', 'p_b', '2/sqrt(3)*sigma_u*ln(r_o/r_i)', { kind: 'derived', origin: 'Limit analysis of a von Mises cylinder; Hill (1950)' }),
@@ -2299,6 +2322,9 @@ const pressureVessel = {
     const rt = lameRun({ ...v, r_i: 1, p_i: 1e6, p_o: 0 }, th, 0.001);
     out.push(bench('Thin-wall limit: Lamé bore hoop stress over p·r/t', rt.sh(1) / (1e6 * 1 / 0.001), 1, 'Converges as t/r → 0', 1e-3));
     out.push(bench('Sum of hoop and radial stress is constant through the wall', (r2.sh(0.15) + r2.sr(0.15)) / (2 * r2.A), 1, 'σ_θ + σ_r = 2A', 1e-12));
+    const rx = lameRun({ ...v, r_i: 0.1, p_i: 0, p_o: 1e7 }, th, 0.1);
+    out.push(bench('External pressure only: bore hoop stress for r_o/r_i = 2', rx.sh(0.1) / 1e7, -8 / 3, 'σ_θ = −2p·K²/(K² − 1)', 1e-12));
+    out.push(bench('First-yield pressure, closed ends, Tresca', lameRun({ ...v, r_i: 0.1, p_i: v.sigma_y * 0.375, p_o: 0 }, { ...th, von_mises: false }, 0.1).seqMax, v.sigma_y, 'p_y = σ_y·(K² − 1)/(2K²)', 1e-12));
     out.push(bench('First-yield pressure, closed ends, von Mises', lameRun({ ...v, r_i: 0.1, p_i: v.sigma_y * 0.75 / Math.sqrt(3), p_o: 0 }, th, 0.1).seqMax, v.sigma_y, 'p_y = σ_y·(K² − 1)/(√3·K²)', 1e-12));
     return out;
   },

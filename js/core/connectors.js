@@ -12,6 +12,7 @@ export const SOURCES = [
   { id: 'weather', name: 'Surface weather', provider: 'Open-Meteo (national weather-service models: ECMWF, NOAA GFS, DWD ICON and others)', gives: 'Air temperature, pressure, humidity, wind at a point', cadence: 'Model runs hourly to six-hourly; values at 15-minute resolution', ttl: 15 * 60e3, licence: 'CC BY 4.0', home: 'https://open-meteo.com' },
   { id: 'marine', name: 'Sea state', provider: 'Open-Meteo Marine (ECMWF WAM, NOAA GFS-Wave, Copernicus Marine)', gives: 'Significant wave height, wave period, sea-surface temperature, surface current', cadence: 'Model runs every 6–12 hours', ttl: 30 * 60e3, licence: 'CC BY 4.0', home: 'https://open-meteo.com/en/docs/marine-weather-api' },
   { id: 'relief', name: 'Bathymetry and terrain', provider: 'NOAA National Centers for Environmental Information — global DEM mosaic', gives: 'Seabed depth or ground elevation at a point', cadence: 'Static survey compilation, revised occasionally', ttl: 30 * 864e5, licence: 'US public domain', home: 'https://www.ncei.noaa.gov' },
+  { id: 'oceanprofile', name: 'Ocean temperature and salinity at depth', provider: 'GLODAP v2 mapped climatology (ship-borne measurements 1972–2013), served by EMODnet Physics', gives: 'Measured-data climatology of sea-water temperature and salinity on 33 depth levels, one-degree grid; used for seabed temperature', cadence: 'Static climatology of quality-controlled measurements', ttl: 90 * 864e5, licence: 'Open (GLODAP data policy; cite Lauvset et al. 2016)', home: 'https://glodap.info' },
   { id: 'climate', name: 'Climatology', provider: 'NASA POWER (Langley Research Center)', gives: 'Long-term monthly means of temperature and wind', cadence: 'Multi-decade averages, updated yearly', ttl: 30 * 864e5, licence: 'NASA open data', home: 'https://power.larc.nasa.gov' },
   { id: 'geocode', name: 'Place names', provider: 'Open-Meteo Geocoding (GeoNames)', gives: 'Coordinates and elevation of named places', cadence: 'Updated periodically', ttl: 30 * 864e5, licence: 'CC BY 4.0', home: 'https://open-meteo.com/en/docs/geocoding-api' },
   { id: 'spaceweather', name: 'Space weather', provider: 'NOAA Space Weather Prediction Center', gives: 'Planetary K index, solar-wind speed, interplanetary magnetic field', cadence: 'Solar wind every minute; K index every 3 hours', ttl: 5 * 60e3, licence: 'US public domain', home: 'https://www.swpc.noaa.gov' },
@@ -95,8 +96,25 @@ export async function environment(lat, lon, { force = false } = {}) {
     }).catch(e => errors.push(`Bathymetry: ${e.message}`)),
   ];
   await Promise.all(tasks);
+  // seabed temperature and salinity from the measured-data climatology, at the depth just found
+  if (out.water_depth) { try { const b = await seabed(lat, lon, out.water_depth.value); if (b) { put('seabed_temp', b.T + 273.15, b, `${b.source}; ${b.level} m level${b.clipped ? ` (deepest level with data; seabed at ${Math.round(out.water_depth.value)} m)` : ''}`); if (Number.isFinite(b.S)) put('salinity', b.S, b, b.source); } } catch (e) { errors.push(`Seabed temperature: ${e.message}`); } }
   out.latitude = { value: lat, source: 'Location', ts: Date.now(), stale: false };
   return { env: out, errors };
+}
+
+const GLODAP_DEPTHS = [0, 10, 20, 30, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1750, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500];
+/** Temperature (°C) and salinity at the seabed from the GLODAP v2 mapped climatology: interpolated in depth, or the deepest level holding data. */
+export async function seabed(lat, lon, depth) {
+  const la = Math.min(89.5, Math.max(-89.5, Math.floor(lat) + 0.5)), lo = Math.min(179.5, Math.max(-179.5, Math.floor(lon) + 0.5));
+  const base = 'https://erddap.emodnet-physics.eu/erddap/griddap/GLODAPv2_2016b_MappedClimatologies.json', q = v => `${v}%5B(0):1:(32)%5D%5B(${la})%5D%5B(${lo})%5D`;
+  const r = await getJSON('oceanprofile', `${base}?${q('temperature')},${q('salinity')}`, { key: `${la},${lo}` });
+  const rows = r.data.table.rows.map(x => ({ z: GLODAP_DEPTHS[x[0]], T: x[3], S: x[4] })).filter(x => Number.isFinite(x.T) && x.T > -5 && x.T < 40);
+  if (!rows.length) return null;
+  const deepest = rows[rows.length - 1];
+  if (depth >= deepest.z) return { T: deepest.T, S: deepest.S, level: deepest.z, clipped: depth > deepest.z * 1.25 + 50, ts: r.ts, stale: r.stale, source: sourceById('oceanprofile').provider };
+  let i = 0; while (i < rows.length - 2 && rows[i + 1].z < depth) i++;
+  const a = rows[i], b = rows[i + 1], f = (depth - a.z) / (b.z - a.z || 1);
+  return { T: a.T + (b.T - a.T) * f, S: a.S + (b.S - a.S) * f, level: Math.round(depth), clipped: false, ts: r.ts, stale: r.stale, source: sourceById('oceanprofile').provider };
 }
 
 export async function spaceWeather(force = false) {

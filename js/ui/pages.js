@@ -98,13 +98,13 @@ export async function home() {
 
 function reading(prompt, module) {
   if (prompt.trim().length < 8) return raw('<p class="dim small">Start typing and this panel will show how your prompt is being read: its class, the fields involved, the quantities you gave and the closest models.</p>');
-  const ranked = P.rankModels(prompt, MODELS, module), model = ranked[0] && ranked[0].score >= 4 ? modelById(ranked[0].id) : null;
+  const ranked = P.rankModels(prompt, MODELS, module), model = P.strongMatch(ranked[0]) ? modelById(ranked[0].id) : null;
   const k = P.classifyClass(prompt, model), doms = P.rankDomains(prompt).slice(0, 5), q = P.extractQuantities(prompt).items, loc = P.locate(prompt);
   return html`
     <div class="row">${join(k.tags, c => html`<span class="klass">Class ${c}</span> <span class="small">${P.CLASS_NAME[c]}</span>`)}${k.hybrid ? chip('hybrid', 'warn') : ''}</div>
     <p class="small dim">${P.CLASS_BLURB[k.primary]}</p>
     ${doms.length ? html`<div>${join(doms, d => html`<span class="tag">${d.name}</span>`)}</div>` : ''}
-    ${model ? html`<p class="small" style="margin-top:.5rem"><b>Closest model:</b> ${model.title}${ranked.length > 1 ? html` <span class="dim">(also: ${ranked.slice(1, 3).map(r => r.title).join('; ')})</span>` : ''}</p>` : html`<p class="small note warn">No library model matches closely yet. The investigation will still record your scenario, analyse its logic and dimensions, and let you choose a model or enter your own equations.</p>`}
+    ${model ? html`<p class="small" style="margin-top:.5rem"><b>Closest model:</b> ${model.title}${ranked.length > 1 ? html` <span class="dim">(also: ${ranked.slice(1, 3).map(r => r.title).join('; ')})</span>` : ''}</p>` : html`<p class="small note warn">No library model matches closely yet.${ranked[0] ? html` The nearest is <b>${ranked[0].title}</b>; it will be run and marked as a low-confidence match.` : ''} Equations written in your prompt (for example <code>d(x,t) = -k*x</code> with <code>k = 0.3</code>) are simulated directly.</p>`}
     ${q.length ? html`<p class="small"><b>Quantities read from your text:</b> ${join(q.slice(0, 10), x => html`<span class="tag">${x.raw}${x.bare ? '' : ` · ${x.quantity}`}</span>`)}</p>` : html`<p class="small dim">No numbers yet: reference values will be supplied and marked as software-supplied.</p>`}
     ${loc ? html`<p class="small"><b>Location:</b> ${loc.name} — environmental data will be attached.</p>` : ''}`;
 }
@@ -283,9 +283,9 @@ export function sourcesPage() {
       const showEnv = async (lat, lon, name) => {
         const el = $('#env', root); el.innerHTML = '<span class="busy"></span> Contacting sources…';
         const { env, errors } = await Conn.environment(lat, lon, { force: true });
-        const L = { air_temp: ['Air temperature', v => `${fmt(v - 273.15, 3)} °C`], air_pressure: ['Surface pressure', v => `${fmt(v / 100, 5)} hPa`], wind_speed: ['Wind at 10 m', v => `${fmt(v, 3)} m/s`], humidity: ['Relative humidity', v => `${fmt(v * 100, 3)} %`], air_density: ['Air density', v => `${fmt(v, 4)} kg/m³`], wave_height: ['Significant wave height', v => `${fmt(v, 3)} m`], wave_period: ['Wave period', v => `${fmt(v, 3)} s`], sea_surface_temp: ['Sea-surface temperature', v => `${fmt(v - 273.15, 3)} °C`], current_speed: ['Surface current', v => `${fmt(v, 3)} m/s`], water_depth: ['Water depth', v => `${fmt(v, 4)} m`], elevation: ['Ground elevation', v => `${fmt(v, 4)} m`] };
+        const L = { air_temp: ['Air temperature', v => `${fmt(v - 273.15, 3)} °C`], air_pressure: ['Surface pressure', v => `${fmt(v / 100, 5)} hPa`], wind_speed: ['Wind at 10 m', v => `${fmt(v, 3)} m/s`], humidity: ['Relative humidity', v => `${fmt(v * 100, 3)} %`], air_density: ['Air density', v => `${fmt(v, 4)} kg/m³`], wave_height: ['Significant wave height', v => `${fmt(v, 3)} m`], wave_period: ['Wave period', v => `${fmt(v, 3)} s`], sea_surface_temp: ['Sea-surface temperature', v => `${fmt(v - 273.15, 3)} °C`], current_speed: ['Surface current', v => `${fmt(v, 3)} m/s`], water_depth: ['Water depth', v => `${fmt(v, 4)} m`], seabed_temp: ['Seabed temperature', v => `${fmt(v - 273.15, 3)} °C`], salinity: ['Salinity near the seabed', v => `${fmt(v, 4)} g/kg`], elevation: ['Ground elevation', v => `${fmt(v, 4)} m`] };
         const rows = Object.entries(L).filter(([k]) => env[k]).map(([k, [n, f]]) => [n, raw(`<b>${esc(f(env[k].value))}</b>`), env[k].source, raw(esc(Conn.age(env[k].ts)) + (env[k].stale ? ' <span class="chip warn">cached</span>' : ''))]);
-        el.innerHTML = `<p><b>${esc(name)}</b> <span class="dim">(${lat.toFixed(3)}°, ${lon.toFixed(3)}°)</span></p>` + (rows.length ? table(['Quantity', 'Value', 'Source', 'Retrieved'], rows).__raw : '<p class="note warn">No source answered for this point.</p>') + (errors.length ? `<p class="small dim">${esc(errors.join('; '))}</p>` : '') + '<p class="small dim">Seabed temperature is not broadcast by any open live service; investigations use regional climatology for it and label it as estimated.</p>';
+        el.innerHTML = `<p><b>${esc(name)}</b> <span class="dim">(${lat.toFixed(3)}°, ${lon.toFixed(3)}°)</span></p>` + (rows.length ? table(['Quantity', 'Value', 'Source', 'Retrieved'], rows).__raw : '<p class="note warn">No source answered for this point.</p>') + (errors.length ? `<p class="small dim">${esc(errors.join('; '))}</p>` : '') + '<p class="small dim">Seabed temperature and salinity come from a climatology of ship-borne measurements (1972–2013) at the depth returned by the bathymetry source. They are long-term means at one-degree resolution, not today\'s reading; no open service broadcasts live seabed temperature.</p>';
         paintStatus();
       };
       const find = async () => {
@@ -323,7 +323,7 @@ export async function settingsPage() {
         <div class="card"><h2>Offline and aeroplane mode</h2><p>After the first visit the whole application — solvers, model library, verification, plotting, exports — is stored on the device and runs with no connection. Investigations and uploaded files are kept in on-device storage.</p>
           <dl class="kv"><dt>Offline shell</dt><dd id="sw-state">checking…</dd><dt>Storage used</dt><dd>${est ? `${bytes(est.used)} of about ${bytes(est.quota)} available` : 'not reported by this browser'}</dd><dt>Protected from eviction</dt><dd id="persist">—</dd></dl>
           <div class="row" style="margin-top:.6rem"><button class="btn" id="persist-btn">Ask the browser to keep my data</button><button class="btn" id="update">Check for an update</button></div>
-          <p class="small dim">Offline, live sources cannot be contacted; the last saved values are used and marked as cached.</p></div>
+          <p class="small dim">Offline, live sources cannot be contacted; the last saved values are used and marked as cached.</p><p class="small"><a class="btn sm" href="#/refresh">Refresh all live data now</a> — and on iPhone or iPad, see that page for a way to have the device do it on a timetable.</p></div>
         <div class="card"><h2>Resilience</h2><p>The application is plain static files, so it can be served from any number of independent hosts at once, and it keeps working from an installed copy even if every host is down.</p>
           <dl class="kv"><dt>This copy is served from</dt><dd>${location.origin}${location.pathname.replace(/index\.html$/, '')}</dd><dt>File mirrors used when this host is unreachable</dt><dd>${cfg.mirrors && cfg.mirrors.length ? join(cfg.mirrors, m => html`<div><a href="${m}" rel="noopener noreferrer">${m}</a></div>`) : 'none listed yet'}</dd></dl>
           <div class="row" style="margin-top:.6rem"><a class="btn" href="bespoke-offline.zip" download>Download the complete offline copy (ZIP)</a></div>
@@ -365,6 +365,26 @@ export function helpPage() {
         <p class="small dim">On finiteness: every algebraic relation is tested for terms that can diverge on the declared ranges, and a bounded, smooth replacement is generated when one is found. Time-dependent equations that you supply are integrated through a smooth cap on every rate of change; a proved lemma then guarantees that no variable can reach infinity in finite time, and the run reports whether the cap was ever active — if it was, the equations as written would have blown up. For the partial differential equations inside library models, boundedness is checked for the specific run and reported with its conservation residuals; a general guarantee does not exist for all such equations.</p></div>
       <div class="card"><h2>Understanding the labels on inputs</h2>${table(['Label', 'Meaning'], [['User-supplied', 'You typed it, or it was read from your prompt.'], ['Uploaded', 'Read from a file you provided.'], ['Software-retrieved', 'Fetched from a named external source; the retrieval time is shown.'], ['Software-derived', 'Calculated from other inputs.'], ['Software-estimated', 'From bundled climatology or correlations, with stated uncertainty.'], ['Software-supplied', 'A reference value adopted because none was given. Not a measurement of your system.'], ['Hypothetical', 'Invented or altered for a counterfactual world.'], ['Unresolved', 'Cannot be determined from what is available.']])}</div>
       <div class="card"><h2>Keyboard</h2><p class="small"><code>Alt</code> + <code>←</code> / <code>→</code> go back and forward. <code>Ctrl</code> + <code>Enter</code> in a prompt box creates the investigation.</p></div></div>`,
+  };
+}
+/** Refresh every live feed and every saved location in one go. Opened by hand, or on a schedule by the device. */
+export function refreshPage() {
+  return {
+    title: 'Refresh live data', crumb: 'Refresh',
+    html: html`<div class="stack"><h1>Refreshing live data</h1><div class="card"><div id="rf"><span class="busy"></span> Contacting sources…</div></div>
+      <div class="card"><h3>Keep data fresh on a schedule</h3><p class="small">Opening this page refreshes everything and stores it for offline use. On an iPhone or iPad, which does not let web applications refresh in the background, the system's own Shortcuts app can open it for you on a timetable:</p>
+        <ol class="clean small"><li>Open <b>Shortcuts</b> → <b>Automation</b> → <b>New Automation</b> → <b>Time of Day</b>; choose the times and <b>Run Immediately</b>.</li><li>Add the action <b>Open URLs</b> and paste the address below.</li><li>Save. The device now opens this page at those times and the data is refreshed.</li></ol>
+        <div class="row"><input type="text" readonly id="rf-url" value="${location.origin + location.pathname}#/refresh" style="flex:1"><button class="btn" id="rf-copy">Copy</button></div>
+        <p class="small dim">On Android and on desktop Chrome or Edge, the installed application refreshes in the background by itself.</p></div></div>`,
+    async after(root) {
+      $('#rf-copy', root).addEventListener('click', () => { navigator.clipboard.writeText($('#rf-url', root).value).then(() => toast('Address copied')).catch(() => toast('Select the address and copy it')); });
+      const locs = Store.prefs.get('locations', []), out = $('#rf', root), t0 = Date.now();
+      try {
+        await Conn.refreshAll(locs);
+        const st = Conn.sourceStatus(), ok = Object.values(st).filter(s => s.ok).length, bad = Object.entries(st).filter(([, s]) => !s.ok);
+        out.innerHTML = `<p class="note ok"><b>Done in ${((Date.now() - t0) / 1000).toFixed(1)} s.</b> ${ok} source(s) answered${locs.length ? `, including conditions at ${locs.length} saved location(s): ${locs.map(l => esc(l.name)).join('; ')}` : ''}. Everything is stored on this device for offline use.</p>${bad.length ? `<p class="small dim">Not reachable just now: ${bad.map(([k, s]) => `${esc(k)} (${esc(s.error || 'no answer')})`).join('; ')}. Their last saved values remain in use.</p>` : ''}<p class="small dim">${when(Date.now())}</p>`;
+      } catch (e) { out.innerHTML = `<p class="note warn">Refresh could not complete: ${esc(e.message)}. Saved values remain in use.</p>`; }
+    },
   };
 }
 export const notFound = () => ({ title: 'Not found', crumb: 'Not found', html: html`<div class="card"><h2>That page does not exist</h2><a class="btn primary" href="#/">Return home</a></div>` });

@@ -38,7 +38,7 @@ export function rankDomains(prompt) {
 
 // ---- semantic index: every model is described by all of its own text, weighted by rarity of each word
 const STOPWORDS = new Set('the a an of and or to in on at for by with as is are was were be been it its this that these those from into than then if so not no can could would should will may might do does did has have had how what which who why when where whether there their them they you your we our i me my about over under between through during each any all some more most much many very also such only just both either neither per via using used use find determine calculate compute given suppose imagine consider case model problem system value values result results'.split(' '));
-const stem = w => w.replace(/(ations?|ization|isation)$/, 'at').replace(/(ies)$/, 'y').replace(/(ing|ed|es|s)$/, '').replace(/(al|ic|ity)$/, '');
+const stem = w => w.replace(/-/g, '').replace(/(ations?|ization|isation)$/, 'at').replace(/(ies)$/, 'y').replace(/(ing|ed|ers?|es|s)$/, '').replace(/(al|ic|ity)$/, '').replace(/([b-df-hj-np-tv-z])\1$/, '$1').replace(/e$/, '');
 const tokens = text => lc(text).replace(/[^a-z0-9/^\-]+/g, ' ').split(' ').filter(w => w.length > 1 && !STOPWORDS.has(w)).map(stem).filter(w => w.length > 1);
 let INDEX = null;
 function buildIndex(models) {
@@ -55,14 +55,29 @@ export function semanticScores(prompt, models) {
   let qn = 0; q.forEach((c, k) => { const x = (1 + Math.log(c)) * INDEX.idf(k); q.set(k, x); qn += x * x; }); qn = Math.sqrt(qn) || 1;
   return INDEX.vecs.map(d => { let dot = 0; q.forEach((x, k) => { const y = d.v.get(k); if (y) dot += x * y; }); return dot / (qn * d.n); });
 }
+/** Share of the prompt's meaning-bearing words (weighted by rarity) that also occur in each model's description. */
+export function coverage(prompt, models) {
+  if (!INDEX || INDEX.models !== models) INDEX = buildIndex(models);
+  const words = [...new Set(tokens(prompt).filter(w => !/^[\d.^/-]+$/.test(w) && w.length > 2))];
+  const total = words.reduce((a, k) => a + INDEX.idf(k), 0) || 1;
+  return INDEX.vecs.map(d => words.reduce((a, k) => a + (d.v.has(k) ? INDEX.idf(k) : 0), 0) / total);
+}
+
+/** Everyday phrasings that should reach a model but are not among its own keywords. */
+const EXTRA_KEYWORDS = {
+  'twin-paradox-time-dilation': ['twin travels', 'travelling twin', 'traveling twin', 'twins age', 'ages less', 'younger twin'],
+  'transient-conduction-1d': ['suddenly heated', 'through a wall', 'heat a wall', 'heats up over time'],
+  'pendulum-nonlinear': ['swinging weight', 'swing period'], 'projectile-drag': ['thrown ball', 'how far will it fly', 'fired at an angle'],
+  'hydrate-formation-risk': ['ice-like plug', 'gas line freeze'], 'mass-spring-damper': ['shock absorber', 'bounces on a spring'],
+};
 
 export function rankModels(prompt, models, module) {
   const t = lc(prompt), doms = rankDomains(prompt), domScore = Object.fromEntries(doms.map(d => [d.key, d.score]));
-  const sem = semanticScores(prompt, models);
+  const sem = semanticScores(prompt, models), cov = coverage(prompt, models);
   const speculative = CLASS_CUES.III.some(c => count(t, c) > 0), logical = CLASS_CUES.II.some(c => count(t, c) > 0);
   return models.map((m, idx) => ({ m, idx })).filter(({ m }) => module === 1 || (Array.isArray(m.module) ? m.module.includes(2) : m.module === 2)).map(({ m, idx }) => {
     let s = 0; const hits = [];
-    m.keywords.forEach((k, i) => { const n = count(t, k); if (n) { const words = k.split(' ').length; s += (words * words * 3 + 1) * (1 + 0.5 / (i + 1)); hits.push(k); } });
+    [...m.keywords, ...(EXTRA_KEYWORDS[m.id] || [])].forEach((k, i) => { const n = count(t, k); if (n) { const words = k.split(' ').length; s += (words * words * 3 + 1) * (1 + 0.5 / (i + 1)); hits.push(k); } });
     const ds = m.domains.reduce((a, d, i) => a + (domScore[d] || 0) * (i === 0 ? 0.5 : 0.2), 0);
     const title = lc(m.title).split(/\W+/).filter(w => w.length > 3 && t.includes(w)).length;
     const modBonus = module === 1 && (m.module === 1 || (Array.isArray(m.module) && m.module[0] === 1)) ? 1.15 : 1;
@@ -71,9 +86,12 @@ export function rankModels(prompt, models, module) {
     const classFit = speculative ? (hypo ? 1.7 : klass.includes('III') ? 1.2 : 0.75) : hypo ? 0.7 : 1;
     const logicFit = logical && klass.includes('II') ? 1.25 : 1;
     const semantic = sem[idx] * 40;
-    return { id: m.id, title: m.title, score: (s + ds + title + semantic) * modBonus * classFit * logicFit, kw: s, sem: sem[idx], hits };
+    return { id: m.id, title: m.title, score: (s + ds + title + semantic) * modBonus * classFit * logicFit, kw: s, sem: sem[idx], cov: cov[idx], hits };
   }).filter(m => m.kw > 0 || m.sem > 0.06).sort((a, b) => b.score - a.score);
 }
+
+/** A match is trusted only when several of the model's own terms, a specific phrase, or its overall description agree with the prompt. */
+export const strongMatch = r => !!r && r.score >= 4 && ((r.hits || []).length >= 2 || (r.hits || []).some(h => h.includes(' ')) || r.cov >= 0.42);
 
 // ---------------------------------------------------------------- quantities
 const WORD_UNITS = [
