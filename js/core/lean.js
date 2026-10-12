@@ -12,7 +12,9 @@ export const LEAN_IMPORTS = `import Mathlib.Tactic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
-import Mathlib.Analysis.Calculus.ContDiff.Operations`;
+import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue`;
 
 export const LEAN_LIBRARY = `/-- Physical dimension: exponents of (mass, length, time, current, temperature, amount,
 luminous intensity), stored in twelfths so that square and cube roots stay integral. -/
@@ -61,7 +63,26 @@ theorem tanh_bounded (x : ℝ) : |Real.tanh x| < 1 := by
 theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c ^ 2 := by
   have h : v ^ 2 < c ^ 2 := by nlinarith [abs_lt.mp hv, sq_abs v, abs_nonneg v]
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
-  linarith`;
+  linarith
+
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+`;
 
 const ident = s => {
   let k = String(s).replace(/[^A-Za-z0-9_]/g, '_');
@@ -168,6 +189,12 @@ export function generateLean(title, verification, table, logic, meta = {}) {
         stats.hyp++;
       }
     });
+    // time-dependent equations integrated with the smooth rate cap: bounded rate, hence no finite-time blow-up
+    if (meta.capped && Lx.t === 'fn' && Lx.n === 'd') {
+      L.push(`/-- The rate of change in this equation is integrated through the smooth cap, so its magnitude never exceeds F. -/`, `theorem ${tag}_rate (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := rate_cap_bounded f F hF`,
+        `/-- Consequently the variable moves by at most F * T in a time T: it cannot reach infinity in finite time. -/`, `theorem ${tag}_finite (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T) (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := bounded_rate_no_blowup x F T hT hx hb`);
+      stats.capped = (stats.capped || 0) + 1;
+    }
     // (3) regularised surrogate
     if (r.regularised) {
       L.push(`/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),`, `    which is bounded and smooth for every real b. -/`, `theorem ${tag}_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε`);

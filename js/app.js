@@ -82,8 +82,12 @@ export const isStandalone = () => standalone;
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', async () => {
     try {
-      const reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
-      reg.addEventListener('updatefound', () => { const w = reg.installing; w && w.addEventListener('statechange', () => { if (w.state === 'activated' && navigator.serviceWorker.controller) toast('A newer version has been installed. It will be used the next time you open the application.', 6000); }); });
+      const hadController = !!navigator.serviceWorker.controller;
+      // when a newer release takes control, reload once so that every file comes from the same release
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+      const reg = await navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' });
+      reg.update().catch(() => {});
       setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
       if ('periodicSync' in reg) { try { const st = await navigator.permissions.query({ name: 'periodic-background-sync' }); if (st.state === 'granted') await reg.periodicSync.register('refresh-data', { minInterval: 3 * 3600 * 1000 }); } catch { /* not granted on this platform */ } }

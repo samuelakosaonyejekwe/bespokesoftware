@@ -2,6 +2,8 @@ import Mathlib.Tactic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Verification library
@@ -88,5 +90,23 @@ theorem bounded_add (x y A B : ℝ) (hx : |x| ≤ A) (hy : |y| ≤ B) : |x + y| 
 /-- A product of two bounded quantities is bounded by the product of the bounds. -/
 theorem bounded_mul (x y A B : ℝ) (hx : |x| ≤ A) (hy : |y| ≤ B) : |x * y| ≤ A * B := by
   rw [abs_mul]; exact mul_le_mul hx hy (abs_nonneg y) ((abs_nonneg x).trans hx)
+
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
 
 end Bespoke

@@ -94,7 +94,7 @@ def('L l litre litres liter liters', d(0, 3), 1e-3); def('mL ml', d(0, 3), 1e-6)
 def('scf', d(0, 3), 0.028316846592); def('ha', d(0, 2), 1e4); def('darcy D_perm', d(0, 2), 9.869233e-13); def('mD', d(0, 2), 9.869233e-16);
 def('kn knot knots kt', d(0, 1, -1), 0.514444444); def('mph', d(0, 1, -1), 0.44704); def('kph', d(0, 1, -1), 1 / 3.6);
 def('g0 gee', d(0, 1, -2), 9.80665);
-def('Bq', d(0, 0, -1)); def('Ci', d(0, 0, -1), 3.7e10); def('Gy', d(0, 2, -2)); def('Sv', d(0, 2, -2)); def('mSv', d(0, 2, -2), 1e-3); def('uSv µSv', d(0, 2, -2), 1e-6);
+def('Bq', d(0, 0, -1)); def('kBq', d(0, 0, -1), 1e3); def('MBq', d(0, 0, -1), 1e6); def('GBq', d(0, 0, -1), 1e9); def('Ci', d(0, 0, -1), 3.7e10); def('Gy', d(0, 2, -2)); def('Sv', d(0, 2, -2)); def('mSv', d(0, 2, -2), 1e-3); def('uSv µSv', d(0, 2, -2), 1e-6);
 def('M_conc molar', d(0, -3, 0, 0, 0, 1), 1e3); def('psu', D0, 1e-3); def('ppt', D0, 1e-3);
 def('lm', d(0, 0, 0, 0, 0, 0, 1)); def('lx', d(0, -2, 0, 0, 0, 0, 1)); def('dB', D0); def('Np', D0);
 def('barn', d(0, 2), 1e-28); def('kat', d(0, 0, -1, 0, 0, 1));

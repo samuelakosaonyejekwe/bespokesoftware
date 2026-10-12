@@ -369,10 +369,13 @@ export async function importFile(file) {
 export function findEquations(text, parse) {
   const out = [];
   const clean = s => s.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '($1)/($2)').replace(/\\sqrt\{([^{}]+)\}/g, 'sqrt($1)').replace(/\\(cdot|times)/g, '*').replace(/\\left|\\right|\\,|\\;|\\!|\$/g, '').replace(/\\(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|rho|sigma|tau|phi|omega|pi|ell|kappa|eta|xi|zeta|psi|chi)/g, '$1').replace(/\\(sin|cos|tan|exp|ln|log|tanh|sinh|cosh)/g, '$1').replace(/\^\{([^{}]+)\}/g, '^($1)').replace(/_\{([^{}]+)\}/g, '_$1').replace(/[{}]/g, '').replace(/\s+/g, ' ');
-  for (const raw of String(text).split(/\r?\n|\\\\|;/)) {
+  for (const raw of String(text).split(/\r?\n|\\\\|;|(?<=[a-z0-9)])\.\s/)) {
     const line = clean(raw).trim().replace(/[.,]$/, '');
     if (line.length < 3 || line.length > 200 || (line.match(/=/g) || []).length !== 1) continue;
-    const [l, r] = line.split('=').map(s => s.trim());
+    let [l, r] = line.split('=').map(s => s.trim());
+    // keep only the mathematical tail of a left side such as "I propose F" or "the law d(x,t)"
+    const tail = /([A-Za-z_][A-Za-z0-9_]*(?:\([^()]*\))?)$/.exec(l); if (tail && /\s/.test(l)) l = tail[1];
+    r = r.replace(/\s+(?:for|of|in|on|at|to|is|are|which|that|so|then|does|do|can|will|would|between|describes?|gives?)\s.*$/i, '').replace(/[,:]\s.*$/, '');
     if (!l || !r || /[<>!]$/.test(l) || / {1,}[a-z]{4,} /.test(` ${l} `) || r.split(' ').filter(w => /^[a-zA-Z]{5,}$/.test(w) && !/^(sqrt|log10|tanh|sinh|cosh|asin|acos|atan)$/.test(w)).length > 1) continue;
     try { parse(l); parse(r); out.push({ lhs: l, rhs: r, raw: raw.trim().slice(0, 200) }); } catch { /* not an equation */ }
     if (out.length >= 40) break;

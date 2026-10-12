@@ -3,6 +3,8 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Spreading of a free quantum wave packet
@@ -62,6 +64,25 @@ theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c 
   have h : v ^ 2 < c ^ 2 := by nlinarith [abs_lt.mp hv, sq_abs v, abs_nonneg v]
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
   linarith
+
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+
 
 /-! ## Dimensions of the symbols -/
 

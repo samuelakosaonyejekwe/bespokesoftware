@@ -3,6 +3,8 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Scaling potential of reverse-osmosis concentrate
@@ -62,6 +64,25 @@ theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c 
   have h : v ^ 2 < c ^ 2 := by nlinarith [abs_lt.mp hv, sq_abs v, abs_nonneg v]
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
   linarith
+
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+
 
 /-! ## Dimensions of the symbols -/
 
@@ -123,12 +144,15 @@ theorem eq2_phc_reg1 (CF : ℝ) (hCF : 0 < CF) : 0 < CF := by positivity
 theorem eq3_al_dim : d_A_L = (Dim.div Dim.one Dim.one) := by decide
 theorem eq3_al_term1 : (Dim.div (Dim.mul d_CF d_TDS) d_c_ref) = Dim.one := by decide
 theorem eq3_al_term2 : Dim.one = Dim.one := by decide
-/-- Domain condition for `c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq3_al_cond1 (c_ref : ℝ) (hdom : c_ref ≠ 0) : c_ref ≠ 0 := hdom
+/-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_al_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
 /-- Domain condition for `CF * TDS / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq3_al_cond2 (CF TDS c_ref : ℝ) (hdom : 0 < CF * TDS / c_ref) : 0 < CF * TDS / c_ref := hdom
 /-- The denominator `10` stays away from its singular set whenever the quantities are positive. -/
 theorem eq3_al_reg3  : (10 : ℝ) ≠ 0 := by positivity
+/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
+    which is bounded and smooth for every real b. -/
+theorem eq3_al_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 /-! ## 4. Temperature term
 
@@ -138,10 +162,13 @@ theorem eq3_al_reg3  : (10 : ℝ) ≠ 0 := by positivity
 theorem eq4_bl_dim : d_B_L = Dim.one := by decide
 theorem eq4_bl_term1 : (Dim.div d_T d_T_ref) = Dim.one := by decide
 theorem eq4_bl_term2 : Dim.one = (Dim.mul Dim.one Dim.one) := by decide
-/-- Domain condition for `T_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_bl_cond1 (T_ref : ℝ) (hdom : T_ref ≠ 0) : T_ref ≠ 0 := hdom
+/-- The denominator `T_ref` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_bl_reg1 (T_ref : ℝ) (hT_ref : 0 < T_ref) : T_ref ≠ 0 := by positivity
 /-- Domain condition for `T / T_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq4_bl_cond2 (T T_ref : ℝ) (hdom : 0 < T / T_ref) : 0 < T / T_ref := hdom
+/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
+    which is bounded and smooth for every real b. -/
+theorem eq4_bl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 /-! ## 5. Calcium term
 
@@ -151,10 +178,13 @@ theorem eq4_bl_cond2 (T T_ref : ℝ) (hdom : 0 < T / T_ref) : 0 < T / T_ref := h
 theorem eq5_cl_dim : d_C_L = Dim.one := by decide
 theorem eq5_cl_term1 : (Dim.div d_Ca_h d_c_ref) = Dim.one := by decide
 theorem eq5_cl_term2 : Dim.one = Dim.one := by decide
-/-- Domain condition for `c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_cl_cond1 (c_ref : ℝ) (hdom : c_ref ≠ 0) : c_ref ≠ 0 := hdom
+/-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
+theorem eq5_cl_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
 /-- Domain condition for `Ca_h / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq5_cl_cond2 (Ca_h c_ref : ℝ) (hdom : 0 < Ca_h / c_ref) : 0 < Ca_h / c_ref := hdom
+/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
+    which is bounded and smooth for every real b. -/
+theorem eq5_cl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 /-! ## 6. Alkalinity term
 
@@ -163,10 +193,13 @@ theorem eq5_cl_cond2 (Ca_h c_ref : ℝ) (hdom : 0 < Ca_h / c_ref) : 0 < Ca_h / c
 /-- Both sides of "Alkalinity term" carry the same physical dimension. -/
 theorem eq6_dl_dim : d_D_L = Dim.one := by decide
 theorem eq6_dl_term1 : (Dim.div (Dim.mul d_CF d_Alk) d_c_ref) = Dim.one := by decide
-/-- Domain condition for `c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq6_dl_cond1 (c_ref : ℝ) (hdom : c_ref ≠ 0) : c_ref ≠ 0 := hdom
+/-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_dl_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
 /-- Domain condition for `CF * Alk / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq6_dl_cond2 (CF Alk c_ref : ℝ) (hdom : 0 < CF * Alk / c_ref) : 0 < CF * Alk / c_ref := hdom
+/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
+    which is bounded and smooth for every real b. -/
+theorem eq6_dl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 /-! ## 7. Saturation pH
 
@@ -193,8 +226,8 @@ theorem eq8_lsi_term1 : d_pH_c = d_pH_s := by decide
 -/
 /-- Both sides of "Ionic strength" carry the same physical dimension. -/
 theorem eq9_is_dim : d_I_s = (Dim.div (Dim.mul (Dim.mul Dim.one d_CF) d_TDS) d_c_ref) := by decide
-/-- Domain condition for `c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq9_is_cond1 (c_ref : ℝ) (hdom : c_ref ≠ 0) : c_ref ≠ 0 := hdom
+/-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_is_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
 
 /-! ## 10. Davies activity coefficient
 

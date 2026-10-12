@@ -3,6 +3,8 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Seawater reverse-osmosis stage
@@ -63,6 +65,25 @@ theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c 
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
   linarith
 
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+
+
 /-! ## Dimensions of the symbols -/
 
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
@@ -106,8 +127,8 @@ def d_w_min : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Least work of separation
 -/
 /-- Both sides of "Osmotic pressure" carry the same physical dimension. -/
 theorem eq1_pi'_dim : d_pi_o = (Dim.div (Dim.mul (Dim.mul (Dim.mul (Dim.mul d_phi_o d_i_v) d_c) d_R_u) d_T) d_M_s) := by decide
-/-- Domain condition for `M_s`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq1_pi'_cond1 (M_s : ℝ) (hdom : M_s ≠ 0) : M_s ≠ 0 := hdom
+/-- The denominator `M_s` stays away from its singular set whenever the quantities are positive. -/
+theorem eq1_pi'_reg1 (M_s : ℝ) (hM_s : 0 < M_s) : M_s ≠ 0 := by positivity
 
 /-! ## 2. Water flux
 
@@ -179,8 +200,8 @@ theorem eq8_rec_reg1 (Q_f : ℝ) (hQ_f : 0 < Q_f) : Q_f ≠ 0 := by positivity
 /-- Both sides of "Salt rejection" carry the same physical dimension. -/
 theorem eq9_rej_dim : d_Rej = Dim.one := by decide
 theorem eq9_rej_term1 : Dim.one = (Dim.div d_c_p d_c_f) := by decide
-/-- Domain condition for `c_f`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq9_rej_cond1 (c_f : ℝ) (hdom : c_f ≠ 0) : c_f ≠ 0 := hdom
+/-- The denominator `c_f` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_rej_reg1 (c_f : ℝ) (hc_f : 0 < c_f) : c_f ≠ 0 := by positivity
 
 /-! ## 10. Specific energy consumption
 

@@ -3,6 +3,8 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Hydrodynamic slugging in a flowline
@@ -63,6 +65,25 @@ theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c 
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
   linarith
 
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+
+
 /-! ## Dimensions of the symbols -/
 
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
@@ -119,10 +140,10 @@ theorem eq3_vd_dim : d_v_d = (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D
 theorem eq3_vd_term1 : d_theta = Dim.one := by decide
 theorem eq3_vd_term2 : d_theta = Dim.one := by decide
 theorem eq3_vd_term3 : (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) = (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) := by decide
-/-- Domain condition for `g * D`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq3_vd_cond1 (g D : ℝ) (hdom : 0 ≤ g * D) : 0 ≤ g * D := hdom
-/-- Domain condition for `g * D`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq3_vd_cond2 (g D : ℝ) (hdom : 0 ≤ g * D) : 0 ≤ g * D := hdom
+/-- The argument `g * D` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_vd_reg1 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : 0 ≤ g * D := by positivity
+/-- The argument `g * D` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_vd_reg2 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : 0 ≤ g * D := by positivity
 
 /-! ## 4. Slug-body holdup
 
@@ -143,8 +164,8 @@ theorem eq4_hls_cond3 (v_m v_ref : ℝ) (hdom : (1 : ℝ) + Real.rpow (v_m / v_r
 -- dimensional statement omitted: a symbol has no registered unit
 /-- Domain condition for `f_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq5_fs_cond1 (f_ref : ℝ) (hdom : f_ref ≠ 0) : f_ref ≠ 0 := hdom
-/-- Domain condition for `g * D`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_fs_cond2 (g D : ℝ) (hdom : g * D ≠ 0) : g * D ≠ 0 := hdom
+/-- The denominator `g * D` stays away from its singular set whenever the quantities are positive. -/
+theorem eq5_fs_reg2 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : g * D ≠ 0 := by positivity
 /-- The denominator `v_m` stays away from its singular set whenever the quantities are positive. -/
 theorem eq5_fs_reg3 (v_m : ℝ) (hv_m : 0 < v_m) : v_m ≠ 0 := by positivity
 /-- Domain condition for `v_sl / (g * D) * (v_c^2 / v_m + v_m)`: a condition on the solution; stated here as an explicit hypothesis. -/

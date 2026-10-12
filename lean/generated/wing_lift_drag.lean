@@ -3,6 +3,8 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Finite-wing lift, drag polar and level-flight performance
@@ -63,6 +65,25 @@ theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c 
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
   linarith
 
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+
+
 /-! ## Dimensions of the symbols -/
 
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
@@ -103,6 +124,9 @@ def d_zeta : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Fuel mass fraction of take-off
 theorem eq1_rho_dim : d_rho = (Dim.div d_p_a (Dim.mul d_R_air d_T_a)) := by decide
 /-- Domain condition for `R_air * T_a`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq1_rho_cond1 (R_air T_a : ℝ) (hdom : R_air * T_a ≠ 0) : R_air * T_a ≠ 0 := hdom
+/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
+    which is bounded and smooth for every real b. -/
+theorem eq1_rho_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 /-! ## 2. Finite-wing lift-curve slope
 
@@ -156,8 +180,8 @@ theorem eq6_drag_dim : d_D = (Dim.mul (Dim.mul (Dim.mul (Dim.mul Dim.one d_rho) 
 theorem eq7_vs_dim : d_V_s = (Dim.pow (Dim.div (Dim.mul (Dim.mul Dim.one d_m) d_g) (Dim.mul (Dim.mul d_rho d_S) d_C_Lmax)) 1 2) := by decide
 /-- The denominator `rho * S * C_Lmax` stays away from its singular set whenever the quantities are positive. -/
 theorem eq7_vs_reg1 (rho S C_Lmax : ℝ) (hrho : 0 < rho) (hS : 0 < S) (hC_Lmax : 0 < C_Lmax) : rho * S * C_Lmax ≠ 0 := by positivity
-/-- Domain condition for `2 * m * g / (rho * S * C_Lmax)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq7_vs_cond2 (m g rho S C_Lmax : ℝ) (hdom : 0 ≤ (2 : ℝ) * m * g / (rho * S * C_Lmax)) : 0 ≤ (2 : ℝ) * m * g / (rho * S * C_Lmax) := hdom
+/-- The argument `2 * m * g / (rho * S * C_Lmax)` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_vs_reg2 (m g rho S C_Lmax : ℝ) (hm : 0 < m) (hg : 0 < g) (hrho : 0 < rho) (hS : 0 < S) (hC_Lmax : 0 < C_Lmax) : 0 ≤ (2 : ℝ) * m * g / (rho * S * C_Lmax) := by positivity
 
 /-! ## 8. Maximum lift-to-drag ratio
 
@@ -188,8 +212,8 @@ theorem eq9_preq_reg1 (e_o AR rho V S : ℝ) (he_o : 0 < e_o) (hAR : 0 < AR) (hr
 theorem eq10_range_dim : d_R_b = (Dim.mul (Dim.mul (Dim.div d_eta_p (Dim.mul d_g d_c_b)) d_LD) Dim.one) := by decide
 theorem eq10_range_term1 : Dim.one = d_zeta := by decide
 theorem eq10_range_term2 : (Dim.div Dim.one Dim.one) = Dim.one := by decide
-/-- Domain condition for `g * c_b`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq10_range_cond1 (g c_b : ℝ) (hdom : g * c_b ≠ 0) : g * c_b ≠ 0 := hdom
+/-- The denominator `g * c_b` stays away from its singular set whenever the quantities are positive. -/
+theorem eq10_range_reg1 (g c_b : ℝ) (hg : 0 < g) (hc_b : 0 < c_b) : g * c_b ≠ 0 := by positivity
 /-- Domain condition for `1 - zeta`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
 theorem eq10_range_cond2 (zeta : ℝ) (hdom : (1 : ℝ) - zeta ≠ 0) : (1 : ℝ) - zeta ≠ 0 := hdom
 /-- Domain condition for `1 / (1 - zeta)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/

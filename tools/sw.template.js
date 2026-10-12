@@ -30,24 +30,18 @@ async function mirrors() {
   return [];
 }
 
-/** Application files: answer from the device at once, refresh in the background, fall back to mirrors. */
+/** Application files: always from this version's own cache, so that files from two releases are never mixed.
+ *  A new release arrives as a new service worker, which fills a new cache and then takes over. */
 async function shell(request) {
   const cache = await caches.open(SHELL);
   const url = new URL(request.url);
   const key = url.pathname.endsWith('/') ? url.pathname + 'index.html' : url.pathname;
   const cached = await cache.match(request, { ignoreSearch: true }) || await cache.match(key, { ignoreSearch: true });
-  const refresh = (async () => {
-    try { const res = await fetch(request, { cache: 'no-cache' }); if (res && res.ok) { await cache.put(request, res.clone()); return res; } }
-    catch { /* offline or host unreachable */ }
-    if (!cached) {
-      const rel = url.pathname.replace(new URL(self.registration.scope).pathname, '');
-      for (const m of await mirrors()) { try { const res = await fetch(new URL(rel, m.endsWith('/') ? m : m + '/'), { mode: 'cors' }); if (res.ok) { await cache.put(request, res.clone()); return res; } } catch { /* try the next mirror */ } }
-    }
-    return null;
-  })();
-  if (cached) { refresh.catch(() => {}); return cached; }
-  const fresh = await refresh;
-  if (fresh) return fresh;
+  if (cached) return cached;
+  try { const res = await fetch(request, { cache: 'no-cache' }); if (res && res.ok) { cache.put(request, res.clone()).catch(() => {}); return res; } if (res) return res; }
+  catch { /* offline or host unreachable */ }
+  const rel = url.pathname.replace(new URL(self.registration.scope).pathname, '');
+  for (const m of await mirrors()) { try { const res = await fetch(new URL(rel, m.endsWith('/') ? m : m + '/'), { mode: 'cors' }); if (res.ok) { cache.put(request, res.clone()).catch(() => {}); return res; } } catch { /* try the next mirror */ } }
   if (request.mode === 'navigate') { const index = await cache.match('index.html') || await cache.match('./index.html') || await cache.match('./'); if (index) return index; }
   return new Response('This file is not available offline yet.', { status: 503, headers: { 'Content-Type': 'text/plain' } });
 }

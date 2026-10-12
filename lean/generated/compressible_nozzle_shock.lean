@@ -3,6 +3,8 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Converging–diverging nozzle flow and normal shocks
@@ -63,6 +65,25 @@ theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c 
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
   linarith
 
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+
+
 /-! ## Dimensions of the symbols -/
 
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
@@ -100,8 +121,8 @@ def d_rho_2 : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Density behind the shock [
 theorem eq1_ien_dim : (Dim.div d_T_0 d_T) = Dim.one := by decide
 theorem eq1_ien_term1 : d_gamma = Dim.one := by decide
 theorem eq1_ien_term2 : Dim.one = (Dim.mul (Dim.div d_gamma Dim.one) (Dim.pow d_M 2 1)) := by decide
-/-- Domain condition for `T`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq1_ien_cond1 (T : ℝ) (hdom : T ≠ 0) : T ≠ 0 := hdom
+/-- The denominator `T` stays away from its singular set whenever the quantities are positive. -/
+theorem eq1_ien_reg1 (T : ℝ) (hT : 0 < T) : T ≠ 0 := by positivity
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq1_ien_reg2  : (2 : ℝ) ≠ 0 := by positivity
 
@@ -191,8 +212,8 @@ theorem eq7_sr_dim : (Dim.div d_rho_2 d_rho_1) = (Dim.div (Dim.mul d_gamma (Dim.
 theorem eq7_sr_term1 : d_gamma = Dim.one := by decide
 theorem eq7_sr_term2 : d_gamma = Dim.one := by decide
 theorem eq7_sr_term3 : (Dim.mul d_gamma (Dim.pow d_M_1 2 1)) = Dim.one := by decide
-/-- Domain condition for `rho_1`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq7_sr_cond1 (rho_1 : ℝ) (hdom : rho_1 ≠ 0) : rho_1 ≠ 0 := hdom
+/-- The denominator `rho_1` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_sr_reg1 (rho_1 : ℝ) (hrho_1 : 0 < rho_1) : rho_1 ≠ 0 := by positivity
 /-- Domain condition for `(gamma - 1) * M_1^2 + 2`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
 theorem eq7_sr_cond2 (gamma M_1 : ℝ) (hdom : (gamma - (1 : ℝ)) * M_1 ^ 2 + (2 : ℝ) ≠ 0) : (gamma - (1 : ℝ)) * M_1 ^ 2 + (2 : ℝ) ≠ 0 := hdom
 

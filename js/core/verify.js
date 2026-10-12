@@ -160,7 +160,8 @@ export function symbolTable(inputs, symbolsMeta = {}, scalars = []) {
     }
   });
   // universal constants that models reference without declaring
-  const add = (k, name, unit, value) => { if (!t[k]) { const u = tryUnit(unit); t[k] = { dim: u.dim, name, unit, range: [value, value], value, constant: true }; } };
+  // a model may list a universal constant among its symbols without a value: give it its accepted value
+  const add = (k, name, unit, value) => { const u = tryUnit(unit); if (!t[k]) t[k] = { dim: u.dim, name, unit, range: [value, value], value, constant: true }; else if (!t[k].range && !t[k].input && dimEq(t[k].dim, u.dim)) { t[k].range = [value, value]; t[k].value = value; t[k].constant = true; } };
   add('g', 'Gravitational acceleration', 'm/s^2', 9.80665); add('R_u', 'Molar gas constant', 'J/(mol K)', 8.314462618);
   add('c', 'Speed of light', 'm/s', 299792458); add('G', 'Gravitational constant', 'm^3/(kg s^2)', 6.6743e-11);
   add('hbar', 'Reduced Planck constant', 'J s', 1.054571817e-34); add('k_B', 'Boltzmann constant', 'J/K', 1.380649e-23);
@@ -168,8 +169,13 @@ export function symbolTable(inputs, symbolsMeta = {}, scalars = []) {
   add('sigma_SB', 'Stefan–Boltzmann constant', 'W/(m^2 K^4)', 5.670374419e-8); add('e_c', 'Elementary charge', 'C', 1.602176634e-19);
   add('N_A', 'Avogadro constant', '1/mol', 6.02214076e23); add('h', 'Planck constant', 'J s', 6.62607015e-34);
   add('m_e', 'Electron mass', 'kg', 9.1093837015e-31); add('m_p', 'Proton mass', 'kg', 1.67262192369e-27);
+  // quantities that are positive by physical definition (absolute temperature, density, viscosity, mass,
+  // conductivity, heat capacity, diffusivity): an unknown of that kind is taken to be positive, and the
+  // assumption is recorded so that it appears as a named hypothesis in the proof file
+  Object.values(t).forEach(e => { if (!e.range && POSITIVE_DIMS.some(d => dimEq(d, e.dim))) { e.range = [1e-300, Infinity]; e.physicalPositive = true; } });
   return t;
 }
+const POSITIVE_DIMS = [[0, 0, 0, 0, 1, 0, 0], [1, -3, 0, 0, 0, 0, 0], [1, -1, -1, 0, 0, 0, 0], [0, 2, -1, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0], [1, 1, -3, 0, -1, 0, 0], [0, 2, -2, 0, -1, 0, 0], [1, 0, 0, 0, 0, -1, 0]];
 
 /** Verify a whole equation set and summarise. */
 export function verifySystem(equations, table, knownSyms, opts) {

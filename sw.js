@@ -1,10 +1,10 @@
 // Service worker: keeps the whole application available offline, updates it in the background,
 // caches answers from scientific data sources for offline use, and falls back to mirror hosts.
-const VERSION = '6cc3d1cd4548';
+const VERSION = '5da1dcf96623';
 const SHELL = `bespoke-shell-${VERSION}`;
 const DATA = 'bespoke-data-v1';
 const RUNTIME = 'bespoke-runtime-v1';
-const ASSETS = ["./","index.html","manifest.webmanifest","config.json","css/app.css","js/app.js","js/core/connectors.js","js/core/discover.js","js/core/exporters.js","js/core/expr.js","js/core/importers.js","js/core/inverse.js","js/core/lean.js","js/core/logic.js","js/core/num.js","js/core/plot.js","js/core/store.js","js/core/units.js","js/core/verify.js","js/core/zip.js","js/data/catalogue.js","js/data/domains.js","js/data/reference.js","js/engine/core.js","js/engine/prompt.js","js/models/aerospace-space-classical.js","js/models/em-waves-materials.js","js/models/flow-assurance.js","js/models/index.js","js/models/kit.js","js/models/logic-thought.js","js/models/marine-offshore-structural.js","js/models/relativity-quantum.js","js/models/thermal-process-cfd.js","js/ui/dom.js","js/ui/investigation.js","js/ui/pages.js","js/ui/widgets.js","js/ui/ws-a.js","js/ui/ws-b.js","vendor/katex/fonts/KaTeX_AMS-Regular.woff2","vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2","vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2","vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2","vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2","vendor/katex/fonts/KaTeX_Main-Bold.woff2","vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2","vendor/katex/fonts/KaTeX_Main-Italic.woff2","vendor/katex/fonts/KaTeX_Main-Regular.woff2","vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2","vendor/katex/fonts/KaTeX_Math-Italic.woff2","vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2","vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2","vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2","vendor/katex/fonts/KaTeX_Script-Regular.woff2","vendor/katex/fonts/KaTeX_Size1-Regular.woff2","vendor/katex/fonts/KaTeX_Size2-Regular.woff2","vendor/katex/fonts/KaTeX_Size3-Regular.woff2","vendor/katex/fonts/KaTeX_Size4-Regular.woff2","vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2","vendor/katex/katex.min.css","vendor/katex/katex.min.js","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","icons/icon.svg","icons/maskable-512.png","icons/maskable.svg"];
+const ASSETS = ["./","index.html","manifest.webmanifest","config.json","css/app.css","js/app.js","js/core/connectors.js","js/core/discover.js","js/core/exporters.js","js/core/expr.js","js/core/importers.js","js/core/inverse.js","js/core/lean.js","js/core/logic.js","js/core/num.js","js/core/plot.js","js/core/store.js","js/core/units.js","js/core/verify.js","js/core/zip.js","js/data/catalogue.js","js/data/domains.js","js/data/reference.js","js/engine/core.js","js/engine/custom.js","js/engine/prompt.js","js/models/aerospace-space-classical.js","js/models/em-waves-materials.js","js/models/flow-assurance.js","js/models/index.js","js/models/kit.js","js/models/logic-thought.js","js/models/marine-offshore-structural.js","js/models/nuclear.js","js/models/relativity-quantum.js","js/models/thermal-process-cfd.js","js/ui/dom.js","js/ui/investigation.js","js/ui/pages.js","js/ui/widgets.js","js/ui/ws-a.js","js/ui/ws-b.js","vendor/katex/fonts/KaTeX_AMS-Regular.woff2","vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2","vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2","vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2","vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2","vendor/katex/fonts/KaTeX_Main-Bold.woff2","vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2","vendor/katex/fonts/KaTeX_Main-Italic.woff2","vendor/katex/fonts/KaTeX_Main-Regular.woff2","vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2","vendor/katex/fonts/KaTeX_Math-Italic.woff2","vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2","vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2","vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2","vendor/katex/fonts/KaTeX_Script-Regular.woff2","vendor/katex/fonts/KaTeX_Size1-Regular.woff2","vendor/katex/fonts/KaTeX_Size2-Regular.woff2","vendor/katex/fonts/KaTeX_Size3-Regular.woff2","vendor/katex/fonts/KaTeX_Size4-Regular.woff2","vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2","vendor/katex/katex.min.css","vendor/katex/katex.min.js","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","icons/icon.svg","icons/maskable-512.png","icons/maskable.svg"];
 const DATA_HOSTS = ['api.open-meteo.com', 'marine-api.open-meteo.com', 'geocoding-api.open-meteo.com', 'gis.ngdc.noaa.gov', 'power.larc.nasa.gov', 'services.swpc.noaa.gov', 'api.nasa.gov', 'api.wheretheiss.at', 'eonet.gsfc.nasa.gov', 'earthquake.usgs.gov', 'api.crossref.org', 'api.openalex.org', 'en.wikipedia.org', 'pubchem.ncbi.nlm.nih.gov'];
 const RUNTIME_HOSTS = ['cdn.jsdelivr.net'];
 
@@ -30,24 +30,18 @@ async function mirrors() {
   return [];
 }
 
-/** Application files: answer from the device at once, refresh in the background, fall back to mirrors. */
+/** Application files: always from this version's own cache, so that files from two releases are never mixed.
+ *  A new release arrives as a new service worker, which fills a new cache and then takes over. */
 async function shell(request) {
   const cache = await caches.open(SHELL);
   const url = new URL(request.url);
   const key = url.pathname.endsWith('/') ? url.pathname + 'index.html' : url.pathname;
   const cached = await cache.match(request, { ignoreSearch: true }) || await cache.match(key, { ignoreSearch: true });
-  const refresh = (async () => {
-    try { const res = await fetch(request, { cache: 'no-cache' }); if (res && res.ok) { await cache.put(request, res.clone()); return res; } }
-    catch { /* offline or host unreachable */ }
-    if (!cached) {
-      const rel = url.pathname.replace(new URL(self.registration.scope).pathname, '');
-      for (const m of await mirrors()) { try { const res = await fetch(new URL(rel, m.endsWith('/') ? m : m + '/'), { mode: 'cors' }); if (res.ok) { await cache.put(request, res.clone()); return res; } } catch { /* try the next mirror */ } }
-    }
-    return null;
-  })();
-  if (cached) { refresh.catch(() => {}); return cached; }
-  const fresh = await refresh;
-  if (fresh) return fresh;
+  if (cached) return cached;
+  try { const res = await fetch(request, { cache: 'no-cache' }); if (res && res.ok) { cache.put(request, res.clone()).catch(() => {}); return res; } if (res) return res; }
+  catch { /* offline or host unreachable */ }
+  const rel = url.pathname.replace(new URL(self.registration.scope).pathname, '');
+  for (const m of await mirrors()) { try { const res = await fetch(new URL(rel, m.endsWith('/') ? m : m + '/'), { mode: 'cors' }); if (res.ok) { cache.put(request, res.clone()).catch(() => {}); return res; } } catch { /* try the next mirror */ } }
   if (request.mode === 'navigate') { const index = await cache.match('index.html') || await cache.match('./index.html') || await cache.match('./'); if (index) return index; }
   return new Response('This file is not available offline yet.', { status: 503, headers: { 'Content-Type': 'text/plain' } });
 }

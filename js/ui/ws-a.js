@@ -55,7 +55,7 @@ function concept(X) {
           <div class="note ${feas[1] === 'ok' ? 'ok' : feas[1] === 'hypo' ? 'hypo' : feas[1]}"><b>Feasibility: ${feas[0]}.</b> ${feas[2]}</div></div>
       </div>
       <div class="card"><h3>Consolidated scenario</h3>
-        ${m ? html`<p>The prompt is read as a question about <b>${m.title.toLowerCase()}</b>. ${m.summary}</p>${para(m.background)}${m.diagram && inv.module === 2 ? raw(`<div style="max-width:720px">${m.diagram(c.v, c.a)}</div>`) : ''}`
+        ${m ? html`<p>${m.custom ? 'No library model was needed: the equations found in your prompt or entered by you have been assembled into a computable model.' : html`The prompt is read as a question about <b>${m.title.toLowerCase()}</b>.`} ${m.summary}</p>${para(m.background)}${m.diagram && inv.module === 2 ? raw(`<div style="max-width:720px">${m.diagram(c.v, c.a)}</div>`) : ''}`
           : html`<p>The prompt has been recorded and analysed, but it does not correspond closely enough to a model in the library for equations to be solved automatically. You can choose a model below, enter your own equations in the Equations workspace, or continue with the logical and dimensional analysis that needs no model.</p>`}
         ${m && m.phenomena ? html`<p class="small"><b>Mechanisms involved:</b> ${m.phenomena.join(' · ')}</p>` : ''}
         ${m && m.limits ? html`<p class="small"><b>Scope and boundaries:</b> ${m.limits}</p>` : ''}</div>
@@ -258,7 +258,7 @@ function equations(X) {
         <div class="note ${ver.closure.closed ? 'ok' : 'warn'}"><b>Mathematical closure.</b> ${ver.closure.text}${ver.closure.unknowns.length ? ` Unknowns: ${ver.closure.unknowns.join(', ')}.` : ''}</div></div>
       ${c.derivation.length ? html`<div class="card"><h3>Derivation from first principles</h3><ol class="deriv">${join(c.derivation, d => html`<li>${d.text}${d.tex ? tex(d.tex, true) : ''}</li>`)}</ol></div>` : ''}
       <div class="card"><h3>Governing equations</h3><p class="small dim">Regenerated whenever an assumption changes. Each shows where it comes from and the outcome of every check.</p>
-        ${join(ver.records, r => equationCard(r, c.equations.find(q => q.id === r.id) || {}, m.assumptions || []))}</div>
+        ${m.custom ? html`<p class="small">These are your own equations; each is shown with its checks in the equation laboratory below, where it can also be amended or removed.</p>` : join(ver.records, r => equationCard(r, c.equations.find(q => q.id === r.id) || {}, m.assumptions || []))}</div>
       <div class="grid g2">
         <div class="card"><h3>Symbol register</h3>${table(['Symbol', 'Quantity', 'Unit', 'Dimension'], Object.entries(c.table).filter(([s]) => ver.records.some(r => (r.symbols || []).includes(s))).map(([s, v]) => [tex(symTexSafe(s)), v.name || '', v.unit || '', dimToString(v.dim)]))}</div>
         <div class="card"><h3>Dimensional analysis</h3>${pi ? html`<p class="small">${pi.text}</p>${join(pi.groups.slice(0, 8), (g, i) => html`<div class="eq">${tex(`\\Pi_{${i + 1}} = ${E.toTex(piToExpr(g))}`, true)}</div>`)}` : html`<p class="dim small">Needs at least two dimensional inputs.</p>`}

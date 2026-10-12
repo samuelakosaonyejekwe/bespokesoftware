@@ -3,6 +3,8 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations
+import Mathlib.Analysis.SpecialFunctions.Sqrt
+import Mathlib.Analysis.Calculus.MeanValue
 
 /-!
 # Rankine and organic Rankine power cycle
@@ -63,6 +65,25 @@ theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c 
   have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
   linarith
 
+/-- The smooth rate cap never lets a rate exceed F in magnitude. -/
+theorem rate_cap_bounded (f F : ℝ) (hF : 0 < F) : |f / Real.sqrt (1 + (f / F) ^ 2)| ≤ F := by
+  have hs : 0 < Real.sqrt (1 + (f / F) ^ 2) := Real.sqrt_pos.mpr (by positivity)
+  rw [abs_div, abs_of_pos hs, div_le_iff₀ hs]
+  have h1 : |f| / F ≤ Real.sqrt (1 + (f / F) ^ 2) := by
+    apply Real.le_sqrt_of_sq_le
+    rw [div_pow, sq_abs, div_pow]; linarith
+  calc |f| = F * (|f| / F) := by field_simp
+    _ ≤ F * Real.sqrt (1 + (f / F) ^ 2) := by gcongr
+
+/-- A quantity whose rate of change never exceeds F cannot reach infinity in finite time:
+after a time T it has moved by at most F * T. -/
+theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
+    (hx : ∀ t, DifferentiableAt ℝ x t) (hb : ∀ t, |deriv x t| ≤ F) : |x T - x 0| ≤ F * T := by
+  have h := Convex.norm_image_sub_le_of_norm_deriv_le (s := Set.univ) (f := x) (C := F)
+    (fun t _ => hx t) (fun t _ => by simpa [Real.norm_eq_abs] using hb t) convex_univ (Set.mem_univ 0) (Set.mem_univ T)
+  simpa [Real.norm_eq_abs, abs_of_nonneg hT] using h
+
+
 /-! ## Dimensions of the symbols -/
 
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
@@ -103,6 +124,9 @@ def d_w_t : Dim := ⟨0, 24, -24, 0, 0, 0, 0⟩  -- Turbine work [J/kg]
 theorem eq1_cc_dim : (Dim.div d_p_sat d_T) = (Dim.div (Dim.mul d_h_fg d_p_sat) (Dim.mul d_R_s (Dim.pow d_T 2 1))) := by decide
 /-- Domain condition for `R_s * T^2`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq1_cc_cond1 (R_s T : ℝ) (hdom : R_s * T ^ 2 ≠ 0) : R_s * T ^ 2 ≠ 0 := hdom
+/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
+    which is bounded and smooth for every real b. -/
+theorem eq1_cc_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 /-! ## 2. Pump delivery pressure
 
@@ -177,8 +201,8 @@ theorem eq9_eta_reg1 (q_in : ℝ) (hq_in : 0 < q_in) : q_in ≠ 0 := by positivi
 /-- Both sides of "Carnot limit" carry the same physical dimension. -/
 theorem eq10_carnot_dim : d_eta_C = Dim.one := by decide
 theorem eq10_carnot_term1 : Dim.one = (Dim.div d_T_L d_T_H) := by decide
-/-- Domain condition for `T_H`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq10_carnot_cond1 (T_H : ℝ) (hdom : T_H ≠ 0) : T_H ≠ 0 := hdom
+/-- The denominator `T_H` stays away from its singular set whenever the quantities are positive. -/
+theorem eq10_carnot_reg1 (T_H : ℝ) (hT_H : 0 < T_H) : T_H ≠ 0 := by positivity
 
 /-! ## 11. Back-work ratio
 

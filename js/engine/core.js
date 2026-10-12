@@ -11,6 +11,11 @@ import * as Logic from '../core/logic.js';
 import { buckinghamPi, piToExpr } from '../core/discover.js';
 import { CONSTANTS, ENV_KEYS, atmosphere, localGravity } from '../data/reference.js';
 import { DOMAINS, LAWS } from '../data/domains.js';
+import { findEquations } from '../core/importers.js';
+import { customModel } from './custom.js';
+
+/** The model in force: one from the library, or one assembled from the user's own equations. */
+export const activeModel = inv => modelById(inv.modelId) || customModel(inv);
 
 export const PROV = {
   USER: { key: 'USER', label: 'User-supplied', tone: 'user', text: 'Entered by you or stated in your prompt.' },
@@ -40,6 +45,11 @@ export function createInvestigation({ module, mode = 'A', prompt, modelId = null
     worlds: [{ id: 'w0', name: 'Baseline', kind: 'baseline', inputs: {}, assumptions: {}, note: '' }], activeWorld: 'w0',
     logic: null, challenges: [], versions: [], audit: [{ ts: Date.now(), action: 'Investigation created from prompt' }],
   };
+  if (!model) {
+    const found = findEquations(prompt.replace(/[?!]/g, '.').replace(/,?\s+\b(where|with|and|if|when|for|given|starting|from)\b/gi, ';').replace(/:\s/g, ';'), E.parse).filter(q => /[a-zA-Z]/.test(q.rhs));
+    found.slice(0, 6).forEach(q => inv.custom.equations.push({ lhs: q.lhs, rhs: q.rhs, name: 'From your prompt' }));
+    if (found.length) inv.audit.push({ ts: Date.now(), action: `${Math.min(found.length, 6)} equation(s) read from the prompt and made computable` });
+  }
   if (!inv.domains.length && model) inv.domains = model.domains.map(k => ({ key: k, name: DOMAINS[k].name, score: 1, hits: [] }));
   applyPrompt(inv);
   if (inv.klass.tags.includes('II') || !model) {
@@ -83,6 +93,12 @@ function envValue(inv, key) {
   const live = inv.env && inv.env[key];
   if (live && Number.isFinite(live.value)) return { si: live.value, prov: 'RETRIEVED', note: `${live.source}; retrieved ${new Date(live.ts).toISOString().replace('T', ' ').slice(0, 16)} UTC${live.stale ? ' (cached copy)' : ''}`, ts: live.ts };
   const loc = inv.location;
+  // seabed temperature: no open service broadcasts it, so it is derived from the live sea-surface temperature
+  // and live water depth with an exponential thermocline profile, unless the basin is known to be warm at depth
+  if (key === 'seabed_temp' && inv.env && inv.env.sea_surface_temp && inv.env.water_depth && !(loc && loc.seabedT > 9 && loc.depth > 250)) {
+    const sst = inv.env.sea_surface_temp.value, d = inv.env.water_depth.value, deep = Math.min(275.15, sst);
+    return { si: deep + (sst - deep) * Math.exp(-d / 500), prov: 'DERIVED', note: `From live sea-surface temperature (${(sst - 273.15).toFixed(1)} °C) and live water depth (${Math.round(d)} m) through an exponential thermocline profile with a 500 m decay depth and a 2 °C abyssal limit; uncertainty about ±2 K. Measure it for design work.`, ts: inv.env.sea_surface_temp.ts };
+  }
   if (!loc) return null;
   if (loc.marine && ENV_FROM_GAZ[key] && loc.depth != null) { const v = ENV_FROM_GAZ[key](loc); if (v != null) return { si: v, prov: 'ESTIMATED', note: `Climatological value for ${loc.name} (built-in gazetteer); connect to refine` }; }
   if (key === 'gravity' && loc.lat != null) return { si: localGravity(loc.lat, loc.alt || 0), prov: 'DERIVED', note: `WGS-84 normal gravity at latitude ${loc.lat.toFixed(1)}°` };
@@ -136,7 +152,7 @@ export function compute(inv, worldId = inv.activeWorld) {
   const world = inv.worlds.find(w => w.id === worldId) || inv.worlds[0];
   const k = keyOf(inv, world);
   if (cache.has(k)) return cache.get(k);
-  const model = modelById(inv.modelId);
+  const model = activeModel(inv);
   const out = { worldId: world.id, model, ts: Date.now() };
   // logic is independent of any physical model
   if (inv.logic && inv.logic.premises && (inv.logic.premises.length || inv.logic.conclusion)) {
@@ -357,7 +373,7 @@ export function optimise(c, spec) {
 export function leanSource(inv, c) {
   const logic = c.logic ? { premises: inv.logic.premises, conclusion: inv.logic.conclusion, status: c.logic.status, counter: c.logic.counter } : null;
   const ver = c.verification ? { records: [...c.verification.records, ...(c.customVerification ? c.customVerification.records : [])] } : (c.customVerification || null);
-  return generateLean(inv.title, ver, c.customTable || c.table, logic, { id: inv.id });
+  return generateLean(inv.title, ver, c.customTable || c.table, logic, { id: inv.id, capped: !!(c.model && c.model.custom && c.a.saturate !== false) });
 }
 
 // ---------------------------------------------------------------- world and history management
@@ -368,7 +384,7 @@ export function addWorld(inv, name, kind = 'alternative', from = inv.activeWorld
   return w;
 }
 export function setInput(inv, worldId, sym, value, unit, prov) {
-  const w = inv.worlds.find(x => x.id === worldId), model = modelById(inv.modelId), d = defaults(model).find(i => i.sym === sym);
+  const w = inv.worlds.find(x => x.id === worldId), model = activeModel(inv), d = defaults(model).find(i => i.sym === sym);
   if (value === null || value === '' || Number.isNaN(value)) { delete w.inputs[sym]; log(inv, `${d.name} reset to its software-supplied value in “${w.name}”`); touch(inv); return; }
   const si = toSI(value, unit || d.unit);
   w.inputs[sym] = { si, unit: unit || d.unit, prov: prov || (d.kind === 'hypothetical' || (w.kind === 'counterfactual' && d.kind === 'constant') ? 'HYPOTHETICAL' : 'USER'), note: prov === 'UPLOAD' ? 'From an uploaded file' : 'Entered by you' };
@@ -376,7 +392,7 @@ export function setInput(inv, worldId, sym, value, unit, prov) {
 }
 export function setAssumption(inv, worldId, id, on) {
   const w = inv.worlds.find(x => x.id === worldId); w.assumptions[id] = on;
-  const a = (modelById(inv.modelId).assumptions || []).find(x => x.id === id);
+  const a = (activeModel(inv).assumptions || []).find(x => x.id === id);
   log(inv, `Assumption ${on ? 'restored' : 'removed'} in “${w.name}”: ${a ? a.text : id}`); touch(inv);
 }
 export function snapshot(inv, note) {

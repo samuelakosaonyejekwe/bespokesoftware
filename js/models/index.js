@@ -6,7 +6,8 @@ import thermal from './thermal-process-cfd.js';
 import electromagnetic from './em-waves-materials.js';
 import relativity from './relativity-quantum.js';
 import logic from './logic-thought.js';
+import nuclear from './nuclear.js';
 
-export const MODELS = [...flowAssurance, ...aerospace, ...marine, ...thermal, ...electromagnetic, ...relativity, ...logic];
+export const MODELS = [...flowAssurance, ...aerospace, ...marine, ...thermal, ...electromagnetic, ...relativity, ...logic, ...nuclear];
 const byId = new Map(MODELS.map(m => [m.id, m]));
 export const modelById = id => (id ? byId.get(id) || null : null);

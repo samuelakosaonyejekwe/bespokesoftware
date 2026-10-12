@@ -3,7 +3,7 @@
 import { html, raw, join, esc, chip, stateChip, toast, on, $, $$, debounce } from './dom.js';
 import { go } from '../app.js';
 import * as Store from '../core/store.js';
-import { compute, clearCache, READINESS, modelClass } from '../engine/core.js';
+import { compute, clearCache, READINESS, modelClass, activeModel } from '../engine/core.js';
 import { modelById } from '../models/index.js';
 import { workspaces, catalogue } from '../data/catalogue.js';
 import { CLASS_NAME } from '../engine/prompt.js';
@@ -122,7 +122,7 @@ export async function investigationView([id, wsKey = 'concept']) {
       const save = debounce(() => Store.saveInvestigation(inv).catch(e => toast(`Could not save: ${e.message}`)), 400);
       let disposers = [];
       const X = {
-        inv, get c() { return compute(inv); }, get model() { return modelById(inv.modelId); }, root, save,
+        inv, get c() { return compute(inv); }, get model() { return activeModel(inv); }, root, save,
         /** Re-render the whole investigation view, keeping the scroll position. */
         refresh() { const y = window.scrollY; save(); disposers.forEach(d => { try { d(); } catch { /* gone */ } }); disposers = []; const cc = compute(inv); root.innerHTML = `<div>${frame(inv, cc, wsKey).__raw}</div>`; bind(); paint().then(() => window.scrollTo(0, y)); },
         onDispose(fn) { disposers.push(fn); }, go: k => go(`#/i/${inv.id}/${k}`),

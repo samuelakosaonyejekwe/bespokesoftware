@@ -36,16 +36,43 @@ export function rankDomains(prompt) {
   }).filter(d => d.score > 0).sort((a, b) => b.score - a.score);
 }
 
+// ---- semantic index: every model is described by all of its own text, weighted by rarity of each word
+const STOPWORDS = new Set('the a an of and or to in on at for by with as is are was were be been it its this that these those from into than then if so not no can could would should will may might do does did has have had how what which who why when where whether there their them they you your we our i me my about over under between through during each any all some more most much many very also such only just both either neither per via using used use find determine calculate compute given suppose imagine consider case model problem system value values result results'.split(' '));
+const stem = w => w.replace(/(ations?|ization|isation)$/, 'at').replace(/(ies)$/, 'y').replace(/(ing|ed|es|s)$/, '').replace(/(al|ic|ity)$/, '');
+const tokens = text => lc(text).replace(/[^a-z0-9/^\-]+/g, ' ').split(' ').filter(w => w.length > 1 && !STOPWORDS.has(w)).map(stem).filter(w => w.length > 1);
+let INDEX = null;
+function buildIndex(models) {
+  const docs = models.map(m => { const tf = new Map(); const add = (t, w) => tokens(t).forEach(k => tf.set(k, (tf.get(k) || 0) + w)); add(m.title, 4); add(m.keywords.join(' '), 3); add(m.summary || '', 2); add([].concat(m.background || []).join(' '), 1); add((m.phenomena || []).join(' '), 2); add((m.inputs || []).map(i => i.name).join(' '), 1); return tf; });
+  const df = new Map(); docs.forEach(tf => tf.forEach((_, k) => df.set(k, (df.get(k) || 0) + 1)));
+  const idf = k => Math.log(1 + models.length / (df.get(k) || 0.5));
+  const vecs = docs.map(tf => { const v = new Map(); let n = 0; tf.forEach((c, k) => { const x = (1 + Math.log(c)) * idf(k); v.set(k, x); n += x * x; }); return { v, n: Math.sqrt(n) || 1 }; });
+  return { models, vecs, idf };
+}
+/** Cosine similarity between the prompt and each model's own description. */
+export function semanticScores(prompt, models) {
+  if (!INDEX || INDEX.models !== models) INDEX = buildIndex(models);
+  const q = new Map(); tokens(prompt).forEach(k => q.set(k, (q.get(k) || 0) + 1));
+  let qn = 0; q.forEach((c, k) => { const x = (1 + Math.log(c)) * INDEX.idf(k); q.set(k, x); qn += x * x; }); qn = Math.sqrt(qn) || 1;
+  return INDEX.vecs.map(d => { let dot = 0; q.forEach((x, k) => { const y = d.v.get(k); if (y) dot += x * y; }); return dot / (qn * d.n); });
+}
+
 export function rankModels(prompt, models, module) {
   const t = lc(prompt), doms = rankDomains(prompt), domScore = Object.fromEntries(doms.map(d => [d.key, d.score]));
-  return models.filter(m => module === 1 || (Array.isArray(m.module) ? m.module.includes(2) : m.module === 2)).map(m => {
+  const sem = semanticScores(prompt, models);
+  const speculative = CLASS_CUES.III.some(c => count(t, c) > 0), logical = CLASS_CUES.II.some(c => count(t, c) > 0);
+  return models.map((m, idx) => ({ m, idx })).filter(({ m }) => module === 1 || (Array.isArray(m.module) ? m.module.includes(2) : m.module === 2)).map(({ m, idx }) => {
     let s = 0; const hits = [];
     m.keywords.forEach((k, i) => { const n = count(t, k); if (n) { const words = k.split(' ').length; s += (words * words * 3 + 1) * (1 + 0.5 / (i + 1)); hits.push(k); } });
     const ds = m.domains.reduce((a, d, i) => a + (domScore[d] || 0) * (i === 0 ? 0.5 : 0.2), 0);
     const title = lc(m.title).split(/\W+/).filter(w => w.length > 3 && t.includes(w)).length;
     const modBonus = module === 1 && (m.module === 1 || (Array.isArray(m.module) && m.module[0] === 1)) ? 1.15 : 1;
-    return { id: m.id, title: m.title, score: (s + ds + title) * modBonus, kw: s, hits };
-  }).filter(m => m.kw > 0 || m.score > 2).sort((a, b) => b.score - a.score);
+    const klass = [].concat(m.klass), hypo = !!m.hypothetical || klass[0] === 'III';
+    // a counterfactual question should reach a counterfactual model, and an ordinary one should not
+    const classFit = speculative ? (hypo ? 1.7 : klass.includes('III') ? 1.2 : 0.75) : hypo ? 0.7 : 1;
+    const logicFit = logical && klass.includes('II') ? 1.25 : 1;
+    const semantic = sem[idx] * 40;
+    return { id: m.id, title: m.title, score: (s + ds + title + semantic) * modBonus * classFit * logicFit, kw: s, sem: sem[idx], hits };
+  }).filter(m => m.kw > 0 || m.sem > 0.06).sort((a, b) => b.score - a.score);
 }
 
 // ---------------------------------------------------------------- quantities
