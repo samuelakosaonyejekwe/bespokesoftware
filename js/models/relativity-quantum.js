@@ -3041,7 +3041,7 @@ const casimir = {
         scalar('P_C', 'Casimir pressure between parallel plates', P, 'Pa'), scalar('F_pp', 'Force between the plates', P * v.A_p, 'N', { show: 'uN' }),
         scalar('F_sp', 'Sphere–plate force', Fsp, 'N'), scalar('dF_sp', 'Gradient of the sphere–plate force (2πR × pressure)', 2 * Math.PI * v.R_s * P0 * f.cp * f.tP * f.rS * f.curv, 'N/m'),
         scalar('P_0', 'Ideal zero-temperature pressure', P0, 'Pa'), scalar('F_sp0', 'Ideal zero-temperature sphere–plate force', F0, 'N'),
-        scalar('E_A', 'Ideal Casimir energy per unit area (magnitude)', E0, 'J/m^2'),
+        scalar('E_A', 'Ideal Casimir energy per unit area (negative: the plates attract)', -Math.abs(E0), 'J/m^2'),
         scalar('K_C', 'Coefficient P·a⁴', P * d ** 4, 'N m^2'),
         scalar('eta_c', 'Finite-conductivity factor on the pressure', f.cp, '1'), scalar('eta_cE', 'Finite-conductivity factor on the sphere–plate force', f.ce, '1'),
         scalar('eta_T', 'Thermal factor on the pressure', f.tP, '1'), scalar('eta_TE', 'Thermal factor on the sphere–plate force', f.tE, '1'),

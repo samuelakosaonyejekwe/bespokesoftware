@@ -89,7 +89,7 @@ theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
 def d_C : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Precursor concentration (same normalisation) [1]
 def d_Lambda_g : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Prompt-neutron generation time [s]
-def d_T_p : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Stable reactor period [s]
+def d_T_pa : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Approximate stable period [s]
 def d_beta_d : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Delayed-neutron fraction [1]
 def d_lambda_d : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Effective precursor decay constant [1/s]
 def d_n : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Neutron population relative to its initial value [1]
@@ -131,12 +131,12 @@ theorem eq3_pj_cond1 (beta_d rho_r : ℝ) (hdom : beta_d - rho_r ≠ 0) : beta_d
     which is bounded and smooth for every real b. -/
 theorem eq3_pj_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
-/-! ## 4. Stable period
+/-! ## 4. Stable period, small-reactivity approximation
 
-    T_p = (beta_d - rho_r)/(lambda_d*rho_r)
+    T_pa = (beta_d - rho_r)/(lambda_d*rho_r)
 -/
-/-- Both sides of "Stable period" carry the same physical dimension. -/
-theorem eq4_per_dim : d_T_p = (Dim.div d_beta_d (Dim.mul d_lambda_d d_rho_r)) := by decide
+/-- Both sides of "Stable period, small-reactivity approximation" carry the same physical dimension. -/
+theorem eq4_per_dim : d_T_pa = (Dim.div d_beta_d (Dim.mul d_lambda_d d_rho_r)) := by decide
 theorem eq4_per_term1 : d_beta_d = d_rho_r := by decide
 /-- Domain condition for `lambda_d * rho_r`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq4_per_cond1 (lambda_d rho_r : ℝ) (hdom : lambda_d * rho_r ≠ 0) : lambda_d * rho_r ≠ 0 := hdom

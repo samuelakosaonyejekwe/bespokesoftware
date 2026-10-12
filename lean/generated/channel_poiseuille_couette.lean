@@ -92,7 +92,7 @@ def d_U_w : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Speed of the upper wall [m/s
 def d_h : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Gap between the plates [mm]
 def d_mu : Dim := ⟨12, -12, -12, 0, 0, 0, 0⟩  -- Dynamic viscosity [cP]
 def d_nu : Dim := ⟨0, 24, -12, 0, 0, 0, 0⟩  -- Kinematic viscosity [m^2/s]
-def d_q : Dim := ⟨0, 24, -12, 0, 0, 0, 0⟩  -- Flow rate per unit width [m^2/s]
+def d_q_s : Dim := ⟨0, 24, -12, 0, 0, 0, 0⟩  -- Steady flow rate per unit width [m^2/s]
 def d_rho : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Density [kg/m^3]
 def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Time [s]
 def d_t_v : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Viscous time [s]
@@ -129,12 +129,12 @@ theorem eq3_steady_reg1 (h : ℝ) (hh : 0 < h) : h ≠ 0 := by positivity
 /-- The denominator `2 * mu` stays away from its singular set whenever the quantities are positive. -/
 theorem eq3_steady_reg2 (mu : ℝ) (hmu : 0 < mu) : (2 : ℝ) * mu ≠ 0 := by positivity
 
-/-! ## 4. Flow rate per unit width
+/-! ## 4. Steady flow rate per unit width
 
-    q = U_w*h/2 + G*h^3/(12*mu)
+    q_s = U_w*h/2 + G*h^3/(12*mu)
 -/
-/-- Both sides of "Flow rate per unit width" carry the same physical dimension. -/
-theorem eq4_q_dim : d_q = (Dim.div (Dim.mul d_U_w d_h) Dim.one) := by decide
+/-- Both sides of "Steady flow rate per unit width" carry the same physical dimension. -/
+theorem eq4_q_dim : d_q_s = (Dim.div (Dim.mul d_U_w d_h) Dim.one) := by decide
 theorem eq4_q_term1 : (Dim.div (Dim.mul d_U_w d_h) Dim.one) = (Dim.div (Dim.mul d_G (Dim.pow d_h 3 1)) (Dim.mul Dim.one d_mu)) := by decide
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq4_q_reg1  : (2 : ℝ) ≠ 0 := by positivity

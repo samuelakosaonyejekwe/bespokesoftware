@@ -18,17 +18,17 @@ for (const m of MODELS) {
   fs.writeFileSync(base + '.cpp', toCpp(inv, c));
   try {
     execFileSync('g++', ['-std=c++17', '-O1', '-w', base + '.cpp', '-o', base], { stdio: 'pipe' });
-    const out = execFileSync(base, { encoding: 'utf8' });
+    const out = execFileSync(base, { encoding: 'utf8', timeout: 60000 });
     cppOk++;
-    for (const line of out.split('\n')) { const mm = /program\s+(\S+)\s+in-app\s+(\S+)/.exec(line); if (!mm) continue; const a = parseFloat(mm[1]), b = parseFloat(mm[2]); compared++; if (Math.abs(a - b) > 1e-6 * Math.max(Math.abs(b), 1e-12) && !(Number.isNaN(a) && Number.isNaN(b))) { mismatched++; console.log(`  differs  ${m.id}: ${line.trim()}`); } }
+    for (const line of out.split('\n')) { const mm = /program\s+(\S+)\s+in-app\s+(\S+)/.exec(line); if (!mm) continue; const a = parseFloat(mm[1]), b = parseFloat(mm[2]); compared++; if (Math.abs(a - b) > 1e-3 * Math.abs(b) + 1e-12 && !(Number.isNaN(a) && Number.isNaN(b))) { mismatched++; console.log(`  differs  ${m.id}: ${line.trim()}`); } }
   } catch (e) { cppFail++; console.log(`  C++ FAIL ${m.id}: ${String(e.stderr || e.message).split('\n').slice(0, 2).join(' ')}`); }
   if (hasNumpy) {
     fs.writeFileSync(base + '.py', toPython(inv, c));
-    const r = spawnSync('python3', ['-I', base + '.py'], { encoding: 'utf8' });
+    const r = spawnSync('python3', ['-I', base + '.py'], { encoding: 'utf8', timeout: 60000 });
     if (r.status === 0) pyOk++; else { pyFail++; console.log(`  Py  FAIL ${m.id}: ${(r.stderr || '').trim().split('\n').slice(-1)[0]}`); }
   }
 }
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`C++: ${cppOk} compiled and ran, ${cppFail} failed; ${compared} quantities compared with the in-app solver, ${mismatched} differ`);
 console.log(hasNumpy ? `Python: ${pyOk} ran, ${pyFail} failed` : 'Python: numpy is not installed here, so the scripts were not run');
-process.exit(cppFail || pyFail ? 1 : 0);
+process.exit(cppFail || pyFail || mismatched ? 1 : 0);

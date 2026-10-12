@@ -146,10 +146,11 @@ export function toDocx(rep) {
 }
 
 // ---------------------------------------------------------------- source code
-const safe = s => s.replace(/[^A-Za-z0-9_]/g, '_');
+const RESERVED = new Set(['lambda', 'in', 'is', 'as', 'if', 'or', 'and', 'not', 'del', 'def', 'for', 'from', 'global', 'pass', 'class', 'with', 'yield', 'while', 'try', 'None', 'True', 'False', 'import', 'return', 'int', 'double', 'float', 'char', 'long', 'short', 'auto', 'new', 'delete', 'this', 'union', 'struct', 'template', 'operator', 'private', 'public', 'namespace', 'using', 'end', 'function', 'i', 'j', 'eps', 'pi', 'gamma', 'beta', 'abs', 'min', 'max', 'exp', 'log', 'sqrt', 'sin', 'cos', 'tan', 'time', 'y0', 'y1', 'yn', 'j0', 'j1', 'jn', 'rhs', 'main', 'y', 't']);
+const safe = s => { const k = s.replace(/[^A-Za-z0-9_]/g, '_'); return RESERVED.has(k) ? `${k}_v` : k; };
 /** Order explicit algebraic equations so each is evaluated after the symbols it needs. */
 function explicitPlan(c) {
-  const known = new Set(c.inputs.map(i => i.sym)), plan = [], odes = [], skipped = [];
+  const inputSyms = new Set(c.inputs.map(i => i.sym)), known = new Set(inputSyms), plan = [], odes = [], skipped = [];
   const consts = Object.entries(c.table).filter(([, v]) => v.constant).map(([k, v]) => ({ sym: k, value: v.value, unit: v.unit, name: v.name }));
   consts.forEach(k => known.add(k.sym));
   const pending = c.equations.map(q => { try { return { q, L: E.parse(q.lhs), R: E.parse(q.rhs) }; } catch { return null; } }).filter(Boolean);
@@ -159,10 +160,16 @@ function explicitPlan(c) {
     for (const it of pending) {
       if (it.done) continue;
       const rs = [...E.symbols(it.R)];
+      // only relations that assign a new symbol from known ones are executable; a relation whose left side is an
+      // input is a consistency condition, and one flagged exportable: false is evaluated differently in the solver
+      if (it.q.exportable === false || (it.L.t === 'sym' && inputSyms.has(it.L.n))) continue;
       if (it.L.t === 'sym' && !E.hasDiffOps(it.R) && rs.every(s => known.has(s))) { plan.push(it); known.add(it.L.n); it.done = true; progress = true; }
-      else if (it.L.t === 'fn' && it.L.n === 'd' && it.L.args[0].t === 'sym' && !E.hasDiffOps(it.R)) { odes.push(it); it.done = true; it.ode = true; progress = true; }
     }
   }
+  // differential equations are integrable only when every symbol on their right sides is available
+  const cand = pending.filter(it => !it.done && it.q.exportable !== false && it.L.t === 'fn' && it.L.n === 'd' && it.L.args[0].t === 'sym' && it.L.args[1] && it.L.args[1].t === 'sym' && !E.hasDiffOps(it.R));
+  const st = new Set(cand.map(it => it.L.args[0].n)), tv = cand.length ? cand[0].L.args[1].n : null;
+  if (cand.length && cand.every(it => !inputSyms.has(it.L.args[0].n) && !known.has(it.L.args[0].n) && [...E.symbols(it.R)].every(s => known.has(s) || st.has(s) || s === tv))) cand.forEach(it => { odes.push(it); it.done = true; });
   pending.filter(it => !it.done).forEach(it => skipped.push(it.q));
   return { plan, odes, skipped, consts: consts.filter(k => c.equations.some(q => new RegExp(`\\b${k.sym}\\b`).test(q.lhs + ' ' + q.rhs))) };
 }
@@ -177,7 +184,7 @@ export function toPython(inv, c) {
   plan.forEach(it => L.push(`# ${it.q.name} (${it.q.kind}${it.q.origin ? '; ' + it.q.origin : ''})`, `${safe(it.L.n)} = ${E.toCode(it.R, 'python', safe)}`));
   if (odes.length) {
     const st = odes.map(o => o.L.args[0].n), tv = odes[0].L.args[1].n;
-    L.push('', '# ---- ordinary differential equations -------------------------------------', 'from scipy.integrate import solve_ivp', '', `def rhs(${safe(tv)}, y):`, `    ${st.map(safe).join(', ')}${st.length === 1 ? ',' : ''} = y`, `    return [${odes.map(o => E.toCode(o.R, 'python', safe)).join(',\n            ')}]`, '', `y0 = [${st.map(() => '0.0').join(', ')}]  # set the initial state`, `sol = solve_ivp(rhs, (0.0, 1.0), y0, method="RK45", rtol=1e-8, atol=1e-10, dense_output=True)`);
+    L.push('', '# ---- ordinary differential equations -------------------------------------', 'from scipy.integrate import solve_ivp', '', `def rhs(${safe(tv)}, y):`, `    ${st.map(safe).join(', ')}${st.length === 1 ? ',' : ''} = y`, `    return [${odes.map(o => E.toCode(o.R, 'python', safe)).join(',\n            ')}]`, '', `def integrate(y0, t_end, method="LSODA"):`, `    """Integrate the system from the initial state y0 (order: ${st.join(', ')}) to t_end."""`, `    return solve_ivp(rhs, (0.0, t_end), y0, method=method, rtol=1e-8, atol=1e-10, dense_output=True)`);
   }
   if (skipped.length) { L.push('', '# ---- relations not reducible to an explicit assignment --------------------'); skipped.forEach(q => L.push(`# ${q.name}: ${q.lhs} = ${q.rhs}   [${q.kind}${q.origin ? '; ' + q.origin : ''}]`)); }
   L.push('', '# ---- reference results from the in-app solver ----------------------------', 'reference = {');

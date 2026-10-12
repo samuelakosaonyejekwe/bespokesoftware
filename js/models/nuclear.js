@@ -29,14 +29,14 @@ const kinetics = {
     asm('no_feedback', 'Reactivity stays constant after the step: no temperature or void feedback.', { why: 'Isolates the neutron kinetics', alt: 'A negative power coefficient reduces the reactivity as the population rises and arrests the excursion.' }),
     asm('delayed', 'Delayed neutrons are present.', { why: 'They are, in every real reactor', alt: 'With all neutrons prompt the population follows exp(ρt/Λ): a counterfactual that shows why delayed neutrons matter.' }),
   ],
-  symbols: { n: ['Neutron population relative to its initial value', '1'], C: ['Precursor concentration (same normalisation)', '1'], t: ['Time', 's'], alpha_f: ['Power feedback coefficient of reactivity', '1'], T_p: ['Stable reactor period', 's'], n_pj: ['Population after the prompt jump', '1'] },
+  symbols: { n: ['Neutron population relative to its initial value', '1'], C: ['Precursor concentration (same normalisation)', '1'], t: ['Time', 's'], alpha_f: ['Power feedback coefficient of reactivity', '1'], T_p: ['Stable reactor period', 's'], T_pa: ['Approximate stable period', 's'], n_pj: ['Population after the prompt jump', '1'] },
   equations: a => [
     a.delayed
       ? eq('n', 'Neutron balance', 'd(n,t)', `(${a.no_feedback ? 'rho_r' : '(rho_r - alpha_f*(n - 1))'} - beta_d)/Lambda_g*n + lambda_d*C`, { kind: 'law', origin: 'Neutron conservation in a point reactor', needs: ['one_group'] })
       : eq('n', 'Neutron balance without delayed neutrons', 'd(n,t)', 'rho_r/Lambda_g*n', { kind: 'hypothesis', origin: 'Counterfactual: every neutron prompt' }),
     ...(a.delayed ? [eq('c', 'Precursor balance', 'd(C,t)', 'beta_d/Lambda_g*n - lambda_d*C', { kind: 'law', origin: 'Production by fission and loss by radioactive decay' }),
       eq('pj', 'Prompt jump', 'n_pj', 'beta_d/(beta_d - rho_r)', { kind: 'derived', origin: 'Precursors frozen during the fast transient; valid for ρ < β' }),
-      eq('per', 'Stable period', 'T_p', '(beta_d - rho_r)/(lambda_d*rho_r)', { kind: 'derived', origin: 'Slow root of the inhour equation for ρ well below β' })] : []),
+      eq('per', 'Stable period, small-reactivity approximation', 'T_pa', '(beta_d - rho_r)/(lambda_d*rho_r)', { kind: 'derived', origin: 'Slow root of the inhour equation for ρ well below β; the solver reports the exact root' })] : []),
   ],
   derivation: () => [
     { text: 'Count neutrons: each generation of duration Λ multiplies the prompt population by (1 − β + ρ), and precursors decaying at rate λ add delayed neutrons.', tex: '\\frac{\\mathrm{d}n}{\\mathrm{d}t} = \\frac{\\rho-\\beta}{\\Lambda}\\,n + \\lambda C' },

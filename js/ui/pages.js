@@ -325,7 +325,7 @@ export async function settingsPage() {
           <div class="row" style="margin-top:.6rem"><button class="btn" id="persist-btn">Ask the browser to keep my data</button><button class="btn" id="update">Check for an update</button></div>
           <p class="small dim">Offline, live sources cannot be contacted; the last saved values are used and marked as cached.</p></div>
         <div class="card"><h2>Resilience</h2><p>The application is plain static files, so it can be served from any number of independent hosts at once, and it keeps working from an installed copy even if every host is down.</p>
-          <dl class="kv"><dt>This copy is served from</dt><dd>${location.origin}${location.pathname.replace(/index\.html$/, '')}</dd><dt>Configured mirrors</dt><dd>${cfg.mirrors && cfg.mirrors.length ? join(cfg.mirrors, m => html`<div><a href="${m}" rel="noopener noreferrer">${m}</a></div>`) : 'none listed yet'}</dd></dl>
+          <dl class="kv"><dt>This copy is served from</dt><dd>${location.origin}${location.pathname.replace(/index\.html$/, '')}</dd><dt>File mirrors used when this host is unreachable</dt><dd>${cfg.mirrors && cfg.mirrors.length ? join(cfg.mirrors, m => html`<div><a href="${m}" rel="noopener noreferrer">${m}</a></div>`) : 'none listed yet'}</dd></dl>
           <div class="row" style="margin-top:.6rem"><a class="btn" href="bespoke-offline.zip" download>Download the complete offline copy (ZIP)</a></div>
           <p class="small dim">The ZIP contains the whole application. Unpack it on any computer or web server and open <code>index.html</code> through a local web server to run it with no outside dependency.</p></div>
       </div>

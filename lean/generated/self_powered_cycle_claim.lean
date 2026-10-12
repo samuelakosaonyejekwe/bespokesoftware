@@ -143,7 +143,7 @@ theorem eq5_hid_term1 : d_P_out = d_P_allow := by decide
 
 /-! ## 6. Entropy generation rate implied by the claim
 
-    S_gen = (P_in - P_out)/T_c - P_in/T_h
+    S_gen = max(P_in - P_out, 0)/T_c - P_in/T_h
 -/
 /-- Both sides of "Entropy generation rate implied by the claim" carry the same physical dimension. -/
 theorem eq6_sgen_dim : d_S_gen = (Dim.div d_P_in d_T_c) := by decide

@@ -887,8 +887,8 @@ const freeEnergy = {
     eq('allow', 'Largest admissible output', 'P_allow', 'eta_lim*P_in', { kind: 'law', origin: 'First and second laws' }),
     eq('hid', 'Hidden input that would reconcile the claim', 'P_hid', a.measured_true ? 'max(P_out - P_allow, 0)' : 'max(P_real - P_allow, 0)', { kind: 'derived', origin: 'Energy balance with the admissible conversion' }),
     a.heat_input
-      ? eq('sgen', 'Entropy generation rate implied by the claim', 'S_gen', a.closed ? '(P_in - P_out)/T_c - P_in/T_h' : '-P_in/T_h - Q_amb/T_c', { kind: 'law', origin: 'Entropy balance on a steady device', needs: ['steady'] })
-      : eq('sgen', 'Entropy generation rate implied by the claim', 'S_gen', a.closed ? '(P_in - P_out)/T_c' : '-Q_amb/T_c', { kind: 'law', origin: 'Entropy balance on a steady device', needs: ['steady'] }),
+      ? eq('sgen', 'Entropy generation rate implied by the claim', 'S_gen', a.closed ? 'max(P_in - P_out, 0)/T_c - P_in/T_h' : 'max(P_in - P_out, 0)/T_c - P_in/T_h - Q_amb/T_c', { kind: 'law', origin: 'Entropy balance on a steady device', needs: ['steady'] })
+      : eq('sgen', 'Entropy generation rate implied by the claim', 'S_gen', a.closed ? 'max(P_in - P_out, 0)/T_c' : 'max(P_in - P_out, 0)/T_c - Q_amb/T_c', { kind: 'law', origin: 'Entropy balance on a steady device', needs: ['steady'] }),
     ...(a.closed ? [] : [eq('qamb', 'Heat drawn from the ambient', 'Q_amb', 'max(P_out - P_in, 0)', { kind: 'law', origin: 'First law with an undeclared ambient heat intake' })]),
     ...(a.steady ? [] : [eq('trun', 'Running time on the internal store', 't_run', 'E_store/P_hid', { kind: 'derived', origin: 'Energy balance on the store' })]),
   ],
@@ -2501,7 +2501,7 @@ const channel = {
     asm('from_rest', 'The fluid starts from rest.', { why: 'Impulsive start of both wall and pressure gradient', alt: 'The fluid starts from the steady Couette profile and only the pressure gradient is switched on.' }),
     asm('steady_forcing', 'The pressure gradient is constant in time.', { why: 'Leads to a steady state', alt: 'The pressure gradient oscillates as G cos(2π f t).' }),
   ],
-  symbols: { u: ['Velocity', 'm/s'], y: ['Distance from the lower wall', 'm'], t: ['Time', 's'], nu: ['Kinematic viscosity', 'm^2/s'], u_s: ['Steady velocity profile', 'm/s'], q: ['Flow rate per unit width', 'm^2/s'], tau_w: ['Wall shear stress', 'Pa'], t_v: ['Viscous time', 's'], Re: ['Reynolds number', '1'], u_m: ['Mean velocity', 'm/s'] },
+  symbols: { q_s: ['Steady flow rate per unit width', 'm^2/s'],  u: ['Velocity', 'm/s'], y: ['Distance from the lower wall', 'm'], t: ['Time', 's'], nu: ['Kinematic viscosity', 'm^2/s'], u_s: ['Steady velocity profile', 'm/s'], q: ['Flow rate per unit width', 'm^2/s'], tau_w: ['Wall shear stress', 'Pa'], t_v: ['Viscous time', 's'], Re: ['Reynolds number', '1'], u_m: ['Mean velocity', 'm/s'] },
   equations: a => {
     const src = a.pressure ? (a.steady_forcing ? ' + G' : ' + G*cos(2*pi*f_o*t)') : '';
     const couette = a.moving ? 'U_w*y/h' : '', pois = a.pressure ? 'G*y*(h - y)/(2*mu)' : '';
@@ -2509,7 +2509,7 @@ const channel = {
       eq('mom', 'Momentum equation', 'rho*pd(u,t)', 'mu*pd2(u,y)' + src, { kind: 'law', origin: 'Navier–Stokes equations for unidirectional flow', needs: ['pressure', 'steady_forcing'].filter(q => a[q]) }),
       eq('bc', 'Upper-wall condition', 'u', a.moving ? 'U_w' : '0*U_w', { kind: 'boundary', origin: 'No slip at y = h' }),
       ...(a.steady_forcing ? [eq('steady', 'Steady profile', 'u_s', [couette, pois].filter(Boolean).join(' + ') || '0*U_w', { kind: 'derived', origin: 'Exact solution of the steady momentum equation' }),
-        eq('q', 'Flow rate per unit width', 'q', [a.moving ? 'U_w*h/2' : '', a.pressure ? 'G*h^3/(12*mu)' : ''].filter(Boolean).join(' + ') || '0*U_w*h', { kind: 'derived', origin: 'Integral of the steady profile' })] : []),
+        eq('q', 'Steady flow rate per unit width', 'q_s', [a.moving ? 'U_w*h/2' : '', a.pressure ? 'G*h^3/(12*mu)' : ''].filter(Boolean).join(' + ') || '0*U_w*h', { kind: 'derived', origin: 'Integral of the steady profile' })] : []),
       eq('tw', 'Wall shear stress', 'tau_w', 'mu*pd(u,y)', { kind: 'law', origin: 'Newton’s law of viscosity' }),
       eq('tv', 'Viscous time', 't_v', 'h^2/nu', { kind: 'definition' }),
       eq('nu', 'Kinematic viscosity', 'nu', 'mu/rho', { kind: 'definition' }),
