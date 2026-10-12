@@ -11,6 +11,7 @@ import { showLean, atoms as logicAtoms, parseFormula } from './logic.js';
 export const LEAN_IMPORTS = `import Mathlib.Tactic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
+import Mathlib.Analysis.SpecialFunctions.Log.Base
 import Mathlib.Analysis.Calculus.ContDiff.Operations`;
 
 export const LEAN_LIBRARY = `/-- Physical dimension: exponents of (mass, length, time, current, temperature, amount,

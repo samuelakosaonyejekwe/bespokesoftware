@@ -237,7 +237,7 @@ const slug = {
     { text: 'Slugs passing a fixed point at frequency f_s and speed v_t are spaced one slug-unit length apart.', tex: 'L_u = v_t / f_s' },
     { text: 'When a slug of density ρ_s turns through 90°, the momentum flux ρ_s A v_t² is redirected; the resultant on the bend is √2 times that flux.', tex: 'F_b = \\sqrt2\\,\\rho_s A\\,v_t^2' },
   ],
-  solve(v, a) {
+  solve(v, a, o = {}) {
     const D = v.D, A = Math.PI * D * D / 4, vm = v.v_sl + v.v_sg, sgD = Math.sqrt(g * D), th = v.theta;
     const Fr = vm / sgD;
     let C0 = 1.2, vd = 0;
@@ -266,7 +266,7 @@ const slug = {
     const vsgs = N.logspace(0.2, 20, 60);
     const fsweep = vsgs.map(x => fsOf(v.v_sl, v.v_sl + x)), hsweep = vsgs.map(x => { const m = v.v_sl + x; const f3 = m / sgD < 3.5; const c = a.bendiksen ? (f3 ? 1.05 + 0.15 * Math.sin(th) ** 2 : 1.2) : 1.2; const d = a.bendiksen ? (f3 ? 0.54 * sgD * Math.cos(th) + 0.35 * sgD * Math.sin(th) : 0.35 * sgD * Math.sin(th)) : 0; return N.clamp(1 - x / (c * m + d), 0, 1); });
     // regime map
-    const nx = 34, ny = 30, gx = N.logspace(0.05, 40, nx), gy = N.logspace(0.01, 8, ny);
+    const nx = o.light ? 2 : 34, ny = o.light ? 2 : 30, gx = N.logspace(0.05, 40, nx), gy = N.logspace(0.01, 8, ny);
     const map = gy.map(sl => gx.map(sg => stratified(v, sl, sg).regime));
     // slug train animation: holdup along a 40-unit window
     const xw = N.linspace(0, Math.min(v.L, 6 * Lu), 300), film = N.clamp((Hl - beta * Hls) / Math.max(1 - beta, 1e-6), 0.02, Hls);

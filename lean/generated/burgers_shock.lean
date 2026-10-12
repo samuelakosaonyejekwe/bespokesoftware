@@ -1,0 +1,130 @@
+import Mathlib.Tactic
+import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
+import Mathlib.Analysis.SpecialFunctions.Pow.Real
+import Mathlib.Analysis.SpecialFunctions.Log.Base
+import Mathlib.Analysis.Calculus.ContDiff.Operations
+
+/-!
+# Viscous Burgers equation: steepening and shock formation
+
+Machine-checkable statements for this investigation (burgers-shock).
+Dimensional homogeneity is proved by computation. Regularity statements are proved where the
+declared domain makes them true, and are otherwise stated with their hypotheses made explicit.
+-/
+
+namespace Bespoke
+
+/-- Physical dimension: exponents of (mass, length, time, current, temperature, amount,
+luminous intensity), stored in twelfths so that square and cube roots stay integral. -/
+structure Dim where
+  m : Int
+  l : Int
+  t : Int
+  i : Int
+  th : Int
+  n : Int
+  j : Int
+  deriving DecidableEq, Repr
+
+namespace Dim
+def one : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩
+def mul (a b : Dim) : Dim := ⟨a.m + b.m, a.l + b.l, a.t + b.t, a.i + b.i, a.th + b.th, a.n + b.n, a.j + b.j⟩
+def div (a b : Dim) : Dim := ⟨a.m - b.m, a.l - b.l, a.t - b.t, a.i - b.i, a.th - b.th, a.n - b.n, a.j - b.j⟩
+/-- Rational power p/q. -/
+def pow (a : Dim) (p q : Int) : Dim := ⟨a.m * p / q, a.l * p / q, a.t * p / q, a.i * p / q, a.th * p / q, a.n * p / q, a.j * p / q⟩
+end Dim
+
+/-- The softened denominator never vanishes. -/
+theorem soft_den_pos (b ε : ℝ) (hε : 0 < ε) : 0 < b ^ 2 + ε ^ 2 := by positivity
+
+/-- A regularised quotient is bounded by |a| / (2 ε) for every real b: it cannot blow up. -/
+theorem soft_recip_bounded (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := by
+  have hpos : 0 < b ^ 2 + ε ^ 2 := by positivity
+  rw [abs_div, abs_mul, abs_of_pos hpos, div_le_div_iff₀ hpos (by positivity)]
+  have h : 2 * ε * |b| ≤ b ^ 2 + ε ^ 2 := by nlinarith [sq_nonneg (|b| - ε), sq_abs b]
+  nlinarith [abs_nonneg a, abs_nonneg b]
+
+/-- The regularised reciprocal is infinitely differentiable on the whole real line. -/
+theorem soft_recip_smooth (ε : ℝ) (hε : 0 < ε) : ContDiff ℝ ⊤ (fun b : ℝ => b / (b ^ 2 + ε ^ 2)) := by
+  apply ContDiff.div contDiff_id (by fun_prop)
+  intro x; positivity
+
+/-- Exponential relaxation never exceeds its initial amplitude. -/
+theorem decay_bounded (x ell : ℝ) (hx : 0 ≤ x) (hl : 0 < ell) : Real.exp (-x / ell) ≤ 1 := by
+  rw [Real.exp_le_one_iff]; have := div_nonneg hx hl.le; linarith [neg_div ell x]
+
+/-- Saturating nonlinearity stays strictly inside (-1, 1). -/
+theorem tanh_bounded (x : ℝ) : |Real.tanh x| < 1 := by
+  rw [abs_lt]; exact ⟨Real.neg_one_lt_tanh x, Real.tanh_lt_one x⟩
+
+/-- Below light speed the Lorentz factor is well defined. -/
+theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c ^ 2 := by
+  have h : v ^ 2 < c ^ 2 := by nlinarith [abs_lt.mp hv, sq_abs v, abs_nonneg v]
+  have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
+  linarith
+
+/-! ## Dimensions of the symbols -/
+
+def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
+def d_L : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Domain length [m]
+def d_Re : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Reynolds number U₀L/ν [1]
+def d_U_0 : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Velocity amplitude [m/s]
+def d_delta : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Shock thickness [m]
+def d_nu : Dim := ⟨0, 24, -12, 0, 0, 0, 0⟩  -- Kinematic viscosity [m^2/s]
+def d_s_w : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Shock speed [m/s]
+def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Time [s]
+def d_t_b : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Breaking time [s]
+def d_u : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Velocity [m/s]
+def d_u_L : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Velocity ahead of... left state [m/s]
+def d_u_R : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Right state [m/s]
+def d_x : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Position [m]
+
+/-! ## 1. Burgers equation, conservation form
+
+    pd(u,t) + pd(u^2/2,x) = nu*pd2(u,x)
+-/
+/-- Both sides of "Burgers equation, conservation form" carry the same physical dimension. -/
+theorem eq1_pde_dim : (Dim.div d_u d_t) = (Dim.mul d_nu (Dim.div d_u (Dim.pow d_x 2 1))) := by decide
+theorem eq1_pde_term1 : (Dim.div d_u d_t) = (Dim.div (Dim.div (Dim.pow d_u 2 1) Dim.one) d_x) := by decide
+/-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq1_pde_reg1  : (2 : ℝ) ≠ 0 := by positivity
+
+/-! ## 2. Reynolds number
+
+    Re = U_0*L/nu
+-/
+/-- Both sides of "Reynolds number" carry the same physical dimension. -/
+theorem eq2_re_dim : d_Re = (Dim.div (Dim.mul d_U_0 d_L) d_nu) := by decide
+/-- The denominator `nu` stays away from its singular set whenever the quantities are positive. -/
+theorem eq2_re_reg1 (nu : ℝ) (hnu : 0 < nu) : nu ≠ 0 := by positivity
+
+/-! ## 3. Breaking time of a sine wave
+
+    t_b = L/(2*pi*U_0)
+-/
+/-- Both sides of "Breaking time of a sine wave" carry the same physical dimension. -/
+theorem eq3_tb_dim : d_t_b = (Dim.div d_L (Dim.mul (Dim.mul Dim.one Dim.one) d_U_0)) := by decide
+/-- The denominator `2 * pi * U_0` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_tb_reg1 (U_0 : ℝ) (hU_0 : 0 < U_0) : (2 : ℝ) * Real.pi * U_0 ≠ 0 := by positivity
+
+/-! ## 4. Shock speed
+
+    s_w = (u_L + u_R)/2
+-/
+/-- Both sides of "Shock speed" carry the same physical dimension. -/
+theorem eq4_rh_dim : d_s_w = (Dim.div d_u_L Dim.one) := by decide
+theorem eq4_rh_term1 : d_u_L = d_u_R := by decide
+/-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_rh_reg1  : (2 : ℝ) ≠ 0 := by positivity
+
+/-! ## 5. Shock thickness
+
+    delta = 4*nu/(u_L - u_R)
+-/
+/-- Both sides of "Shock thickness" carry the same physical dimension. -/
+theorem eq5_thick_dim : d_delta = (Dim.div (Dim.mul Dim.one d_nu) d_u_L) := by decide
+theorem eq5_thick_term1 : d_u_L = d_u_R := by decide
+/-- Domain condition for `u_L - u_R`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq5_thick_cond1 (u_L u_R : ℝ) (hdom : u_L - u_R ≠ 0) : u_L - u_R ≠ 0 := hdom
+
+end Bespoke

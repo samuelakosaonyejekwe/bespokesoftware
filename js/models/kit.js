@@ -20,7 +20,7 @@
 //   symbols     { sym: [name, unit] } for every non-input symbol that appears in the equations
 //   equations   (a, v) => array built with eq(...). `a` = { assumptionId: boolean }, `v` = SI input values
 //   derivation  (a, v) => array of { text, tex? } steps from first principles
-//   solve       (v, a) => result object built with the helpers below. v is in SI. MUST be deterministic,
+//   solve       (v, a, o) => result object (o.light is true for repeated analysis runs: skip costly plot-only work) built with the helpers below. v is in SI. MUST be deterministic,
 //               must not throw for inputs inside their declared ranges, and should take well under 50 ms
 //               (set heavy: true on the model when a single solve is slower than ~150 ms).
 //   benchmarks  (v, a) => array built with bench(...): comparisons against exact / analytical results

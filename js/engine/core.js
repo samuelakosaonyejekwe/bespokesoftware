@@ -117,10 +117,10 @@ const cache = new Map();
 const keyOf = (inv, world) => JSON.stringify([inv.id, inv.modelId, world.inputs, world.assumptions, inv.worlds[0].inputs, inv.worlds[0].assumptions, inv.env, inv.location && inv.location.name, inv.custom, inv.logic]);
 
 /** Run one model evaluation with explicit SI values; never throws. */
-export function runModel(model, v, a) {
+export function runModel(model, v, a, light = false) {
   const t0 = (typeof performance !== 'undefined' ? performance : Date).now();
   try {
-    const r = model.solve(v, a) || {};
+    const r = model.solve(v, a, { light }) || {};
     const res = { scalars: r.scalars || [], series: r.series || [], fields: r.fields || [], anims: r.anims || [], paths: r.paths || [], checks: r.checks || [], warnings: r.warnings || [], notes: r.notes || [], status: 'computed' };
     const bad = res.scalars.filter(s => typeof s.value === 'number' && !Number.isFinite(s.value) && !s.text);
     if (bad.length) res.warnings.push(`Non-finite value returned for ${bad.map(s => s.name).join(', ')}.`);
@@ -247,8 +247,8 @@ export function sensitivity(c, step = 0.02) {
   const base = scalarMap(c.result), outs = Object.keys(base), rows = [];
   for (const i of variable(c)) {
     const h = Math.abs(i.si) > 0 ? Math.abs(i.si) * step : (i.rangeSI[1] - i.rangeSI[0]) * step || step;
-    const up = scalarMap(runModel(model, { ...c.v, [i.sym]: N.clamp(i.si + h, i.rangeSI[0], i.rangeSI[1]) }, c.a));
-    const dn = scalarMap(runModel(model, { ...c.v, [i.sym]: N.clamp(i.si - h, i.rangeSI[0], i.rangeSI[1]) }, c.a));
+    const up = scalarMap(runModel(model, { ...c.v, [i.sym]: N.clamp(i.si + h, i.rangeSI[0], i.rangeSI[1]) }, c.a, true));
+    const dn = scalarMap(runModel(model, { ...c.v, [i.sym]: N.clamp(i.si - h, i.rangeSI[0], i.rangeSI[1]) }, c.a, true));
     const dx = N.clamp(i.si + h, i.rangeSI[0], i.rangeSI[1]) - N.clamp(i.si - h, i.rangeSI[0], i.rangeSI[1]);
     const s = {};
     outs.forEach(o => { if (up[o] == null || dn[o] == null || dx === 0) { s[o] = NaN; return; } const d = (up[o] - dn[o]) / dx; s[o] = base[o] !== 0 && i.si !== 0 ? d * i.si / base[o] : d; });
@@ -286,7 +286,7 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
   const a = lo ?? Math.max(i.rangeSI[0], i.si > 0 ? i.si / 4 : i.rangeSI[0]), b = hi ?? Math.min(i.rangeSI[1], i.si > 0 ? i.si * 4 : i.rangeSI[1]);
   if (model.heavy) nPts = Math.min(nPts, 12);
   const xs = N.linspace(a, b, nPts), out = {};
-  xs.forEach((x, k) => { const r = runModel(model, { ...c.v, [sym]: x }, c.a); r.scalars.forEach(s => { (out[s.sym] = out[s.sym] || { ...s, data: new Array(nPts).fill(NaN) }).data[k] = Number.isFinite(s.value) ? s.value : NaN; }); });
+  xs.forEach((x, k) => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true); r.scalars.forEach(s => { (out[s.sym] = out[s.sym] || { ...s, data: new Array(nPts).fill(NaN) }).data[k] = Number.isFinite(s.value) ? s.value : NaN; }); });
   return { input: i, xs, outputs: Object.values(out).filter(o => o.data.some(Number.isFinite)) };
 }
 
@@ -297,7 +297,7 @@ export function assumptionMap(c) {
   const eqBase = new Map(c.equations.map(q => [q.id, `${q.lhs}=${q.rhs}`]));
   const rows = model.assumptions.map(a => {
     const flipped = { ...c.a, [a.id]: !c.a[a.id] };
-    const r = runModel(model, c.v, flipped), m = scalarMap(r);
+    const r = runModel(model, c.v, flipped, true), m = scalarMap(r);
     let eqs = []; try { eqs = model.equations(flipped, c.v) || []; } catch { eqs = []; }
     const changedEq = [...new Set([...eqs.filter(q => eqBase.get(q.id) !== `${q.lhs}=${q.rhs}`).map(q => q.name), ...c.equations.filter(q => !eqs.some(x => x.id === q.id)).map(q => q.name)])];
     const delta = {}; let maxRel = 0;
@@ -330,7 +330,7 @@ export function convergence(c) {
   const i = c.inputs.find(q => q.sym === key); if (!i) return null;
   const n0 = Math.max(4, Math.round(i.si / 2)), levels = [n0, n0 * 2, n0 * 4].map(n => Math.min(n, i.rangeSI[1]));
   if (levels[2] <= levels[1]) return null;
-  const runs = levels.map(n => scalarMap(runModel(model, { ...c.v, [key]: n }, c.a)));
+  const runs = levels.map(n => scalarMap(runModel(model, { ...c.v, [key]: n }, c.a, true)));
   const rows = c.result.scalars.filter(s => runs.every(r => Number.isFinite(r[s.sym]))).map(s => {
     const [a, b, d] = runs.map(r => r[s.sym]);
     if (Math.abs(b - d) < 1e-14 * Math.max(1, Math.abs(d))) return { ...s, vals: [a, b, d], order: null, converged: true, gci: 0, extrap: d };
@@ -345,7 +345,7 @@ export function optimise(c, spec) {
   const model = c.model; const o = spec || (model && model.optimise); if (!model || !o) return null;
   const vars = o.vars.map(s => c.inputs.find(i => i.sym === s)).filter(Boolean); if (!vars.length) return null;
   const sgn = o.sense === 'max' ? -1 : 1;
-  const f = x => { const v = { ...c.v }; vars.forEach((i, k) => { v[i.sym] = x[k]; }); const r = runModel(model, v, c.a); const s = r.scalars.find(q => q.sym === o.objective); if (!s || !Number.isFinite(s.value)) return 1e300; let pen = 0; (o.constraints || []).forEach(k => { const cs = r.scalars.find(q => q.sym === k.sym); if (cs) { const g = k.max != null ? cs.value - k.max : k.min - cs.value; if (g > 0) pen += 1e6 * (g / (Math.abs(k.max ?? k.min) || 1)) ** 2 * Math.abs(s.value || 1); } }); return sgn * s.value + pen; };
+  const f = x => { const v = { ...c.v }; vars.forEach((i, k) => { v[i.sym] = x[k]; }); const r = runModel(model, v, c.a, true); const s = r.scalars.find(q => q.sym === o.objective); if (!s || !Number.isFinite(s.value)) return 1e300; let pen = 0; (o.constraints || []).forEach(k => { const cs = r.scalars.find(q => q.sym === k.sym); if (cs) { const g = k.max != null ? cs.value - k.max : k.min - cs.value; if (g > 0) pen += 1e6 * (g / (Math.abs(k.max ?? k.min) || 1)) ** 2 * Math.abs(s.value || 1); } }); return sgn * s.value + pen; };
   const x0 = vars.map(i => i.si), lo = vars.map(i => i.rangeSI[0]), hi = vars.map(i => i.rangeSI[1]);
   const res = N.nelderMead(f, x0, { lo, hi, maxIt: model.heavy ? 60 : 250, scale: vars.map(i => (i.rangeSI[1] - i.rangeSI[0]) * 0.08) });
   const vOpt = { ...c.v }; vars.forEach((i, k) => { vOpt[i.sym] = res.x[k]; });

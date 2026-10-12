@@ -543,7 +543,7 @@ const CODE = {
   python: { pow: (a, b) => `${a}**${b}`, fn: n => ({ ln: 'np.log', log: 'np.log', log10: 'np.log10', abs: 'np.abs', asin: 'np.arcsin', acos: 'np.arccos', atan: 'np.arctan', atan2: 'np.arctan2', min: 'np.minimum', max: 'np.maximum', erf: 'math.erf', heaviside: '(lambda x: np.heaviside(x, 1.0))', pow: 'np.power' }[n] || `np.${n}`), pi: 'np.pi' },
   matlab: { pow: (a, b) => `${a}.^${b}`, fn: n => ({ ln: 'log', log: 'log', pow: 'power', heaviside: '(@(x) double(x>=0))' }[n] || n), pi: 'pi', mul: '.*', div: './' },
   cpp: { pow: (a, b) => `std::pow(${a}, ${b})`, fn: n => ({ ln: 'std::log', log: 'std::log', abs: 'std::fabs', min: 'std::min', max: 'std::max', heaviside: '([](double x){return x>=0?1.0:0.0;})', sign: '([](double x){return (x>0)-(x<0);})' }[n] || `std::${n}`), pi: 'M_PI', numFloat: true },
-  lean: { pow: (a, b) => `${a} ^ ${b}`, fn: n => ({ sqrt: 'Real.sqrt', exp: 'Real.exp', ln: 'Real.log', log: 'Real.log', sin: 'Real.sin', cos: 'Real.cos', tan: 'Real.tan', tanh: 'Real.tanh', sinh: 'Real.sinh', cosh: 'Real.cosh', atan: 'Real.arctan', abs: 'abs', min: 'min', max: 'max' }[n] || n), pi: 'Real.pi', lean: true },
+  lean: { pow: (a, b) => `${a} ^ ${b}`, fn: n => ({ sqrt: 'Real.sqrt', exp: 'Real.exp', ln: 'Real.log', log: 'Real.log', sin: 'Real.sin', cos: 'Real.cos', tan: 'Real.tan', tanh: 'Real.tanh', sinh: 'Real.sinh', cosh: 'Real.cosh', atan: 'Real.arctan', asin: 'Real.arcsin', acos: 'Real.arccos', log10: 'Real.logb 10', abs: 'abs', min: 'min', max: 'max' }[n] || unsupportedLean(n)), pi: 'Real.pi', lean: true },
 };
 /** Translate to source code in a target language (js | python | matlab | cpp | lean). */
 export function toCode(e, lang = 'python', rename = n => n) {
@@ -581,6 +581,7 @@ export function toCode(e, lang = 'python', rename = n => n) {
   };
   return go(e);
 }
+function unsupportedLean(n) { throw new Error(`${n}() has no counterpart in the proof library`); }
 function leanNum(v) {
   if (Number.isInteger(v)) return `(${v} : ℝ)`;
   // exact decimal as a rational so Lean treats it as a real literal without floats

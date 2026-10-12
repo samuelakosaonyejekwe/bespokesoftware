@@ -18,6 +18,7 @@ const rk4step = (f, t, y, h) => {
  * Integrate y' = f(t, y) from t = 0 until gf(y) falls through zero (or tMax is reached), locate the
  * crossing with Newton steps on the event function, then resample the solution on nOut points.
  * gdot(y) is the time derivative of gf along the solution; when omitted it is formed by finite difference.
+ * When gf is the minimum of several conditions, scale each to order one so that they are comparable.
  */
 function toEvent(f, y0, tMax, gf, gdot, nOut = 300, o = {}) {
   const opt = { rtol: o.rtol ?? 1e-9, atol: o.atol ?? 1e-9, maxSteps: o.maxSteps ?? 60000 }, event = (t, y) => gf(y) < 0;
@@ -28,13 +29,16 @@ function toEvent(f, y0, tMax, gf, gdot, nOut = 300, o = {}) {
   let s = N.rk45(f, y0, 0, Math.min(1.05 * rough.stopT, tMax), nOut, { ...opt, event });
   if (!s.stopped) s = N.rk45(f, y0, 0, tMax, nOut, { ...opt, event });
   if (!s.stopped) return miss();
-  let t = s.stopT, y = s.final;
-  for (let i = 0; i < 8; i++) {
+  // Newton iteration on the event function, confined to the interval between the last sample and the stopping step
+  let t = s.stopT, y = s.final, lo = s.t.length - 1;
+  while (lo > 0 && s.t[lo] >= t) lo--;
+  const tLo = s.t[lo] < t ? s.t[lo] : 0, tHi = t;
+  for (let i = 0; i < 10; i++) {
     let gd;
     if (gdot) gd = gdot(y);
     else { const fy = f(t, y), h = 1e-6; gd = (gf(y.map((x, k) => x + h * fy[k])) - gf(y)) / h; }
-    const dt = -gf(y) / gd;
-    if (!Number.isFinite(dt) || t + dt <= 0) break;
+    const dt = N.clamp(t - gf(y) / gd, tLo, tHi) - t;
+    if (!Number.isFinite(dt) || dt === 0) break;
     y = rk4step(f, t, y, dt); t += dt;
     if (Math.abs(dt) < 1e-13 * Math.max(1, t)) break;
   }
@@ -95,17 +99,38 @@ function yoshida4(acc, q0, v0, h, n, stride = 1) {
 }
 /** Classical RK4 for q'' = acc(q), same output layout as yoshida4 (used as the non-symplectic comparison). */
 function rk4second(acc, q0, v0, h, n, stride = 1) {
-  const m = q0.length, f = (t, y) => { const a = new Array(m); acc(y, a); return [...y.slice(m), ...a]; };
-  let y = [...q0, ...v0]; const t = [], Q = [], V = [];
+  const m = q0.length, q = Array.from(q0), v = Array.from(v0), z = () => new Array(m).fill(0);
+  const a1 = z(), a2 = z(), a3 = z(), a4 = z(), qq = z(), t = [], Q = [], V = [];
   for (let k = 0; k <= n; k++) {
-    if (k % stride === 0 || k === n) { t.push(k * h); Q.push(y.slice(0, m)); V.push(y.slice(m)); }
+    if (k % stride === 0 || k === n) { t.push(k * h); Q.push(q.slice()); V.push(v.slice()); }
     if (k === n) break;
-    y = rk4step(f, k * h, y, h);
+    acc(q, a1);
+    for (let j = 0; j < m; j++) qq[j] = q[j] + 0.5 * h * v[j];
+    acc(qq, a2);
+    for (let j = 0; j < m; j++) qq[j] = q[j] + 0.5 * h * v[j] + 0.25 * h * h * a1[j];
+    acc(qq, a3);
+    for (let j = 0; j < m; j++) qq[j] = q[j] + h * v[j] + 0.5 * h * h * a2[j];
+    acc(qq, a4);
+    for (let j = 0; j < m; j++) { q[j] += h * v[j] + h * h / 6 * (a1[j] + a2[j] + a3[j]); v[j] += h / 6 * (a1[j] + 2 * a2[j] + 2 * a3[j] + a4[j]); }
   }
   return { t, q: Q, v: V };
 }
 /** Least-squares slope of ys against xs. */
 const slope = (xs, ys) => { const n = xs.length; if (n < 2) return 0; const mx = N.mean(xs), my = N.mean(ys); let sxy = 0, sxx = 0; for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; } return sxx > 0 ? sxy / sxx : 0; };
+/**
+ * Growth of the separation between twin trajectories before saturation: straight-line fits of ln(separation)
+ * against t (exponential, chaotic) and against ln t (power law, regular). The motion is classed as chaotic
+ * only when the exponential fit is the better one and spans at least three e-foldings.
+ */
+function growthFit(ts, sep) {
+  const ix = sep.map((_, k) => k).filter(k => ts[k] > 0 && sep[k] > 0 && sep[k] < 0.1);
+  if (ix.length < 6) return { lam: 0, power: 0, chaotic: false };
+  const x = ix.map(k => ts[k]), y = ix.map(k => Math.log(sep[k])), my = N.mean(y);
+  const fit = xs => { const b = slope(xs, y), mx = N.mean(xs); let e = 0; for (let i = 0; i < xs.length; i++) e += (y[i] - my - b * (xs[i] - mx)) ** 2; return [b, e]; };
+  const [lam, eExp] = fit(x), [power, ePow] = fit(x.map(Math.log));
+  return { lam, power, chaotic: eExp < ePow && lam * (x[x.length - 1] - x[0]) > 3 };   // exponential fit better, and at least e³ of growth
+}
+const GROWTH = ['No sustained exponential growth: consistent with regular (non-chaotic) motion over this interval', 'Exponential growth: the motion is chaotic over this interval'];
 const circlePts = (r, n = 121) => N.linspace(0, 2 * Math.PI, n).map(th => [r * Math.cos(th), r * Math.sin(th)]);
 
 // ------------------------------------------------------------------ 1. finite wing: lift, drag, performance
@@ -489,7 +514,7 @@ const nozzle = {
 };
 
 // ------------------------------------------------------------------ 3. rocket ascent
-function ascent(v, a) {
+function ascent(v, a, rtol = 1e-9) {
   const ve = G0 * v.I_sp, mf = v.m_0 * (1 - v.zeta), Fv = v.TW * v.m_0 * v.g_s, mdot = Fv / ve, tb = (v.m_0 - mf) / mdot;
   const A = Math.PI * v.d ** 2 / 4, ps = 101325 * v.rho_0 / 1.225;
   const gOf = h => (a.gravity ? (a.g_varies ? v.g_s * (v.R_p / (v.R_p + Math.max(h, 0))) ** 2 : v.g_s) : 0);
@@ -501,7 +526,7 @@ function ascent(v, a) {
     if (h <= 0 && u <= 0 && acc < 0) return [0, 0, F / m, 0, F / m];   // held on the pad: thrust below weight
     return [u, acc, g, D / m, F / m];
   };
-  const o = { rtol: 1e-10, atol: 1e-8, maxSteps: 60000 };
+  const o = { rtol, atol: 1e-8, maxSteps: 60000 };
   const b = N.rk45(rhs(true), [0, 0, 0, 0, 0], 0, tb, 161, o), yb = b.final || b.y.map(r => r[r.length - 1]);
   const fc = rhs(false);
   let c, apogee = false;
@@ -603,8 +628,8 @@ const rocket = {
     };
   },
   benchmarks(v) {
-    const free = ascent(v, { gravity: false, drag: false, g_varies: false, const_thrust: true });
-    const cg = ascent(v, { gravity: true, drag: false, g_varies: false, const_thrust: true });
+    const free = ascent(v, { gravity: false, drag: false, g_varies: false, const_thrust: true }, 1e-11);
+    const cg = ascent(v, { gravity: true, drag: false, g_varies: false, const_thrust: true }, 1e-11);
     const Rm = 1 / (1 - v.zeta), ve = G0 * v.I_sp;
     return [
       bench('Burnout velocity with gravity and drag off vs Tsiolkovsky', free.yb[1], ve * Math.log(Rm), 'Ideal rocket equation', 1e-8),
@@ -619,7 +644,7 @@ const rocket = {
       ${S.path('M40 320 L600 320', 'd-ground')}
       ${S.path('M300 70 Q322 110 322 150 L322 270 L278 270 L278 150 Q278 110 300 70 Z', 'd-body')}
       ${S.path('M278 240 L256 276 L278 270 Z', 'd-body')} ${S.path('M322 240 L344 276 L322 270 Z', 'd-body')}
-      ${S.path('M286 272 L300 318 L314 272 Z', 'd-heat')}
+      ${S.path('M286 272 L300 318 L314 272 Z', 'd-hazard')}
       ${S.arrow(300, 60, 300, 20)} ${S.text(312, 30, `thrust = ${lab(v.TW)} × weight`, 'd-text', 'start')}
       ${a.gravity ? S.arrow(360, 150, 360, 220) + S.text(370, 190, 'weight m·g(z)', 'd-text', 'start') : S.text(370, 190, 'no gravity', 'd-text d-small', 'start')}
       ${a.drag ? S.arrow(240, 120, 240, 180, 'd-arrow d-hazard') + S.text(230, 150, 'drag ½ρv²C_D A', 'd-text', 'end') : S.text(230, 150, 'vacuum', 'd-text d-small', 'end')}
@@ -641,7 +666,7 @@ const rocket = {
   hazards: [{ hazard: 'Explosion or fire on the pad', cause: 'Motor case or feed-system failure', mitigation: 'Remote operations, blast exclusion zone, flight-termination system' }, { hazard: 'Uncontrolled impact', cause: 'Recovery failure or unstable flight', mitigation: 'Dispersion analysis, cleared range, stability margin of at least one calibre' }, { hazard: 'Structural failure at maximum dynamic pressure', cause: 'Bending loads from wind shear', mitigation: 'Throttle or trajectory shaping through max-q; wind limits' }],
   standards: ['NFPA 1127 (code for high power rocketry)', 'ISO 14620-1 (space systems — safety requirements — system safety)', 'ECSS-E-ST-35C (space engineering — propulsion general requirements)'],
   limits: 'Vertical, non-rotating, single-stage flight with constant mass flow and constant drag coefficient through an isothermal exponential atmosphere. No pitch-over, wind, staging, throttling, Earth rotation or aerodynamic heating.',
-  numerics: { method: 'Adaptive Dormand–Prince RK45 in two phases (burn, coast), with Newton refinement of the apogee event', order: 5, stability: 'Step-size controlled to a relative tolerance of 10⁻¹⁰' },
+  numerics: { method: 'Adaptive Dormand–Prince RK45 in two phases (burn, coast), with Newton refinement of the apogee event', order: 5, stability: 'Step-size controlled to a relative tolerance of 10⁻⁹' },
   optimise: { objective: 'h_ap', sense: 'max', vars: ['TW'], note: 'High thrust cuts gravity loss but raises drag loss; the best thrust-to-weight ratio balances the two.' },
   inverse: { series: 'velocity', fit: ['C_D', 'I_sp'] },
   extensions: ['Gravity-turn ascent to orbit with pitch programme', 'Two-stage optimisation of the mass split', 'Standard-atmosphere density and Mach-dependent drag'],
@@ -872,11 +897,11 @@ function entryRun(v, a) {
     const [V, gam, h] = y, rho = rhoOf(h), g = gOf(h), k = rho * V / (2 * v.beta);
     let dg = -k * LD;
     if (!a.straight) dg += (g / Math.max(V, 1) - V / (v.R_p + h)) * Math.cos(gam);
-    return [-k * V + g * Math.sin(gam), dg, -V * Math.sin(gam), V * Math.cos(gam) * v.R_p / (v.R_p + h), K_SG * Math.sqrt(rho / v.R_n) * Math.abs(V) ** 3];
+    return [-k * V + g * Math.sin(gam), dg, -V * Math.sin(gam), V * Math.cos(gam) * v.R_p / (v.R_p + h), K_SG * Math.sqrt(rho / v.R_n) * Math.abs(V) ** 3, k * V * V];
   };
   const vStop = a.no_gravity ? 0.01 * v.V_E : -1;
-  const gf = y => Math.min(y[2], v.h_E + 2000 - y[2], y[0] - vStop);
-  const s = toEvent(f, [v.V_E, v.gamma_E, v.h_E, 0, 0], 4000, gf, null, 401, { rtol: 1e-9, atol: 1e-7, maxSteps: 40000 });
+  const gf = y => Math.min(y[2] / v.h_E, 1 + 2000 / v.h_E - y[2] / v.h_E, (y[0] - vStop) / v.V_E);
+  const s = toEvent(f, [v.V_E, v.gamma_E, v.h_E, 0, 0, 0], 4000, gf, null, 401, { rtol: 1e-9, atol: 1e-7, maxSteps: 40000 });
   const n = s.t.length, V = s.y[0], gam = s.y[1], h = s.y[2];
   const rho = h.map(rhoOf), dec = V.map((x, i) => rho[i] * x * x / (2 * v.beta)), q = V.map((x, i) => K_SG * Math.sqrt(rho[i] / v.R_n) * x ** 3);
   const ia = dec.indexOf(N.maxOf(dec)), iq = q.indexOf(N.maxOf(q)), va = vertex(dec, ia), vq = vertex(q, iq);
@@ -977,7 +1002,7 @@ const entry = {
         line('alt-time', 'Altitude and speed against time', 'Time', 's', pick(r.s.t), [{ label: 'Altitude (km)', data: pick(hk) }, { label: 'Speed (0.1 km/s)', data: pick(r.V).map(x => x / 100) }], 'Value', 'see legend'),
       ],
       checks: [
-        check('Energy balance', (() => { const e0 = 0.5 * v.V_E ** 2, grav = a.no_gravity ? 0 : v.g_s * v.R_p ** 2 * (1 / (v.R_p + r.yf[2]) - 1 / (v.R_p + v.h_E)); const diss = N.trapz(r.s.t, r.dec.map((d, i) => d * r.V[i])); return (e0 + grav - 0.5 * r.yf[0] ** 2 - diss) / e0; })(), 2e-3, 'Kinetic plus potential energy lost against the time integral of drag power'),
+        check('Energy balance', (() => { const e0 = 0.5 * v.V_E ** 2, grav = a.no_gravity ? 0 : v.g_s * v.R_p ** 2 * (1 / (v.R_p + r.yf[2]) - 1 / (v.R_p + v.h_E)); return (e0 + grav - 0.5 * r.yf[0] ** 2 - r.yf[5]) / e0; })(), 1e-6, 'Kinetic plus potential energy lost against the integrated drag power'),
       ],
       warnings,
     };
@@ -1000,7 +1025,7 @@ const entry = {
     return svg(`
       ${S.path('M30 300 Q320 262 610 300', 'd-ground')} ${S.text(600, 322, `planet surface, radius ${lab(v.R_p / 1000, 'km')}`, 'd-text d-small', 'end')}
       ${S.path('M30 70 Q320 40 610 70', 'd-dim')} ${S.text(600, 50, `entry interface ${lab(v.h_E / 1000, 'km')}`, 'd-text d-small', 'end')}
-      ${[0, 1, 2, 3].map(i => S.path(`M30 ${150 + i * 40} Q320 ${118 + i * 40} 610 ${150 + i * 40}`, 'd-liquid-line')).join('')}
+      ${[0, 1, 2, 3].map(i => S.path(`M30 ${150 + i * 40} Q320 ${118 + i * 40} 610 ${150 + i * 40}`, 'd-dim')).join('')}
       ${S.arrow(x0, y0, x1, y1)} ${S.circle(x0, y0, 9, 'd-body')}
       ${S.line(x0, y0, x0 + 110, y0, 'd-dim')} ${S.text(x0 + 120, y0 + 22, `γ = ${lab(v.gamma_E / DEG, '°')}`, 'd-text', 'start')}
       ${S.text(x0 - 10, y0 - 18, `V_E = ${lab(v.V_E / 1000, 'km/s')}`, 'd-text', 'start')}
@@ -1036,13 +1061,13 @@ function keplerRun(v, a) {
   const p = hA * hA / mu, rp = p / (1 + ecc), ra = bound ? sma * (1 + ecc) : Infinity;
   const Tc = 2 * Math.PI * Math.sqrt(r0 ** 3 / mu), T = bound ? 2 * Math.PI * Math.sqrt(sma ** 3 / mu) : NaN, unit = bound ? T : Tc;
   const boost = N.clamp(unit / (2 * Math.PI * Math.sqrt(Math.max(rp, 1e-4 * r0) ** 3 / mu)), 1, 50);
-  const n = Math.max(20, Math.min(Math.round(v.n_orb * v.n_step * boost), 200000)), tEnd = v.n_orb * unit, stride = every(n, 20000);
+  const n = Math.max(20, Math.min(Math.round(v.n_orb * v.n_step * boost), 80000)), tEnd = v.n_orb * unit, stride = every(n, 20000);
   const floor2 = (1e-5 * r0) ** 2;
   const acc = (q, o) => { const r2 = Math.max(q[0] * q[0] + q[1] * q[1], floor2), r = Math.sqrt(r2), s = -mu / (r2 * r) - k4 / (r2 * r2 * r); o[0] = s * q[0]; o[1] = s * q[1]; };
   const run = (a.symplectic ? yoshida4 : rk4second)(acc, [r0, 0], [vr, vt], tEnd / n, n, stride);
   const m = run.t.length, r = new Array(m), sp = new Array(m), en = new Array(m), hh = new Array(m), th = new Array(m), om = new Array(m);
   for (let i = 0; i < m; i++) {
-    const [x, y] = run.q[i], [ux, uy] = run.v[i];
+    const x = run.q[i][0], y = run.q[i][1], ux = run.v[i][0], uy = run.v[i][1];
     r[i] = Math.hypot(x, y); sp[i] = Math.hypot(ux, uy); hh[i] = x * uy - y * ux; om[i] = hh[i] / (r[i] * r[i]);
     en[i] = 0.5 * sp[i] ** 2 - mu / r[i] - k4 / (3 * r[i] ** 3);
     if (i === 0) th[i] = 0; else { let d = Math.atan2(y, x) - Math.atan2(run.q[i - 1][1], run.q[i - 1][0]); if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI; th[i] = th[i - 1] + d; }
@@ -1181,7 +1206,7 @@ const twoBody = {
     const st = every(k.m, 160), pts = k.run.q.filter((_, i) => i % st === 0).map(p => [(cx + p[0] * sc).toFixed(1), (cy - p[1] * sc).toFixed(1)]);
     const ang = v.phi, ax = cx + k.r0 * sc;
     return svg(`
-      ${S.poly(pts, 'd-line')} ${S.circle(cx, cy, 8, 'd-heat')} ${S.text(cx, cy + 26, 'central body', 'd-text d-small')}
+      ${S.poly(pts, 'd-line')} ${S.circle(cx, cy, 8, 'd-body d-heat')} ${S.text(cx, cy + 26, 'central body', 'd-text d-small')}
       ${S.circle(ax, cy, 5, 'd-body')} ${S.arrow(ax, cy, ax + 60 * Math.sin(ang), cy - 60 * Math.cos(ang))}
       ${S.text(ax + 12, cy + 20, `v₀ = ${lab(v.v_0 / 1000, 'km/s')}`, 'd-text', 'start')}
       ${S.dim(cx, cy + 46, ax, cy + 46, `r₀ = ${lab(v.r_0 / AU, 'AU')}`)}
@@ -1247,7 +1272,7 @@ function threeRun(a, v, tEnd, nOut) {
   if (a.adaptive) {
     // state layout: reference [q(6), u(6)] then twin [q(6), u(6)]
     const f = (tt, y, d) => { for (let o = 0; o < 24; o += 12) { for (let i = 0; i < 6; i++) d[o + i] = y[o + 6 + i]; acc(y, d, o, o + 6); } };
-    const s = dopri(f, [...ic.q, ...ic.u, ...q2, ...ic.u], tEnd, nOut, { rtol: 1e-10, atol: 1e-12, maxSteps: 25000 });
+    const s = dopri(f, [...ic.q, ...ic.u, ...q2, ...ic.u], tEnd, nOut, { rtol: 1e-9, atol: 1e-12, maxSteps: 25000 });
     t = s.t; truncated = !s.complete;
     A = s.y.map(r => [r.subarray(0, 6), r.subarray(6, 12)]); B = s.y.map(r => [r.subarray(12, 18), r.subarray(18, 24)]);
   } else {
@@ -1259,7 +1284,7 @@ function threeRun(a, v, tEnd, nOut) {
 const threeBody = {
   id: 'three-body-chaos',
   title: 'Planar three-body problem and sensitivity to initial conditions',
-  module: [1, 2], klass: 'I', domains: ['classical', 'space'],
+  module: [1, 2], klass: 'I', domains: ['classical', 'space'], heavy: true,
   keywords: ['three-body problem', 'three body problem', 'figure-eight orbit', 'figure eight', 'chenciner', 'three-body', 'three body', 'n-body', 'lyapunov exponent', 'chaos', 'chaotic', 'sensitivity to initial conditions', 'lagrange points', 'choreography', 'butterfly effect', 'gravitational dynamics'],
   summary: 'Three gravitating bodies in a plane, started on the Chenciner–Montgomery figure-eight choreography or the Lagrange equilateral solution, with conservation checks and the divergence of a perturbed twin trajectory.',
   background: [
@@ -1307,16 +1332,14 @@ const threeBody = {
     { text: 'A twin system is started a small distance δ₀ away in phase space. In chaotic motion the separation grows exponentially on average; the growth rate is the largest Lyapunov exponent. In regular motion it grows only as a power of time.', tex: '\\delta(t) \\simeq \\delta_0\\,e^{\\lambda t}' },
   ],
   solve(v, a) {
-    const tau = Math.sqrt(v.L ** 3 / (C.G * v.m)), tEnd = v.n_T * FIG8_T, r = threeRun(a, v, tEnd, 601), n = r.t.length, m = r.ic.m;
+    const tau = Math.sqrt(v.L ** 3 / (C.G * v.m)), tEnd = v.n_T * FIG8_T, r = threeRun(a, v, tEnd, 401), n = r.t.length, m = r.ic.m;
     const inv = r.A.map(s => threeInv(m, s[0], s[1], r.e2)), i0 = inv[0], Es = Math.abs(i0.E), Ls = N.sum(m);
     const dE = inv.map(x => (x.E - i0.E) / Es), dL = inv.map(x => (x.Lz - i0.Lz) / Ls), dP = inv.map(x => Math.hypot(x.px - i0.px, x.py - i0.py) / Ls);
     const sep = r.A.map((s, k) => { let d = 0; for (let j = 0; j < 6; j++) d += (s[0][j] - r.B[k][0][j]) ** 2 + (s[1][j] - r.B[k][1][j]) ** 2; return Math.sqrt(d); });
-    const ix = sep.map((_, k) => k).filter(k => k > 0 && sep[k] > 0 && sep[k] < 0.1);
-    const lam = ix.length > 5 ? slope(ix.map(k => r.t[k]), ix.map(k => Math.log(sep[k]))) : 0;
+    const gr = growthFit(r.t, sep), lam = gr.lam, noExp = 'Not exponential: the separation grows as a power of time';
     const rmin = N.minOf(inv.map(x => x.rmin)), growth = sep[n - 1] / sep[0];
-    const k1 = r.t.findIndex(t => t >= FIG8_T - 1e-9);
     const dist = (p, q) => { let d = 0; for (let j = 0; j < p.length; j++) d += (p[j] - q[j]) ** 2; return Math.sqrt(d); };
-    const ret = a.figure8 && a.equal && k1 > 0 ? dist(r.A[k1][0], r.A[0][0]) : NaN;
+    const one = a.figure8 && a.equal ? threeRun(a, v, FIG8_T, 2).A : null, ret = one && one.length > 1 ? dist(one[one.length - 1][0], one[0][0]) : NaN;
     const warnings = [];
     if (r.truncated) warnings.push('The adaptive integrator reached its step limit during a close encounter; the results cover only part of the requested time.');
     if (rmin < 0.01 && a.point) warnings.push('A very close encounter occurs. Point-mass results after such an encounter are extremely sensitive to rounding; consider softening.');
@@ -1331,9 +1354,11 @@ const threeBody = {
         scalar('E', 'Total energy', i0.E * C.G * v.m ** 2 / v.L, 'J'), scalar('L_z', 'Total angular momentum', i0.Lz * v.m * v.L ** 2 / tau, 'kg m^2/s'),
         scalar('dE', 'Largest relative energy error', N.maxOf(dE.map(Math.abs)), '1'), scalar('dL', 'Largest angular-momentum error (scaled)', N.maxOf(dL.map(Math.abs)), '1'), scalar('dP', 'Largest linear-momentum error (scaled)', N.maxOf(dP), '1'),
         scalar('r_min', 'Closest approach of any pair', rmin * v.L, 'm', { show: 'AU' }),
-        scalar('lambda', 'Finite-time Lyapunov exponent', lam / tau, '1/s', { show: '1/yr' }),
-        scalar('t_e', 'E-folding time of the twin separation', lam > 0 ? tau / lam : NaN, 's', { show: 'd', text: lam > 0 ? undefined : 'No growth detected' }),
-        scalar('t_e8', 'E-folding time in figure-eight periods', lam > 0 ? 1 / (lam * FIG8_T) : NaN, '1', { text: lam > 0 ? undefined : 'No growth detected' }),
+        scalar('law', 'Character of the divergence', gr.chaotic ? 1 : 0, '1', { text: GROWTH[gr.chaotic ? 1 : 0] }),
+        scalar('lambda', 'Finite-time Lyapunov exponent (slope of ln separation against time)', lam / tau, '1/s', { show: '1/yr', note: gr.chaotic ? undefined : 'the growth is not exponential, so this slope is not a true exponent' }),
+        scalar('t_e', 'E-folding time of the twin separation', gr.chaotic ? tau / lam : NaN, 's', { show: 'd', text: gr.chaotic ? undefined : noExp }),
+        scalar('t_e8', 'E-folding time in figure-eight periods', gr.chaotic ? 1 / (lam * FIG8_T) : NaN, '1', { text: gr.chaotic ? undefined : noExp }),
+        scalar('p_g', 'Power-law exponent of the separation growth', gr.power, '1'),
         scalar('growth', 'Growth factor of the twin separation', growth, '1'),
         scalar('ret', 'Distance from the starting configuration after one period (scaled)', ret, '1', { text: Number.isFinite(ret) ? undefined : 'Only defined for the equal-mass figure-eight' }),
       ],
@@ -1395,7 +1420,7 @@ const threeBody = {
   hazards: [{ hazard: 'Over-interpretation of a single trajectory', cause: 'Chaos amplifies rounding error beyond the predictability horizon', mitigation: 'Report ensembles and the e-folding time; trust individual trajectories only for a few e-folding times' }],
   standards: ['IEEE 754 (floating-point arithmetic)', 'IAU 2015 Resolution B3 (nominal solar and planetary conversion constants)'],
   limits: 'Planar Newtonian point masses (optionally softened). No collisions, tides, relativity or mass loss. Individual trajectories are meaningful only up to a few e-folding times of the divergence; the Lyapunov exponent reported is a finite-time estimate over the simulated interval.',
-  numerics: { method: 'Adaptive Dormand–Prince RK45 at relative tolerance 10⁻¹⁰ on the reference and twin systems together (or fixed-step fourth-order Yoshida)', order: 5, stability: 'Step limit of 25 000 guards against collapse of the step at a close encounter', resolution: 'n_step' },
+  numerics: { method: 'Adaptive Dormand–Prince RK45 at relative tolerance 10⁻⁹ on the reference and twin systems together (or fixed-step fourth-order Yoshida)', order: 5, stability: 'Step limit of 25 000 guards against collapse of the step at a close encounter', resolution: 'n_step' },
   optimise: { objective: 'lambda', sense: 'min', vars: ['mu_3'], note: 'With unequal masses switched on, the divergence rate is smallest near equal masses.' },
   inverse: { series: 'distances', fit: ['mu_3'] },
   extensions: ['Stability map of the figure-eight under mass and velocity perturbations', 'Restricted problem with Jacobi constant and Lagrange points', 'Hierarchical triples and the Kozai–Lidov mechanism in three dimensions'],
@@ -1567,8 +1592,8 @@ const pendRhs = (v, a) => {
   return (t, y) => { const d = !a.damped ? 0 : a.linear_damping ? 2 * v.zeta * w0 * y[1] : v.beta_q * y[1] * Math.abs(y[1]); return [y[1], -w0 * w0 * (a.exact_sin ? Math.sin(y[0]) : y[0]) - d, d * y[1]]; };
 };
 /** Period as twice the interval between the first two passages through the vertical, starting at rest at th0. */
-function pendPeriod(v, a, th0 = v.theta_0) {
-  const T0 = 2 * Math.PI / pendOmega(v, a), f = pendRhs(v, a), o = { rtol: 1e-11, atol: 1e-13 };
+function pendPeriod(v, a, th0 = v.theta_0, rtol = 1e-11) {
+  const T0 = 2 * Math.PI / pendOmega(v, a), f = pendRhs(v, a), o = { rtol, atol: 1e-13 };
   const q1 = toEvent(f, [th0, 0, 0], 60 * T0, y => y[0], y => y[1], 2, o);
   if (!q1.hit) return NaN;
   const q2 = toEvent(f, [Math.min(q1.yHit[0], 0), q1.yHit[1], 0], 60 * T0, y => -y[0], y => -y[1], 2, o);
@@ -1628,10 +1653,10 @@ const pendulum = {
   ],
   solve(v, a) {
     const w0 = pendOmega(v, a), T0 = 2 * Math.PI / w0, tEnd = v.n_per * T0, f = pendRhs(v, a);
-    const s = N.rk45(f, [v.theta_0, 0, 0], 0, tEnd, 801, { rtol: 1e-10, atol: 1e-12, maxSteps: 100000 }), n = s.t.length, th = s.y[0], om = s.y[1];
+    const s = dopri((t, y, d) => { const q = f(t, y); d[0] = q[0]; d[1] = q[1]; d[2] = q[2]; }, [v.theta_0, 0, 0], tEnd, 601, { rtol: 1e-9, atol: 1e-12, maxSteps: 100000 }), n = s.t.length, th = s.y.map(r => r[0]), om = s.y.map(r => r[1]), ds = s.y.map(r => r[2]);
     const pot = x => (a.exact_sin ? w0 * w0 * (1 - Math.cos(x)) : 0.5 * w0 * w0 * x * x), en = th.map((x, i) => 0.5 * om[i] ** 2 + pot(x)), e0 = en[0];
     const Iscale = (a.point_mass ? 1 : 1 / 3) * v.m * v.L ** 2;
-    const Tex = (a.exact_sin ? pendExact(v.theta_0) : 1) * T0, Tnum = pendPeriod(v, a);
+    const Tex = (a.exact_sin ? pendExact(v.theta_0) : 1) * T0, Tnum = pendPeriod(v, a, v.theta_0, 1e-9);
     const wmax = a.exact_sin ? 2 * w0 * Math.sin(v.theta_0 / 2) : w0 * v.theta_0;
     const tension = a.point_mass ? v.m * v.g + v.m * v.L * wmax ** 2 : v.m * v.g + v.m * (v.L / 2) * wmax ** 2;
     const amps = N.linspace(1, 179, 90), small = s.t.map(t => v.theta_0 * Math.cos(w0 * t) / DEG);
@@ -1659,7 +1684,7 @@ const pendulum = {
         line('energy', 'Mechanical energy', 'Time', 's', s.t, [{ label: 'Energy / initial energy', data: en.map(e => e / e0) }], 'Relative energy', '–'),
       ],
       anims: [motion('swing', 'Pendulum motion', fi.map(i => [[0, 0], [v.L * Math.sin(th[i]), -v.L * Math.cos(th[i])]]), fi.map(i => s.t[i]), { trails: true, links: [[0, 1]], labels: ['Pivot', a.point_mass ? 'Bob' : 'Rod tip'], bounds: [-1.1 * v.L, 1.1 * v.L, -1.1 * v.L, 1.1 * v.L], unit: 'm' })],
-      checks: [check('Energy balance', N.maxOf(en.map((e, i) => Math.abs(e0 - e - s.y[2][i]))) / e0, 1e-7, a.damped ? 'Energy lost against the integrated damping power' : 'Mechanical energy is conserved')],
+      checks: [check('Energy balance', N.maxOf(en.map((e, i) => Math.abs(e0 - e - ds[i]))) / e0, 1e-7, a.damped ? 'Energy lost against the integrated damping power' : 'Mechanical energy is conserved')],
       warnings,
     };
   },
@@ -1692,7 +1717,7 @@ const pendulum = {
     instruments: [{ name: 'Photogate timer at the lowest point', measures: 'Period', range: '0.1–20 s', resolution: '0.1 ms' }, { name: 'Rotary encoder', measures: 'Angle against time', range: '±180°', resolution: '0.1°, 1 kHz' }, { name: 'Steel tape and callipers', measures: 'Length to the centre of mass of the bob', range: '0–2 m', resolution: '0.5 mm' }],
     procedure: ['Measure the length from pivot to the centre of the bob.', 'Release from amplitudes of 5°, 10°, 20°, … up to 150°, timing the first few complete swings before damping reduces the amplitude appreciably.', 'Record the amplitude at the start and end of each timed interval and assign the period to the mean amplitude.', 'Plot T/T₀ against amplitude; extrapolate to zero amplitude to obtain T₀ and hence g = 4π²L/T₀².'],
     controls: ['Repeat with a second length to confirm T₀ ∝ √L', 'Repeat with a different bob mass of the same size to confirm independence of mass', 'Measure the decay of amplitude to correct the period for damping'],
-    signatures: ['Period independent of mass', 'T/T₀ = 1.0038 at 15°, 1.0174 at 30°, 1.0732 at 60°, 1.1803 at 90°', 'T₀ proportional to the square root of length'],
+    signatures: ['Period independent of mass', 'T/T₀ = 1.0043 at 15°, 1.0174 at 30°, 1.0732 at 60°, 1.1803 at 90°', 'T₀ proportional to the square root of length'],
     safety: ['Keep clear of the swing arc at large amplitudes', 'Secure the support against tipping', 'Check the suspension for wear before large-angle releases'],
   },
   falsify: ['A period that depends on the mass of the bob at fixed length and amplitude.', 'A period ratio at 90° amplitude differing from 1.1803 by more than the experimental uncertainty for a rigid, lightly damped pendulum.', 'A period that shortens as amplitude increases.'],
@@ -1700,7 +1725,7 @@ const pendulum = {
   hazards: [{ hazard: 'Impact from the bob', cause: 'Standing in the swing arc', mitigation: 'Mark and guard the swept area' }, { hazard: 'Suspension failure', cause: 'Worn string or pivot at large amplitude', mitigation: 'Inspect before use; apply a safety factor of at least 5 on the peak tension' }],
   standards: ['ISO 80000-3 (quantities and units — space and time)', 'ISO/IEC Guide 98-3 (uncertainty of measurement — guide to the expression of uncertainty in measurement)'],
   limits: 'Rigid pendulum in a plane with a fixed pivot. Amplitudes below 180°; the exact period refers to the undamped pendulum. Damping is idealised as purely viscous or purely quadratic. No string elasticity, pivot motion, buoyancy or added-mass corrections.',
-  numerics: { method: 'Adaptive Dormand–Prince RK45; exact period by the arithmetic–geometric mean; measured period from a Newton-located zero crossing', order: 5, stability: 'Step-size controlled to a relative tolerance of 10⁻¹⁰' },
+  numerics: { method: 'Adaptive Dormand–Prince RK45; exact period by the arithmetic–geometric mean; measured period from a Newton-located zero crossing', order: 5, stability: 'Step-size controlled to a relative tolerance of 10⁻⁹' },
   optimise: { objective: 'err_sa', sense: 'max', vars: ['theta_0'], note: 'The small-angle error is negative and grows in magnitude with amplitude; it vanishes as the amplitude tends to zero.' },
   inverse: { series: 'angle', fit: ['g', 'zeta'] },
   extensions: ['Periodically driven pendulum and the route to chaos', 'Kapitza pendulum with a vibrating pivot', 'Precision gravimetry corrections (Kater\'s reversible pendulum)'],
@@ -1774,10 +1799,10 @@ const doublePendulum = {
   solve(v, a) {
     const c = dpCoef(v, a), cj = a.frictionless ? 0 : v.c_j, acc = dpAccel(c, a, cj), en = dpEnergy(c, a), w0 = Math.sqrt(v.g / v.L_1);
     const f = (t, y, d) => { for (let o = 0; o < 8; o += 4) { d[o] = y[o + 2]; d[o + 1] = y[o + 3]; acc(y[o], y[o + 1], y[o + 2], y[o + 3], d, o + 2); } };
-    const s = dopri(f, [v.theta_1, v.theta_2, 0, 0, v.theta_1 + v.delta, v.theta_2, 0, 0], v.t_end, 801, { rtol: 1e-10, atol: 1e-12, maxSteps: 60000 }), n = s.t.length;
+    const s = dopri(f, [v.theta_1, v.theta_2, 0, 0, v.theta_1 + v.delta, v.theta_2, 0, 0], v.t_end, 601, { rtol: 1e-9, atol: 1e-12, maxSteps: 30000 }), n = s.t.length;
     const E = s.y.map(r => en(r[0], r[1], r[2], r[3])), Es = c.G1 + c.G2, dE = E.map(e => (e - E[0]) / Es);
     const sep = s.y.map(r => Math.sqrt((r[0] - r[4]) ** 2 + (r[1] - r[5]) ** 2 + ((r[2] - r[6]) ** 2 + (r[3] - r[7]) ** 2) / (w0 * w0)));
-    const ix = sep.map((_, k) => k).filter(k => k > 0 && sep[k] > 0 && sep[k] < 0.1), lam = ix.length > 5 ? slope(ix.map(k => s.t[k]), ix.map(k => Math.log(sep[k]))) : 0;
+    const gr = growthFit(s.t, sep), lam = gr.lam, noExp = 'Not exponential: the separation does not grow exponentially';
     const kf = s.y.findIndex(r => Math.abs(r[1]) > Math.PI || Math.abs(r[0]) > Math.PI), modes = dpModes(c);
     const ksat = sep.findIndex(x => x > 1), rise = N.maxOf(dE);
     const warnings = [];
@@ -1791,7 +1816,9 @@ const doublePendulum = {
         scalar('E', 'Initial mechanical energy above the hanging position', E[0], 'J'), scalar('dE', 'Largest energy error (fraction of the potential-energy scale)', N.maxOf(dE.map(Math.abs)), '1', { note: a.frictionless ? undefined : 'includes the energy removed by joint damping' }),
         scalar('omega_a', 'Lower normal-mode angular frequency', modes[0], '1/s'), scalar('omega_b', 'Upper normal-mode angular frequency', modes[1], '1/s'),
         scalar('T_a', 'Period of the lower normal mode', 2 * Math.PI / modes[0], 's'), scalar('T_b', 'Period of the upper normal mode', 2 * Math.PI / modes[1], 's'),
-        scalar('lambda', 'Finite-time Lyapunov exponent', lam, '1/s'), scalar('t_e', 'E-folding time of the twin separation', lam > 0 ? 1 / lam : NaN, 's', { text: lam > 0 ? undefined : 'No growth detected' }),
+        scalar('law', 'Character of the divergence', gr.chaotic ? 1 : 0, '1', { text: GROWTH[gr.chaotic ? 1 : 0] }),
+        scalar('lambda', 'Finite-time Lyapunov exponent (slope of ln separation against time)', lam, '1/s', { note: gr.chaotic ? undefined : 'the growth is not exponential, so this slope is not a true exponent' }),
+        scalar('t_e', 'E-folding time of the twin separation', gr.chaotic ? 1 / lam : NaN, 's', { text: gr.chaotic ? undefined : noExp }),
         scalar('growth', 'Growth factor of the twin separation', sep[n - 1] / sep[0], '1'),
         scalar('t_flip', 'Time of the first full rotation of an arm', kf >= 0 ? s.t[kf] : NaN, 's', { text: kf >= 0 ? undefined : 'Neither arm passes through the inverted position' }),
         scalar('t_pred', 'Predictability horizon (twin separation reaches 1 rad)', ksat > 0 ? s.t[ksat] : NaN, 's', { text: ksat > 0 ? undefined : 'Not reached within the simulated time' }),
@@ -1852,7 +1879,7 @@ const doublePendulum = {
   hazards: [{ hazard: 'Impact from the rotating lower arm', cause: 'Unpredictable full rotations', mitigation: 'Transparent guard and a marked exclusion circle' }, { hazard: 'Fastener loosening', cause: 'Reversing loads', mitigation: 'Thread-lock and inspection before use' }],
   standards: ['ISO 12100 (safety of machinery — general principles for design)', 'IEEE 754 (floating-point arithmetic)'],
   limits: 'Planar motion of two rigid arms with ideal pivots. Chaotic trajectories are individually meaningful only for a few e-folding times; the Lyapunov exponent is a finite-time estimate from one pair of trajectories. No aerodynamic drag, bearing stiction or arm flexibility.',
-  numerics: { method: 'Adaptive Dormand–Prince RK45 at relative tolerance 10⁻¹⁰, reference and twin integrated together', order: 5, stability: 'Energy error monitored as the accuracy indicator' },
+  numerics: { method: 'Adaptive Dormand–Prince RK45 at relative tolerance 10⁻⁹, reference and twin integrated together', order: 5, stability: 'Energy error monitored as the accuracy indicator' },
   optimise: { objective: 'lambda', sense: 'max', vars: ['theta_1'], note: 'The divergence rate rises steeply once the release energy allows the lower arm to rotate.' },
   inverse: { series: 'angles', fit: ['L_2', 'm_2'] },
   extensions: ['Poincaré sections and flip-time maps over the plane of initial angles', 'Driven double pendulum and control at the inverted position', 'Triple pendulum and chains'],
@@ -1890,7 +1917,8 @@ function sdofTime(v, a, tEnd, nOut) {
   const m = sdofMass(v, a), w = 2 * Math.PI * v.f_d, Fc = a.force_excited ? v.F_0 : (a.viscous ? v.c * w * v.Y_b : 0), Fs = a.force_excited ? 0 : v.k * v.Y_b;
   const vs = 1e-3 * (Math.sqrt(v.k / m) * Math.abs(v.x_0) + Math.abs(v.v_0) + Math.hypot(Fc, Fs) / Math.sqrt(v.k * m)) + 1e-9;
   const f = (t, y) => [y[1], (Fc * Math.cos(w * t) + Fs * Math.sin(w * t) - v.k * y[0] - (a.linear ? 0 : v.k_3 * y[0] ** 3) - (a.viscous ? v.c * y[1] : v.mu_f * m * G0 * Math.tanh(y[1] / vs))) / m];
-  return { m, w, Fc, Fs, f, run: () => N.rk45(f, [v.x_0, v.v_0], 0, tEnd, nOut, { rtol: 1e-9, atol: 1e-13, maxSteps: 40000 }) };
+  const run = () => { const s = dopri((t, y, d) => { const q = f(t, y); d[0] = q[0]; d[1] = q[1]; }, [v.x_0, v.v_0], tEnd, nOut, { rtol: 1e-9, atol: 1e-13, maxSteps: 12000 }); return { t: s.t, y: [s.y.map(r => r[0]), s.y.map(r => r[1])] }; };
+  return { m, w, Fc, Fs, f, run };
 }
 const SDOF_ON = { linear: true, viscous: true, force_excited: true, massless_spring: true };
 const sdof = {
@@ -1965,7 +1993,7 @@ const sdof = {
     if (exact) { tt = N.linspace(0, tEnd, 1201); xx = tt.map(cf.x); }
     else { const s = tm.run(); tt = s.t; xx = s.y[0]; if (tt.length < 1201) warnings.push('The time integration stopped early at its step limit; the response is shown only up to that time.'); }
     const X = sdofAmp(v, a, w), dk = v.k - m * w * w, cw = a.viscous ? v.c * w : 0, input = a.force_excited ? v.F_0 / v.k : v.Y_b;
-    const TR = Math.sqrt((v.k ** 2 + cw * cw) / (dk * dk + cw * cw || 1e-300)), phase = Math.atan2(cw, dk);
+    const TR = Math.sqrt((v.k ** 2 + cw * cw) / (dk * dk + cw * cw || 1e-300)), phase = Math.atan2(cw, dk) - (a.force_excited ? 0 : Math.atan2(cw, v.k));
     const under = z < 1, wd = under ? wn * Math.sqrt(1 - z * z) : NaN, dec = under ? 2 * Math.PI * z / Math.sqrt(1 - z * z) : NaN, peak = z < Math.SQRT1_2;
     const na = 'Not oscillatory: damping is at or above critical', nv = 'Not defined without viscous damping';
     const fr = N.linspace(0.05, 3, 120), amps = fr.map(q => sdofAmp(v, a, q * wn));
@@ -1985,7 +2013,7 @@ const sdof = {
         scalar('t_s', 'Settling time to 2 % (envelope)', a.viscous ? 4 / (z * wn) : NaN, 's', { text: a.viscous ? undefined : nv }),
         scalar('r', 'Frequency ratio ω/ω_n', r, '1'), scalar('x_st', a.force_excited ? 'Static deflection F₀/k' : 'Base amplitude', input, 'm', { show: 'mm' }),
         scalar('X', 'Steady-state displacement amplitude', X[0], 'm', { show: 'mm' }), scalar('M_f', a.force_excited ? 'Dynamic magnification X/(F₀/k)' : 'Displacement ratio X/Y', input > 0 ? X[0] / input : 0, '1'),
-        scalar('phi', 'Phase lag of the response behind the force', phase, 'rad', { show: 'deg' }),
+        scalar('phi', a.force_excited ? 'Phase lag of the response behind the force (linear viscous value)' : 'Phase lag of the mass behind the base motion (linear viscous value)', phase, 'rad', { show: 'deg' }),
         scalar('TR', 'Transmissibility (linear viscous value)', TR, '1'), scalar('F_tr', a.force_excited ? 'Force amplitude transmitted to the support' : 'Force amplitude in the mount', a.force_excited ? TR * v.F_0 : m * w * w * X[0], 'N'),
         scalar('f_res', 'Frequency of greatest displacement response', a.viscous && peak ? wn * Math.sqrt(1 - 2 * z * z) / (2 * Math.PI) : NaN, 'Hz', { text: !a.viscous ? nv : peak ? undefined : 'No resonance peak: damping ratio above 0.707' }),
         scalar('M_max', 'Peak dynamic magnification', a.viscous && peak ? 1 / (2 * z * Math.sqrt(1 - z * z)) : NaN, '1', { text: !a.viscous ? nv : peak ? undefined : 'No resonance peak: damping ratio above 0.707' }),
@@ -1995,7 +2023,7 @@ const sdof = {
         line('response', 'Displacement against time', 'Time', 's', tt, [{ label: 'Displacement', data: xx.map(x => x * 1000) }, ...(exact ? [{ label: 'Steady-state part', data: tt.map(t => cf.steady(t) * 1000), dash: true }] : [])], 'Displacement', 'mm'),
         line('resonance', 'Steady-state amplitude against forcing frequency', 'Forcing frequency', 'Hz', fr.map(q => q * wn / (2 * Math.PI)), [{ label: a.linear ? 'Amplitude' : 'Amplitude, upper branch', data: amps.map(q => q[0] * 1000) }, ...(a.linear ? [] : [{ label: 'Amplitude, lower branch', data: amps.map(q => q[1] * 1000), dash: true }])], 'Amplitude', 'mm'),
         line('transmissibility', 'Transmissibility against frequency ratio', 'Frequency ratio ω/ω_n', '–', fr, [{ label: `ζ = ${lab(z)}`, data: fr.map(lin) }, { label: 'Unity', data: fr.map(() => 1), dash: true }], 'Transmissibility', '–', { logy: true, note: 'Isolation (TR < 1) requires a frequency ratio above √2.' }),
-        line('phase', 'Phase lag against frequency ratio', 'Frequency ratio ω/ω_n', '–', fr, [{ label: 'Phase lag', data: fr.map(q => Math.atan2(2 * z * q, 1 - q * q) / DEG) }], 'Phase lag', 'deg'),
+        line('phase', 'Phase lag against frequency ratio', 'Frequency ratio ω/ω_n', '–', fr, [{ label: 'Phase lag', data: fr.map(q => (Math.atan2(2 * z * q, 1 - q * q) - (a.force_excited ? 0 : Math.atan2(2 * z * q, 1))) / DEG) }], 'Phase lag', 'deg'),
       ],
       checks: [
         check('Steady-state force balance', exact && forced ? (() => { const Fa = Math.hypot(tm.Fc, tm.Fs); return (X[0] * Math.sqrt(dk * dk + cw * cw) - Fa) / Fa; })() : 0, 1e-10, 'Amplitude times dynamic stiffness against the forcing amplitude'),
@@ -2156,7 +2184,7 @@ const collision = {
         scalar('v_1x', 'Body 1 after impact: velocity along the approach direction', c.v1[0], 'm/s'), scalar('v_1y', 'Body 1 after impact: transverse velocity', c.v1[1], 'm/s'),
         scalar('v_2x', 'Body 2 after impact: velocity along the approach direction', c.v2[0], 'm/s'), scalar('v_2y', 'Body 2 after impact: transverse velocity', c.v2[1], 'm/s'),
         scalar('w_1', 'Speed of body 1 after impact', sp(c.v1), 'm/s'), scalar('w_2', 'Speed of body 2 after impact', sp(c.v2), 'm/s'),
-        scalar('th_1', 'Deflection of body 1 from the approach direction', Math.atan2(c.v1[1], c.v1[0]), 'rad', { show: 'deg' }), scalar('th_2', 'Direction of body 2 after impact', Math.atan2(c.v2[1], c.v2[0]), 'rad', { show: 'deg' }),
+        scalar('th_1', 'Deflection of body 1 from the approach direction', Math.atan2(c.v1[1] || 0, c.v1[0]), 'rad', { show: 'deg' }), scalar('th_2', 'Direction of body 2 after impact', Math.atan2(c.v2[1] || 0, c.v2[0]), 'rad', { show: 'deg' }),
         scalar('v_n', 'Closing speed along the line of centres', c.vn, 'm/s'), scalar('e_eff', 'Coefficient of restitution used', c.e, '1'),
         scalar('J', 'Impulse exchanged', c.J, 'N s'), scalar('v_cm', c.wall ? 'Velocity of the wall' : 'Velocity of the centre of mass', vcm, 'm/s'),
         scalar('KE_0', c.wall ? 'Kinetic energy before impact (wall frame)' : 'Kinetic energy before impact', c.ke0, 'J'), scalar('dE', 'Kinetic energy dissipated', c.dE, 'J'),
@@ -2245,7 +2273,7 @@ function cannonOrbit(v, a, vLaunch = v.v_0) {
   return { r0, mu, om, vh, vr, vi, eps, hA, ecc, p, bound, rp, ra, sma, outcome, sweep, vc: Math.sqrt(mu / r0), T: bound ? 2 * Math.PI * Math.sqrt(sma ** 3 / mu) : NaN };
 }
 /** Integrate one shot. Round Earth: state [x, y, vx, vy, swept angle], launch from (0, r0). Flat Earth: y is height. */
-function cannonShot(v, a, vLaunch, nOut, rtol) {
+function cannonShot(v, a, vLaunch, nOut, rtol, maxSteps = 20000) {
   const o = cannonOrbit(v, a, vLaunch), { r0, mu } = o, R = v.R_p, gs = mu / (R * R), kd = a.vacuum ? 0 : 1 / (2 * v.beta), lim = 6 * r0;
   if (a.round_earth) {
     const f = (t, s) => {
@@ -2253,12 +2281,12 @@ function cannonShot(v, a, vLaunch, nOut, rtol) {
       return [s[2], s[3], g * s[0] - q * ux, g * s[1] - q * uy, (s[1] * s[2] - s[0] * s[3]) / r2];
     };
     const tMax = Math.min(o.bound ? 1.05 * o.T : Infinity, 60 * r0 / o.vc);
-    const s = toEvent(f, [0, r0, o.vh, o.vr, 0], tMax, y => Math.min(Math.hypot(y[0], y[1]) - R, 2 * Math.PI - y[4], lim - Math.hypot(y[0], y[1])), null, nOut, { rtol, atol: 1e-6, maxSteps: 40000 });
+    const s = toEvent(f, [0, r0, o.vh, o.vr, 0], tMax, y => { const r = Math.hypot(y[0], y[1]); return Math.min(r / R - 1, 1 - y[4] / (2 * Math.PI), 1 - r / lim); }, null, nOut, { rtol, atol: 1e-6, maxSteps });
     const yf = s.yHit, rf = Math.hypot(yf[0], yf[1]), hit = s.hit && rf - R < 1e-6 * R;
     return { o, s, yf, hit, orbit: s.hit && yf[4] >= 2 * Math.PI * (1 - 1e-9), escaped: s.hit && rf >= lim * (1 - 1e-9), x: s.y[0], y: s.y[1], range: hit ? yf[4] * R : NaN, tf: s.tHit, vf: Math.hypot(yf[2], yf[3]) };
   }
   const f = (t, s) => { const q = kd ? kd * v.rho_0 * Math.exp(-Math.max(s[1], 0) / v.H_a) * Math.hypot(s[2], s[3]) : 0; return [s[2], s[3], -q * s[2], -gs - q * s[3], 0]; };
-  const tv = (o.vr + Math.sqrt(o.vr ** 2 + 2 * gs * v.h_m)) / gs, s = toEvent(f, [0, v.h_m, o.vh, o.vr, 0], 50 * tv + 100, y => y[1], y => y[3], nOut, { rtol, atol: 1e-6, maxSteps: 40000 }), yf = s.yHit;
+  const tv = (o.vr + Math.sqrt(o.vr ** 2 + 2 * gs * v.h_m)) / gs, s = toEvent(f, [0, v.h_m, o.vh, o.vr, 0], 50 * tv + 100, y => y[1], y => y[3], nOut, { rtol, atol: 1e-6, maxSteps }), yf = s.yHit;
   return { o, s, yf, hit: s.hit, orbit: false, escaped: false, x: s.y[0], y: s.y[1], range: s.hit ? yf[0] : NaN, tf: s.tHit, vf: Math.hypot(yf[2], yf[3]) };
 }
 const CANNON_OUT = ['Falls back to the surface', 'Circular orbit', 'Elliptical orbit', 'Escapes: parabolic or hyperbolic trajectory'];
@@ -2293,18 +2321,22 @@ const cannonball = {
     asm('non_rotating', 'The planet does not rotate.', { why: 'Simplest statement of the argument', alt: 'The cannon is at the equator firing east: the ground speed of the rotating planet adds to the muzzle speed.' }),
     asm('horizontal', 'The cannon fires exactly horizontally.', { why: 'Newton\'s construction', alt: 'The barrel is elevated by the stated angle.' }),
   ],
-  symbols: { x: ['Position, horizontal component', 'm'], y: ['Position, vertical component (height above flat ground)', 'm'], t: ['Time', 's'], r: ['Distance from the planet centre', 'm'], r_0: ['Launch distance from the centre', 'm'], v: ['Speed', 'm/s'], v_x: ['Velocity, horizontal component', 'm/s'], v_i: ['Launch speed in the non-rotating frame', 'm/s'], v_c: ['Circular speed at the launch point', 'm/s'], v_e: ['Escape speed at the launch point', 'm/s'], v_min: ['Least horizontal speed that clears the planet', 'm/s'], eps: ['Specific orbital energy', 'J/kg'], h_a: ['Specific angular momentum', 'm^2/s'], a_sm: ['Semi-major axis', 'm'], ecc: ['Eccentricity', '1'], r_p: ['Periapsis distance', 'm'], g_s: ['Surface gravitational acceleration', 'm/s^2'], rho: ['Air density', 'kg/m^3'], x_R: ['Range on flat ground', 'm'] },
+  symbols: { x: ['Position, horizontal component', 'm'], y: ['Position, vertical component (height above flat ground)', 'm'], t: ['Time', 's'], r: ['Distance from the planet centre', 'm'], r_0: ['Launch distance from the centre', 'm'], v: ['Speed', 'm/s'], v_x: ['Velocity, horizontal component', 'm/s'], v_i: ['Launch speed in the non-rotating frame', 'm/s'], v_h: ['Horizontal launch velocity in the non-rotating frame', 'm/s'], v_v: ['Vertical launch velocity', 'm/s'], v_c: ['Circular speed at the launch point', 'm/s'], v_e: ['Escape speed at the launch point', 'm/s'], v_min: ['Least horizontal speed that clears the planet', 'm/s'], eps: ['Specific orbital energy', 'J/kg'], h_a: ['Specific angular momentum', 'm^2/s'], a_sm: ['Semi-major axis', 'm'], ecc: ['Eccentricity', '1'], r_p: ['Periapsis distance', 'm'], g_s: ['Surface gravitational acceleration', 'm/s^2'], rho: ['Air density', 'kg/m^3'], x_R: ['Range on flat ground', 'm'] },
   equations: a => {
-    const drag = c => (a.vacuum ? '' : ` - rho*v*${c}/(2*beta)`), el = a.horizontal ? '' : '*cos(elev)';
+    const drag = c => (a.vacuum ? '' : ` - rho*v*${c}/(2*beta)`), spin = a.non_rotating ? '' : ' + 2*pi*r_0/T_rot';
     const common = [
       eq('r0', 'Launch distance from the centre', 'r_0', 'R_p + h_m', { kind: 'definition' }),
-      a.non_rotating ? eq('vi', 'Launch speed', 'v_i', 'v_0', { kind: 'definition', needs: ['non_rotating'] }) : eq('vi', 'Horizontal launch speed in the non-rotating frame', 'v_i', `v_0${el} + 2*pi*r_0/T_rot`, { kind: 'derived', origin: 'Galilean addition of the ground speed at the equator' }),
+      ...(a.horizontal ? [eq('vi', 'Launch speed in the non-rotating frame', 'v_i', `v_0${spin}`, { kind: a.non_rotating ? 'definition' : 'derived', origin: a.non_rotating ? undefined : 'Galilean addition of the ground speed at the equator', needs: ['horizontal'] })] : [
+        eq('vh', 'Horizontal launch velocity in the non-rotating frame', 'v_h', `v_0*cos(elev)${spin}`, { kind: 'derived', origin: a.non_rotating ? 'Resolution of the muzzle velocity' : 'Resolution of the muzzle velocity plus the ground speed at the equator' }),
+        eq('vv', 'Vertical launch velocity', 'v_v', 'v_0*sin(elev)', { kind: 'derived', origin: 'Resolution of the muzzle velocity' }),
+        eq('vi', 'Launch speed in the non-rotating frame', 'v_i', 'sqrt(v_h^2 + v_v^2)', { kind: 'definition' }),
+      ]),
       ...(a.vacuum ? [] : [eq('rho', 'Air density', 'rho', a.round_earth ? 'rho_0*exp(-(r - R_p)/H_a)' : 'rho_0*exp(-y/H_a)', { kind: 'closure', origin: 'Isothermal atmosphere' })]),
     ];
     if (!a.round_earth) return [...common,
       eq('gs', 'Surface gravity', 'g_s', 'GM/R_p^2', { kind: 'law', origin: 'Newton\'s law of gravitation at the surface' }),
       eq('my', 'Vertical motion', 'd2(y,t)', `-g_s${drag('d(y,t)')}`, { kind: 'law', origin: 'Newton\'s second law in a uniform field' }),
-      ...(a.vacuum ? [eq('range', 'Range of a horizontal shot', 'x_R', 'v_i*sqrt(2*h_m/g_s)', { kind: 'derived', origin: 'Galileo\'s parabola: always finite' })] : [eq('mx', 'Horizontal motion', 'd2(x,t)', '-rho*v*d(x,t)/(2*beta)', { kind: 'law', origin: 'Newton\'s second law with quadratic drag' })]),
+      ...(a.vacuum ? [eq('range', 'Range of a horizontal shot', 'x_R', 'v_i*sqrt(2*h_m/g_s)', { kind: 'derived', origin: 'Galileo\'s parabola: always finite', note: 'For an elevated barrel the time of flight is longer; the range remains finite.' })] : [eq('mx', 'Horizontal motion', 'd2(x,t)', '-rho*v*d(x,t)/(2*beta)', { kind: 'law', origin: 'Newton\'s second law with quadratic drag' })]),
     ];
     return [...common,
       eq('mx', 'Equation of motion', 'd2(x,t)', `-GM*x/r^3${drag('v_x')}`, { kind: 'law', origin: 'Newton\'s second law with universal gravitation', note: 'Holds for each Cartesian component.' }),
@@ -2312,7 +2344,7 @@ const cannonball = {
       eq('ve', 'Escape speed', 'v_e', 'sqrt(2*GM/r_0)', { kind: 'derived', origin: 'Zero total energy' }),
       eq('vmin', 'Least speed that clears the planet', 'v_min', 'sqrt(2*GM*R_p/(r_0*(R_p + r_0)))', { kind: 'derived', origin: 'Ellipse with apoapsis at the cannon and periapsis grazing the surface' }),
       eq('en', 'Specific orbital energy', 'eps', 'v_i^2/2 - GM/r_0', { kind: 'law', origin: 'Conservation of energy' }),
-      eq('am', 'Specific angular momentum', 'h_a', `r_0*v_i${a.horizontal || !a.non_rotating ? '' : '*cos(elev)'}`, { kind: 'law', origin: 'Conservation of angular momentum' }),
+      eq('am', 'Specific angular momentum', 'h_a', a.horizontal ? 'r_0*v_i' : 'r_0*v_h', { kind: 'law', origin: 'Conservation of angular momentum' }),
       eq('sma', 'Semi-major axis', 'a_sm', '-GM/(2*eps)', { kind: 'derived', origin: 'Energy of a Kepler orbit' }),
       eq('ecc', 'Eccentricity', 'ecc', 'sqrt(1 + 2*eps*h_a^2/GM^2)', { kind: 'derived', origin: 'Geometry of the conic' }),
       eq('rp', 'Periapsis distance', 'r_p', 'h_a^2/(GM*(1 + ecc))', { kind: 'derived', origin: 'Orbit equation; the shot lands if this is less than the planet radius' }),
@@ -2334,9 +2366,9 @@ const cannonball = {
     const outcome = !a.round_earth ? 0 : exact ? o.outcome : shot.hit ? 0 : o.outcome === 0 ? 2 : o.outcome;
     // family of shots at fixed multiples of the circular speed (speeds in the non-rotating frame)
     const ks = [0.4, 0.6, 0.8, vmin / o.vc, 1, 1.2, Math.SQRT2], spin = o.om * r0;
-    const fam = ks.map(k => cannonShot(v, a, Math.max((k * o.vc - spin) / Math.cos(a.horizontal ? 0 : v.elev), 1), 121, 1e-8));
+    const fam = ks.map(k => cannonShot(v, a, Math.max((k * o.vc - spin) / Math.cos(a.horizontal ? 0 : v.elev), 1), 121, 1e-7, 6000));
     const lbl = k => (Math.abs(k - vmin / o.vc) < 1e-12 ? 'grazing speed' : Math.abs(k - Math.SQRT2) < 1e-12 ? 'escape speed (√2 v_c)' : k === 1 ? 'circular speed v_c' : `${k} v_c`);
-    const yOff = a.round_earth ? 0 : R, ring = circlePts(R, 181), top = a.round_earth ? null : N.linspace(-0.05, 1.05, 2).map(u => u * N.maxOf(fam.map(q => N.maxOf(q.x))));
+    const ring = circlePts(R, 181), top = a.round_earth ? null : N.linspace(-0.05, 1.05, 2).map(u => u * N.maxOf(fam.map(q => N.maxOf(q.x))));
     const paths = [
       a.round_earth ? { label: 'Planet surface', x: ring.map(p => p[0]), y: ring.map(p => p[1]), z: ring.map(() => 0) } : { label: 'Flat ground', x: top, y: top.map(() => 0), z: top.map(() => 0) },
       ...fam.map((q, i) => ({ label: `Shot at ${lbl(ks[i])}`, x: q.x, y: q.y, z: q.x.map(() => 0) })),
@@ -2350,7 +2382,7 @@ const cannonball = {
     if (!a.round_earth) warnings.push('On flat ground with uniform gravity every shot lands: orbiting depends on the curvature of the Earth.');
     if (a.round_earth && outcome === 2 && o.ra > 6 * r0) warnings.push('The orbit reaches beyond six launch radii; the plotted path is cut off there.');
     if (v.v_0 > 0.1 * C.c) warnings.push('The speed is a significant fraction of the speed of light; Newtonian mechanics is no longer adequate.');
-    const none = t => ({ text: t });
+    const none = t => ({ text: t }), far = exact && outcome === 0 && !shot.hit && Number.isFinite(o.sweep);
     const fs = every(s.t.length, 200), fi = s.t.map((_, i) => i).filter(i => i % fs === 0), ext = 1.1 * Math.max(N.maxOf(shot.x.map(Math.abs)), N.maxOf(shot.y.map(Math.abs)), a.round_earth ? r0 : v.h_m);
     return {
       scalars: [
@@ -2364,9 +2396,9 @@ const cannonball = {
         scalar('r_p', 'Lowest point of the conic (from the centre)', a.round_earth ? o.rp : NaN, 'm', { show: 'km', ...(a.round_earth ? {} : none('Not an orbit')) }),
         scalar('r_a', 'Highest point of the conic (from the centre)', a.round_earth && o.bound ? o.ra : NaN, 'm', { show: 'km', ...(a.round_earth && o.bound ? {} : none(a.round_earth ? 'None: the ball escapes' : 'Not an orbit')) }),
         scalar('T_orb', 'Orbital period', outcome === 1 || outcome === 2 ? o.T : NaN, 's', { show: 'min', ...(outcome === 1 || outcome === 2 ? {} : none(outcome === 3 ? 'None: the ball escapes' : 'None: the ball lands')) }),
-        scalar('s_R', 'Distance along the ground to the point of impact', shot.hit ? shot.range : NaN, 'm', { show: 'km', ...(shot.hit ? {} : none('The ball does not land')) }),
-        scalar('t_f', 'Time of flight to impact', shot.hit ? shot.tf : NaN, 's', { show: 'min', ...(shot.hit ? {} : none('The ball does not land')) }),
-        scalar('v_f', 'Speed at impact', shot.hit ? shot.vf : NaN, 'm/s', { show: 'km/s', ...(shot.hit ? {} : none('The ball does not land')) }),
+        scalar('s_R', 'Distance along the ground to the point of impact', shot.hit ? shot.range : far ? o.sweep * R : NaN, 'm', { show: 'km', ...(shot.hit ? {} : far ? { note: 'from the conic section; the impact lies beyond the plotted region' } : none('The ball does not land')) }),
+        scalar('t_f', 'Time of flight to impact', shot.hit ? shot.tf : NaN, 's', { show: 'min', ...(shot.hit ? {} : none(far ? 'The impact lies beyond the simulated region' : 'The ball does not land')) }),
+        scalar('v_f', 'Speed at impact', shot.hit ? shot.vf : far ? Math.sqrt(2 * (o.eps + o.mu / R)) : NaN, 'm/s', { show: 'km/s', ...(shot.hit || far ? {} : none('The ball does not land')) }),
         scalar('drop', 'Fall below the tangent in the first second', 0.5 * o.mu / (r0 * r0), 'm'), scalar('curve', 'Drop of the surface below the tangent over one second of flight at circular speed', o.vc ** 2 / (2 * r0), 'm'),
       ],
       series: [
@@ -2375,7 +2407,7 @@ const cannonball = {
         line('range-speed', 'Ground range against launch speed (horizontal shot, no air)', 'Launch speed', 'km/s', vs.map(q => q / 1000), [{ label: 'Distance to impact', data: rng }], 'Ground range', 'km', { note: a.round_earth ? 'The curve ends at the grazing speed: faster shots never land.' : 'On flat ground the range grows without limit but is always finite.' }),
       ],
       anims: [motion('shot', 'Flight of the cannonball', fi.map(i => [[shot.x[i], shot.y[i]]]), fi.map(i => s.t[i]), { trails: true, labels: ['Cannonball'], bounds: a.round_earth ? [-ext, ext, -ext, ext] : [0, ext, 0, ext], unit: 'm', backdrop: a.round_earth ? { circle: [0, 0, R] } : undefined })],
-      paths: [path3d('family', 'Family of shots at increasing speed', paths.map(p => ({ ...p, y: p.y.map(q => q + (p.label === 'Flat ground' ? 0 : 0) * yOff) })), { equal: true, unit: 'm' })],
+      paths: [path3d('family', 'Family of shots at increasing speed', paths, { equal: true, unit: 'm' })],
       checks: [
         a.vacuum ? check('Energy conservation along the path', N.maxOf(dE.map(Math.abs)), 1e-7, 'Largest relative change of specific energy') : check('Energy never increases', Math.max(N.maxOf(dE), 0), 1e-7, 'Drag can only remove mechanical energy'),
         check('Falling matches the curvature at circular speed', (0.5 * o.mu / (r0 * r0) - o.vc ** 2 / (2 * r0)) / (0.5 * o.mu / (r0 * r0)), 1e-12, 'Newton\'s geometric condition for an orbit'),
@@ -2393,7 +2425,7 @@ const cannonball = {
       bench('Sub-orbital shot: integrated range angle vs conic-section value', slow.yf[4], sl.sweep, 'True-anomaly difference between apoapsis and the surface crossing', 1e-8),
       bench('Grazing speed places the periapsis on the surface', cannonOrbit(v, CANNON_ON, vmin).rp, v.R_p, 'v_min = √(2GM·R/(r₀(R + r₀)))', 1e-10),
       bench('Flat-ground range vs Galileo\'s parabola', flat.range, 2000 * Math.sqrt(2 * v.h_m / gs), 'x = v√(2h/g)', 1e-9),
-      bench('Circular speed at the Earth\'s surface', Math.sqrt(E.GM / E.radius), 7905, 'About 7.9 km/s (Bate, Mueller & White)', 1e-3),
+      bench('Circular speed at the Earth\'s surface', Math.sqrt(E.GM / E.radius), 7910, 'About 7.91 km/s at the mean radius', 1e-3),
       bench('Escape speed from the Earth\'s surface', Math.sqrt(2 * E.GM / E.radius), 11186, 'About 11.2 km/s', 1e-3),
     ];
   },
@@ -2453,6 +2485,7 @@ function galileoBodies(v, a) {
 /** Fall from rest through height h: closed form in a uniform field, numerical integration otherwise. */
 function galileoFall(b, v, a, numeric = false) {
   const h = v.h_d;
+  if (!(b.g0 > 0)) return { t: NaN, vf: 0, vt: 0, floats: true, y: () => h, u: () => 0 };
   if (a.uniform_g && !numeric) {
     if (b.k === 0) { const t = Math.sqrt(2 * h / b.g0); return { t, vf: b.g0 * t, vt: Infinity, y: s => Math.max(h - 0.5 * b.g0 * s * s, 0), u: s => b.g0 * Math.min(s, t) }; }
     const vt = Math.sqrt(b.g0 / b.k), u = b.g0 * h / (vt * vt), root = Math.sqrt(1 - Math.exp(-2 * u)), t = vt / b.g0 * (u + Math.log(1 + root));
@@ -2520,27 +2553,29 @@ const galileo = {
   ],
   solve(v, a) {
     const gb = galileoBodies(v, a), falls = gb.bodies.map(b => galileoFall(b, v, a)), [f1, f2, fp] = falls, warnings = [];
-    const tvac = Math.sqrt(2 * v.h_d / v.g), tmax = N.maxOf(falls.map(f => f.t)), tmin = N.minOf(falls.map(f => f.t)), ts = N.linspace(0, tmax, 201);
+    const tfin = falls.map(f => f.t).filter(Number.isFinite), tvac = Math.sqrt(2 * v.h_d / v.g), tmax = N.maxOf(tfin), tmin = N.minOf(tfin), ts = N.linspace(0, tmax, 201);
+    const fl = f2.floats ? { text: 'The light body is lighter than the air it displaces and does not fall' } : {};
     const tiedSlower = fp.t > f1.t * (1 + 1e-12), tiedFaster = fp.t < f1.t * (1 - 1e-12), heavyFirst = f1.t < f2.t * (1 - 1e-12);
     const verdict = !tiedSlower && !tiedFaster ? 'All three land together: the tied pair is neither faster nor slower than the heavy body, exactly as the reductio requires.'
       : tiedSlower ? `The tied pair lands ${lab((fp.t - f1.t) * 1000, 'ms')} after the heavy body: it is slower, not faster, although it is heavier. Weight alone does not decide the speed of fall.`
         : `The tied pair lands ${lab((f1.t - fp.t) * 1000, 'ms')} before the heavy body.`;
     if (!a.equivalence) warnings.push('The equivalence principle has been switched off as a counterfactual. No such difference between gravitational and inertial mass has been observed; the results are conditional on the invented value.');
     if (a.drag && v.h_d > 1000) warnings.push('Over a drop this high the air density changes appreciably; a constant density is assumed.');
+    if (f2.floats) warnings.push('With buoyancy included the light body weighs less than the air it displaces, so it does not fall at all.');
     if (v.m_2 > v.m_1) warnings.push('The body labelled light is heavier than the one labelled heavy; the labels follow the inputs.');
     const fin = x => (Number.isFinite(x) ? x : NaN), nov = a.drag ? {} : { text: 'None: there is no drag in vacuum' };
     const fs = N.linspace(0, tmax, 81);
     return {
       scalars: [
-        scalar('t_1', 'Time of fall of the heavy body', f1.t, 's'), scalar('t_2', 'Time of fall of the light body', f2.t, 's'), scalar('t_p', 'Time of fall of the two bodies tied together', fp.t, 's'),
-        scalar('t_vac', 'Time of fall in vacuum', tvac, 's'), scalar('dt_21', 'Lag of the light body behind the heavy one', f2.t - f1.t, 's', { show: 'ms' }), scalar('dt_p1', 'Lag of the tied pair behind the heavy body', fp.t - f1.t, 's', { show: 'ms' }),
+        scalar('t_1', 'Time of fall of the heavy body', f1.t, 's'), scalar('t_2', 'Time of fall of the light body', f2.t, 's', fl), scalar('t_p', 'Time of fall of the two bodies tied together', fp.t, 's'),
+        scalar('t_vac', 'Time of fall in vacuum', tvac, 's'), scalar('dt_21', 'Lag of the light body behind the heavy one', f2.t - f1.t, 's', { show: 'ms', ...fl }), scalar('dt_p1', 'Lag of the tied pair behind the heavy body', fp.t - f1.t, 's', { show: 'ms' }),
         scalar('gap', 'Height of the light body when the heavy one lands', f2.y(f1.t), 'm'),
         scalar('v_1', 'Impact speed of the heavy body', f1.vf, 'm/s'), scalar('v_2', 'Impact speed of the light body', f2.vf, 'm/s'),
         scalar('v_t1', 'Terminal velocity of the heavy body', fin(f1.vt), 'm/s', nov), scalar('v_t2', 'Terminal velocity of the light body', fin(f2.vt), 'm/s', nov), scalar('v_tp', 'Terminal velocity of the tied pair', fin(fp.vt), 'm/s', nov),
         scalar('d_1', 'Diameter of the heavy body', gb.d1, 'm', { show: 'mm' }), scalar('d_2', 'Diameter of the light body', gb.d2, 'm', { show: 'mm' }),
-        scalar('ratio_A', 'Aristotelian prediction for the ratio of fall times, light to heavy', v.m_1 / v.m_2, '1', { status: 'hypothetical' }), scalar('ratio_obs', 'Computed ratio of fall times, light to heavy', f2.t / f1.t, '1'),
+        scalar('ratio_A', 'Aristotelian prediction for the ratio of fall times, light to heavy', v.m_1 / v.m_2, '1', { status: 'hypothetical' }), scalar('ratio_obs', 'Computed ratio of fall times, light to heavy', f2.t / f1.t, '1', fl),
         scalar('tied', 'Tied pair compared with the heavy body alone', tiedSlower ? -1 : tiedFaster ? 1 : 0, '1', { text: verdict }),
-        scalar('first', 'Which body lands first', heavyFirst ? 1 : f2.t < f1.t * (1 - 1e-12) ? 2 : 0, '1', { text: heavyFirst ? 'The heavy body, by a margin set by air resistance' : f2.t < f1.t * (1 - 1e-12) ? 'The light body' : 'They land together' }),
+        scalar('first', 'Which body lands first', heavyFirst ? 1 : f2.t < f1.t * (1 - 1e-12) ? 2 : 0, '1', { text: f2.floats ? 'The heavy body; the light body does not fall' : heavyFirst ? 'The heavy body, by a margin set by air resistance' : f2.t < f1.t * (1 - 1e-12) ? 'The light body' : 'They land together' }),
       ],
       series: [
         line('height', 'Height against time', 'Time', 's', ts, [{ label: 'Heavy body', data: ts.map(f1.y) }, { label: 'Light body', data: ts.map(f2.y) }, { label: 'Tied pair', data: ts.map(fp.y) }, { label: 'Vacuum', data: ts.map(t => Math.max(v.h_d - 0.5 * v.g * t * t, 0)), dash: true }], 'Height', 'm'),

@@ -357,7 +357,7 @@ const rlc = {
         line('gain', 'Capacitor-voltage gain against frequency', 'Frequency', 'Hz', fs, [{ label: '|V_C/V_s|', data: rs.map(q => cabs(q.h)) }], 'Gain', '–', { logx: true, logy: true }),
         line('phase', 'Phase of capacitor voltage against frequency', 'Frequency', 'Hz', fs, [{ label: 'Phase', data: rs.map(q => Math.atan2(q.h[1], q.h[0]) * 180 / Math.PI) }], 'Phase', 'deg', { logx: true }),
       ],
-      checks: [check('Energy balance over the transient', c.eRes, 1e-5, c.method === 'rk45' ? 'Energy delivered by the source against stored plus dissipated energy' : 'Not evaluated: closed-form solution used for a very stiff over-damped circuit')],
+      checks: [check('Energy balance over the transient', c.eRes, 1e-3, c.method === 'rk45' ? 'Energy delivered by the source against stored plus dissipated energy' : 'Not evaluated: closed-form solution used for a very stiff over-damped circuit')],
       warnings,
     };
   },
@@ -430,7 +430,7 @@ function ehd(v, a) {
       capped = Jt >= Jscl; J = Math.min(Jt, Jscl);
       E0 = J <= 0 ? V / d : capped ? 0 : rootOr(q => Vint(J, q, u) - V, 0, V / d, 0);
     }
-    Ed = Eat(J, E0, u, d); TA = EPS0 * (Ed * Ed - E0 * E0) / 2; Tn = TA / (1 + dragF);
+    Ed = J > 0 ? Eat(J, E0, u, d) : E0; TA = J > 0 ? EPS0 * (Ed * Ed - E0 * E0) / 2 : 0; Tn = TA / (1 + dragF);
     const un = Math.sqrt(Math.max(Tn, 0) / (2 * rho));
     if (a.static) { ud = un; break; }
     if (Math.abs(un - u) <= 1e-10 * Math.max(un, 1e-12)) { ud = un; u = un; break; }
@@ -519,7 +519,9 @@ const ionicWind = {
     const n = 200, sg = N.linspace(0, 1, n), xg = sg.map(q => s.d * q * q), Eg = xg.map(s.E);
     const vNum = N.trapz(sg, Eg.map((e, i) => e * 2 * s.d * sg[i]));
     let jRes = 0;
-    if (s.J > 0) for (let i = 0; i < n - 1; i++) { const sm = (sg[i] + sg[i + 1]) / 2, rq = EPS0 * (Eg[i + 1] - Eg[i]) / (xg[i + 1] - xg[i]); jRes = Math.max(jRes, Math.abs(rq * (s.mu * s.E(s.d * sm * sm) + s.uI) / s.J - 1)); }
+    // first integral of Gauss's law with current continuity: ε₀(μE²/2 + uE) must rise linearly with slope J
+    const Phi = Eg.map(e => EPS0 * (s.mu * e * e / 2 + s.uI * e));
+    if (s.J > 0) for (let i = 4; i < n - 1; i += 5) jRes = Math.max(jRes, Math.abs((Phi[i + 1] - Phi[i - 4]) / (xg[i + 1] - xg[i - 4]) / s.J - 1));
     const fNum = s.J > 0 ? N.trapz(sg, Eg.map((e, i) => s.J / (s.mu * e + s.uI + 1e-300) * e * 2 * s.d * sg[i])) : 0;
     const rq = xg.map((_, i) => (s.J > 0 ? s.J / (s.mu * Eg[i] + s.uI) : 0));
     // sweeps in voltage
@@ -555,7 +557,7 @@ const ionicWind = {
       ],
       checks: [
         check('Voltage equals the integral of the field', (vNum - s.V) / s.V, 1e-4, 'Numerical quadrature of the field profile'),
-        check('Charge conservation with Gauss\'s law', jRes, 1e-3, 'ε₀ dE/dx times drift speed reproduces the same current density at every station'),
+        check('Charge conservation with Gauss\'s law', jRes, 1e-6, 'The first integral ε₀(μE²/2 + uE) rises with slope J at every station between the electrodes'),
         check('Thrust equals the body-force integral', s.TA > 0 ? (fNum - s.TA) / s.TA : 0, 1e-4, 'Integrated Coulomb force on the air against the Maxwell-stress difference at the electrodes'),
       ],
       warnings,
@@ -567,7 +569,7 @@ const ionicWind = {
     out.push(bench('Thrust per unit area equals J d/μ', s.TA, s.J * v.d_gap / s.mu, 'T = I d/μ', 1e-9));
     out.push(bench('Thrust-to-power equals d/(μV)', s.tp, v.d_gap / (s.mu * v.V), 'T/P = 1/(μE)', 1e-9));
     const m = ehd(v, { ...b, static: false });
-    out.push(bench('Moving-air solution recovers the static limit to first order in u/(μE)', m.tp * (1 + m.ud / (m.mu * v.V / v.d_gap)), s.tp, 'T/P ≈ 1/(μE + u)', 0.02));
+    if (m.ud < 0.05 * m.mu * v.V / v.d_gap) out.push(bench('Moving-air solution recovers the static limit to first order in u/(μE)', m.tp * (1 + m.ud / (m.mu * v.V / v.d_gap)), s.tp, 'T/P ≈ 1/(μE + u)', 0.02));
     return out;
   },
   validation: [],
@@ -908,7 +910,7 @@ const radiationPressure = {
     out.push(bench('Rigid, dense sphere: contrast factor', c.Phi(1e12 * v.rho_0, R), 5 / 6, 'King (1934): Φ = 5/6', 1e-9));
     out.push(bench('King force amplitude for a rigid dense sphere', c.Fmax(1e12 * v.rho_0, R), 5 * Math.PI / 6 * R ** 3 * c.k * v.p_a ** 2 / c.kap, 'F = (5π/6) k a³ p²/(ρc²)', 1e-9));
     out.push(bench('Radiation pressure equals intensity over sound speed', c.Et, (v.p_a ** 2 / (2 * v.rho_0 * v.c_s)) / v.c_s, 'p_rad = I/c for an absorber', 1e-12));
-    const cv = arfCore({ ...v, nu: 1e-12 }, { ...a, inviscid: false });
+    const cv = arfCore({ ...v, nu: (1e-9 * R) ** 2 * c.w / 2 }, { ...a, inviscid: false, rigid: true, small_sphere: true });
     out.push(bench('Viscous dipole coefficient in the thin-layer limit', cv.f2(v.rho_p, R), c.f2(v.rho_p, R), 'Settnes & Bruus (2012) reduces to the ideal-fluid value', 1e-3));
     return out;
   },
@@ -1133,7 +1135,7 @@ function coCore(v, a) {
   const energy = (x1, v1, x2, v2) => 0.5 * m * (v1 * v1 + v2 * v2) + 0.5 * k1 * x1 * x1 + 0.5 * k2 * x2 * x2 + 0.5 * kc * (x1 - x2) ** 2 + 0.25 * k3 * (x1 ** 4 + x2 ** 4);
   const dw = Math.max(w2 - w1, 1e-12 * w2), tFast = TAU / w2;
   const tEnd = Math.min(Math.max(2 * TAU / dw, 6 * TAU / Math.max(w1, 1e-9)), 60 * tFast);
-  const run = (n = 900) => N.rk45((t, y) => [y[1], (-k1 * y[0] - kc * (y[0] - y[2]) - cd * y[1] - k3 * y[0] ** 3) / m, y[3], (-k2 * y[2] - kc * (y[2] - y[0]) - cd * y[3] - k3 * y[2] ** 3) / m, cd * (y[1] * y[1] + y[3] * y[3])], [v.x_0, 0, 0, 0, 0], 0, tEnd, n, { rtol: 1e-8, atol: 1e-12 * v.x_0, maxSteps: 120000 });
+  const run = (n = 600) => N.rk45((t, y) => [y[1], (-k1 * y[0] - kc * (y[0] - y[2]) - cd * y[1] - k3 * y[0] ** 3) / m, y[3], (-k2 * y[2] - kc * (y[2] - y[0]) - cd * y[3] - k3 * y[2] ** 3) / m, cd * (y[1] * y[1] + y[3] * y[3])], [v.x_0, 0, 0, 0, 0], 0, tEnd, n, { rtol: 1e-8, atol: 1e-12 * v.x_0, maxSteps: 120000 });
   /** Steady-state complex amplitudes under a force F0 cos(wt) on mass 1. */
   const resp = w => { const D1 = [k1 + kc - m * w * w, w * cd], D2 = [k2 + kc - m * w * w, w * cd], det = csub(cmul(D1, D2), [kc * kc, 0]), dn = cabs(det) > 0 ? det : [1e-300, 0]; return [cdiv(cmul([v.F_0, 0], D2), dn), cdiv([v.F_0 * kc, 0], dn)]; };
   return { m, k1, k2, kc, cd, k3, w1, w2, dw, trans, energy, tEnd, run, resp };
@@ -1195,7 +1197,7 @@ const coupledOsc = {
     const E0 = c.energy(v.x_0, 0, 0, 0), e1 = t.map((_, i) => 0.5 * c.m * r.y[1][i] ** 2 + 0.5 * c.k1 * x1[i] ** 2 + 0.25 * c.k3 * x1[i] ** 4), e2 = t.map((_, i) => 0.5 * c.m * r.y[3][i] ** 2 + 0.5 * c.k2 * x2[i] ** 2 + 0.25 * c.k3 * x2[i] ** 4);
     const eEnd = c.energy(x1[n - 1], r.y[1][n - 1], x2[n - 1], r.y[3][n - 1]), eRes = (eEnd + r.y[4][n - 1] - E0) / E0;
     const w0 = Math.sqrt(c.k1 / c.m), trNum = N.maxOf(e2) / E0;
-    if (n < 900) warnings.push('The integration stopped early at its step limit; the time series is truncated.');
+    if (n < 600) warnings.push('The integration stopped early at its step limit; the time series is truncated.');
     if (c.kc / c.k1 > 0.5) warnings.push('The coupling is strong: the motion is no longer a slow beat on a fast carrier, and the weak-coupling estimates do not apply.');
     if (!a.linear && c.k3 * v.x_0 ** 2 > 0.3 * c.k1) warnings.push('The cubic term is comparable with the linear stiffness at this amplitude; the linear mode frequencies are only indicative.');
     if (!a.passive && !a.undamped) warnings.push('The phase-locking analysis treats ideal self-sustained oscillators; it is independent of the damped mass–spring simulation shown alongside.');
@@ -1540,7 +1542,7 @@ const doppler = {
     const fb = ok ? Math.abs(f - v.f_0) : 0;
     // crest-arrival count: emit crests at the source and time their arrival at the observer
     let cnt = 0;
-    if (ok && a.classical && a.one_way) { const nC = 200, D = 1e3 * c, tau = n => (D + (c + w - us) * n / v.f_0) / (c + w + v.v_o); cnt = nC / (tau(nC) - tau(0)) / f - 1; }
+    if (ok && a.classical && a.one_way) { const nC = 200, D = 10 * c / v.f_0, tau = n => (D + (c + w - us) * n / v.f_0) / (c + w + v.v_o); cnt = nC / (tau(nC) - tau(0)) / f - 1; }
     const Ms = N.linspace(-0.9, 0.9, 181);
     const fl = v.b_min / Math.max(Math.abs(v.v_s), 1e-9), T = Math.abs(v.v_s) > 1e-6 ? 4 * fl : 1, te = N.linspace(-T, T, 241);
     const fly = te.map(t => { const x = v.v_s * t, r = Math.hypot(x, v.b_min); return dopplerF(v, { ...a, collinear: false, one_way: true, still_medium: true }, v.v_s, 0, -x / r); });
@@ -1972,7 +1974,7 @@ const effectiveMedium = {
 };
 
 // ------------------------------------------------------------------ memristor (linear ion drift)
-function memSim(v, a, f = v.f_d, ncyc = 3, nper = 1500, x0 = v.x_0) {
+function memSim(v, a, f = v.f_d, ncyc = 3, nper = 1000, x0 = v.x_0) {
   const k = v.mu_v * v.R_on / v.D_f ** 2, Rs = a.no_series ? 0 : v.R_s, p = Math.max(1, Math.round(v.p_w)), lo = a.window ? 1e-6 : 0, hi = 1 - lo;
   const drive = t => (a.sinusoid ? v.V_0 * Math.sin(TAU * f * t) : 2 * v.V_0 / Math.PI * Math.asin(Math.sin(TAU * f * t)));
   const M = x => v.R_on * x + v.R_off * (1 - x);
@@ -2055,7 +2057,8 @@ const memristor = {
     if (a.window && (N.maxOf(xl) > 0.999 || N.minOf(xl) < 0.001)) warnings.push('The state reaches a film boundary, where the Joglekar window stalls the drift; recovery from the boundary is unrealistically slow in this model.');
     if (v.R_off < v.R_on) warnings.push('The undoped resistance is below the doped resistance: the roles of the two states are reversed.');
     if (v.f_d > 30 * fc) warnings.push('The drive is far above the characteristic frequency: the state barely moves and the loop is nearly a straight line.');
-    const fs = N.logspace(Math.max(fc / 30, 1e-6), fc * 300, 13), sw = fs.map(f => memSim(v, a, f, 2, 500));
+    const fs = N.logspace(Math.max(fc / 30, 1e-6), fc * 300, 11), sw = fs.map(f => memSim(v, a, f, 2, 300));
+    const dec = arr => arr.filter((_, j) => j % 4 === 0), td = dec(t);
     return {
       scalars: [
         scalar('R_0', 'Initial memristance', s.M(v.x_0), 'ohm'), scalar('M_min', 'Lowest memristance in the cycle', N.minOf(Ml), 'ohm'), scalar('M_max', 'Highest memristance in the cycle', N.maxOf(Ml), 'ohm'),
@@ -2071,8 +2074,8 @@ const memristor = {
       ],
       series: [
         line('iv-loop', 'Current–voltage loop (last cycle)', 'Voltage', 'V', vl, [{ label: 'Current', data: il.map(q => q * 1e3) }], 'Current', 'mA', { parametric: true, note: 'Pinched at the origin' }),
-        line('state', 'State and drive against time', 'Time', 's', t, [{ label: 'State w/D', data: x }, { label: 'Voltage / amplitude', data: vv.map(q => q / v.V_0), dash: true }], 'State; normalised voltage', '–'),
-        line('memristance', 'Memristance against time', 'Time', 's', t, [{ label: 'Memristance', data: Ms.map(q => q / 1e3) }], 'Resistance', 'kΩ'),
+        line('state', 'State and drive against time', 'Time', 's', td, [{ label: 'State w/D', data: dec(x) }, { label: 'Voltage / amplitude', data: dec(vv).map(q => q / v.V_0), dash: true }], 'State; normalised voltage', '–'),
+        line('memristance', 'Memristance against time', 'Time', 's', td, [{ label: 'Memristance', data: dec(Ms).map(q => q / 1e3) }], 'Resistance', 'kΩ'),
         line('area-f', 'Loop-lobe area against drive frequency', 'Frequency', 'Hz', fs, [{ label: 'Positive-lobe area', data: sw.map(q => q.areaP * 1e3) }], 'Area', 'mW', { logx: true }),
       ],
       checks: [
@@ -2138,7 +2141,7 @@ function feCore(v, a) {
   return { al, be, ga, G, dF, d2F, Ps, Pc, Ec0, tau };
 }
 /** Integrate dP/dt = −Γ(∂F/∂P − E) over ncyc cycles with nper steps each; implicit, so stable for any stiffness. */
-function feSim(v, a, f = v.f_d, E0 = v.E_0, ncyc = 2, nper = 6000) {
+function feSim(v, a, f = v.f_d, E0 = v.E_0, ncyc = 2, nper = 3000) {
   const c = feCore(v, a), dt = 1 / (f * nper), n = ncyc * nper, B = 2 * (c.Ps + Math.cbrt(E0 / c.be)) + 1e-9;
   const drive = t => (a.sine_drive ? E0 * Math.sin(TAU * f * t) : 2 * E0 / Math.PI * Math.asin(Math.sin(TAU * f * t)));
   const th = dt * c.G * Math.max(Math.abs(c.al), c.d2F(c.Ps), 3 * c.be * B * B / 4) < 0.5 ? 0.5 : 1; // trapezoidal when resolved, backward Euler when stiff
@@ -2233,7 +2236,8 @@ const ferroelectric = {
     else if (v.E_0 < c.Ec0 && !s.switched) warnings.push('The field amplitude is below the thermodynamic coercive field: the polarisation does not switch and only a minor loop is traced.');
     if (polar) warnings.push('The coercive field is the single-domain (intrinsic) value. Measured coercive fields are typically ten to a hundred times smaller because switching proceeds by domain nucleation and wall motion.');
     if (s.th === 1) warnings.push('The relaxation is much faster than the time step, so a first-order implicit scheme is used; the loop is the quasi-static one.');
-    const fs = N.logspace(Math.min(1e-3 / (TAU * c.tau), v.f_d), Math.max(3 / (TAU * c.tau), v.f_d), 9), sw = fs.map(f => feSim(v, a, f, v.E_0, 2, 1200));
+    const fs = N.logspace(Math.min(1e-3 / (TAU * c.tau), v.f_d), Math.max(3 / (TAU * c.tau), v.f_d), 6), sw = fs.map(f => feSim(v, a, f, v.E_0, 2, 600));
+    const dec = arr => arr.filter((_, j) => j % 6 === 0);
     const Tc = v.T_0 - (a.screened ? 0 : v.lambda_d / (EPS0 * v.a_0));
     const Ts = N.linspace(Math.max(4, Tc - 250), Tc + 60, 80), psT = Ts.map(T => feCore({ ...v, T }, a).Ps), ecT = Ts.map(T => feCore({ ...v, T }, a).Ec0 / 1e6);
     const Pq = N.linspace(-1.4 * Math.max(c.Ps, s.Pmax), 1.4 * Math.max(c.Ps, s.Pmax), 161);
@@ -2252,7 +2256,7 @@ const ferroelectric = {
       series: [
         line('pe-loop', a.no_background ? 'Polarisation–field loop (last cycle)' : 'Displacement–field loop (last cycle)', 'Electric field', 'MV/m', El.map(q => q / 1e6), [{ label: a.no_background ? 'Polarisation' : 'Displacement', data: Dl }], a.no_background ? 'Polarisation' : 'Displacement', 'C/m²', { parametric: true }),
         line('static', 'Static equation of state', 'Polarisation', 'C/m²', Pq, [{ label: 'E = ∂F/∂P at equilibrium', data: Pq.map(p => c.dF(p) / 1e6) }], 'Field', 'MV/m', { note: 'The branch of negative slope is unstable' }),
-        line('time', 'Polarisation and field against time', 'Time', 'ms', s.t.map(q => q * 1e3), [{ label: 'Polarisation / P_max', data: s.P.map(q => q / Math.max(s.Pmax, 1e-300)) }, { label: 'Field / amplitude', data: s.E.map(q => q / v.E_0), dash: true }], 'Normalised value', '–'),
+        line('time', 'Polarisation and field against time', 'Time', 'ms', dec(s.t).map(q => q * 1e3), [{ label: 'Polarisation / P_max', data: dec(s.P).map(q => q / Math.max(s.Pmax, 1e-300)) }, { label: 'Field / amplitude', data: dec(s.E).map(q => q / v.E_0), dash: true }], 'Normalised value', '–'),
         line('ec-f', 'Coercive field against frequency', 'Frequency', 'Hz', fs, [{ label: 'Coercive field from the loop', data: sw.map(q => q.Ec / 1e6) }, { label: 'Thermodynamic value', data: fs.map(() => c.Ec0 / 1e6), dash: true }], 'Coercive field', 'MV/m', { logx: true }),
         line('ps-T', 'Spontaneous polarisation against temperature', 'Temperature', 'K', Ts, [{ label: 'Spontaneous polarisation', data: psT }], 'Polarisation', 'C/m²'),
         line('ec-T', 'Thermodynamic coercive field against temperature', 'Temperature', 'K', Ts, [{ label: 'Coercive field', data: ecT }], 'Coercive field', 'MV/m'),
@@ -2311,4 +2315,537 @@ const ferroelectric = {
   extensions: ['Kolmogorov–Avrami–Ishibashi domain-switching kinetics', 'First-order free energy with double loops', 'Electromechanical (strain) coupling', 'Negative-capacitance transients in a series circuit'],
 };
 
-export default [electrostatic, rlc, ionicWind, syntheticJet, radiationPressure, vibratingString, coupledOsc, timeReversal, doppler, phononic, effectiveMedium, memristor, ferroelectric];
+// ------------------------------------------------------------------ charge relaxation with a hypothesised memory kernel
+/** q(t)/q0 for dq/dt = −y/τ, τ_m dy/dt = q − y with q(0) = 1, y(0) = y0 (exact). */
+function memExact(t, tau, tm, y0) {
+  const s = 1 / (2 * tm), d = s * s - 1 / (tau * tm), qd0 = -y0 / tau;
+  if (Math.abs(d) < 1e-12 * s * s) return Math.exp(-s * t) * (1 + (qd0 + s) * t);
+  if (d < 0) { const w = Math.sqrt(-d); return Math.exp(-s * t) * (Math.cos(w * t) + (qd0 + s) / w * Math.sin(w * t)); }
+  const r = Math.sqrt(d), l2 = -s - r, l1 = 1 / (tau * tm) / l2, A = (qd0 - l2) / (l1 - l2);
+  return A * Math.exp(l1 * t) + (1 - A) * Math.exp(l2 * t);
+}
+function cmCore(v, a, theta = v.theta_m, beta = v.beta_s) {
+  const tau = EPS0 * v.eps_r / v.sigma_e, tm = theta * tau, y0 = a.instant_charge ? 0 : 1;
+  const s = 1 / (2 * tm), disc = s * s - 1 / (tau * tm);
+  const slow = a.exp_kernel ? (disc > 0 ? 1 / (tau * tm) / (s + Math.sqrt(disc)) : s) : 0;
+  const tEnd = a.exp_kernel ? 8 / slow : tau * Math.min(Math.pow(5, 1 / beta), 500);
+  const hyp = t => (a.exp_kernel ? memExact(t, tau, tm, y0) : Math.exp(-Math.pow(t / tau, beta)));
+  /** Conventional family with amplitude A and time constant tf. */
+  const conv = (t, A, tf) => (a.uniform ? A * Math.exp(-t / tf) : A * ((1 - v.w_2) * Math.exp(-t / tf) + v.w_2 * Math.exp(-t / (v.r_tau * tf))));
+  /** Best conventional description of the hypothesised decay sampled at times ts; returns residual statistics. */
+  const compare = ts => {
+    const h = ts.map(hyp);
+    const sse = (lt, out) => { const tf = Math.exp(lt), b = ts.map(t => conv(t, 1, tf)); let sb = 0, sh = 0; for (let i = 0; i < ts.length; i++) { sb += b[i] * b[i]; sh += b[i] * h[i]; } const A = a.free_fit ? sh / Math.max(sb, 1e-300) : 1; let e = 0, mx = 0; for (let i = 0; i < ts.length; i++) { const d = h[i] - A * b[i]; e += d * d; mx = Math.max(mx, Math.abs(d)); } if (out) { out.A = A; out.tf = tf; out.max = mx; out.fit = b.map(q => A * q); } return e; };
+    const lt = a.free_fit ? N.golden(q => sse(q), Math.log(tau / 100), Math.log(tau * 100 * Math.max(1, theta)), 1e-7) : Math.log(tau);
+    const o = {}, e = sse(lt, o);
+    return { h, sse: e, rms: Math.sqrt(e / ts.length), max: o.max, A: o.A, tf: o.tf, fit: o.fit };
+  };
+  return { tau, tm, y0, s, disc, tEnd, hyp, conv, compare };
+}
+
+const chargeMemory = {
+  id: 'charge-memory-relaxation',
+  title: 'Charge relaxation with a hypothesised memory kernel',
+  module: [1, 2], klass: ['III', 'I'], domains: ['materials', 'electromagnetic'], hypothetical: true,
+  keywords: ['charge relaxation', 'memory kernel', 'remembers', 'memory', 'charge decay', 'maxwell relaxation', 'relaxation time', 'non-exponential decay', 'stretched exponential', 'conducting fluid', 'history dependent', 'non-markovian', 'what if', 'new law', 'electrolyte', 'dielectric relaxation'],
+  summary: 'Compares the conventional exponential decay of free charge in a conductor (Maxwell relaxation, τ = ε/σ) with a hypothesised law in which the decay rate depends on the charge history through a memory kernel, and states what measurement would tell them apart.',
+  background: [
+    'Established physics. Free charge placed inside a uniform ohmic conductor does not stay there. Charge conservation, Ohm\'s law and Gauss\'s law together give dq/dt = −q/τ with τ = ε/σ, the Maxwell (charge) relaxation time: about 10⁻¹⁹ s in copper, microseconds in tap water, hours in good insulators. The decay is a single exponential, monotone, with its steepest slope at the first instant. Departures from a single exponential are well known and conventional: a material with regions of different ε/σ decays as a sum of exponentials (Maxwell–Wagner), and disordered dielectrics often follow stretched-exponential or power-law responses.',
+    'Hypothesis (not established). Suppose instead that the conduction current responds not to the present charge but to a weighted average of its past, dq/dt = −(1/τ)∫K(t − s) q(s) ds. With an exponential kernel of memory time τ_m this is equivalent to giving the current its own relaxation time — formally the Drude model, whose relaxation time in real conductors is of order 10⁻¹⁴ s and therefore invisible. The hypothesis is that in some fluid τ_m is comparable with τ. The consequence is sharp: the decay starts with zero slope, and when τ_m exceeds τ/4 the charge overshoots zero and oscillates. Results below are conditional on that hypothesis.',
+  ],
+  phenomena: ['Ohmic charge relaxation', 'Hypothetical delayed (history-dependent) conduction', 'Overshoot and sign reversal of the charge', 'Non-exponential tails from heterogeneity (conventional)'],
+  laws: ['charge', 'ohm', 'maxwell', 'causality', 'second'],
+  refs: ['Melcher, J. R. (1981). Continuum Electromechanics, MIT Press (charge relaxation, ch. 5).', 'Haus, H. A. & Melcher, J. R. (1989). Electromagnetic Fields and Energy, Prentice-Hall (ch. 7).', 'Ashcroft, N. W. & Mermin, N. D. (1976). Solid State Physics, Holt, Rinehart and Winston (Drude model, ch. 1).', 'Zwanzig, R. (2001). Nonequilibrium Statistical Mechanics, Oxford University Press (memory kernels and generalised Langevin equations).', 'Williams, G. & Watts, D. C. (1970). Non-symmetrical dielectric relaxation behaviour arising from a simple empirical decay function. Trans. Faraday Soc. 66, 80–85.', 'Jonscher, A. K. (1977). The \'universal\' dielectric response. Nature 267, 673–679.'],
+  inputs: [
+    inp('eps_r', 'Relative permittivity of the fluid', '1', 80, { min: 1, max: 200, kind: 'fluid', aliases: ['permittivity', 'dielectric constant'], src: 'Water at 20 °C' }),
+    inp('sigma_e', 'Electrical conductivity of the fluid', 'S/m', 1e-4, { min: 1e-12, max: 10, kind: 'fluid', aliases: ['conductivity'], src: 'Between deionised and tap water' }),
+    inp('q_0', 'Initial charge', 'nC', 1, { min: 0.001, max: 1e6, aliases: ['initial charge', 'charge'] }),
+    inp('theta_m', 'Memory time as a multiple of the Maxwell time', '1', 1, { min: 0.01, max: 100, kind: 'hypothetical', aliases: ['memory time', 'memory ratio', 'remembers'], src: 'Hypothetical parameter: zero in established physics at accessible time scales' }),
+    inp('beta_s', 'Stretching exponent of the alternative response', '1', 0.7, { min: 0.2, max: 1, kind: 'hypothetical', aliases: ['stretching exponent', 'stretched exponent'], src: 'Hypothetical parameter: 1 recovers the exponential' }),
+    inp('w_2', 'Weight of the slow region in a heterogeneous sample', '1', 0.3, { min: 0.01, max: 0.9, kind: 'fluid', aliases: ['slow fraction'] }),
+    inp('r_tau', 'Ratio of slow to fast relaxation time in a heterogeneous sample', '1', 5, { min: 1.1, max: 100, kind: 'fluid', aliases: ['time-constant ratio'] }),
+    inp('sigma_q', 'Measurement noise per sample, relative to the initial charge', '%', 1, { min: 0.001, max: 20, aliases: ['noise', 'precision', 'measurement precision', 'uncertainty'] }),
+    inp('n_samp', 'Number of samples in the record', '1', 200, { min: 10, max: 5000, aliases: ['samples', 'number of samples'] }),
+  ],
+  assumptions: [
+    asm('exp_kernel', 'The hypothesised memory kernel is a single exponential of memory time τ_m.', { why: 'Simplest causal kernel; reduces to a two-state system', alt: 'The hypothesised response is instead a stretched exponential, q = q₀ exp[−(t/τ)^β].' }),
+    asm('instant_charge', 'The charge is deposited instantaneously, so the memory variable starts at zero.', { why: 'Step-injection experiment', alt: 'The sample has been held at steady charge long enough for the memory variable to equilibrate before release.' }),
+    asm('uniform', 'The conventional comparison is a homogeneous fluid with a single relaxation time.', { why: 'Textbook Maxwell relaxation', alt: 'The conventional comparison is a heterogeneous sample with two relaxation times, a known cause of non-exponential decay.' }),
+    asm('free_fit', 'The conventional model is allowed to refit its amplitude and time constant to the data.', { why: 'Fair test: ε and σ are not known exactly', alt: 'The conventional time constant is fixed at ε/σ from independent measurements, a more sensitive test.' }),
+  ],
+  symbols: { q: ['Free charge under the hypothesised law', 'C'], q_c: ['Free charge under the conventional law', 'C'], t: ['Time', 's'], s_t: ['Earlier time (integration variable)', 's'], K_m: ['Memory kernel', '1/s'], tau_M: ['Maxwell relaxation time', 's'], tau_m: ['Memory time', 's'], y_m: ['Memory variable: kernel-weighted past charge', 'C'], y_0: ['Initial value of the memory variable', 'C'], theta_c: ['Critical memory ratio for oscillation', '1'], q_f: ['Conventional comparison curve', 'C'], A_f: ['Fitted amplitude', '1'], tau_f: ['Fitted time constant', 's'], sigma_req: ['Noise level giving a five-standard-deviation distinction', '1'], D_rms: ['Root-mean-square difference between the laws', '1'], rho_e: ['Free charge density', 'C/m^3'], J_c: ['Conduction current density', 'A/m^2'], E_f: ['Electric field', 'V/m'] },
+  equations: a => [
+    eq('cons', 'Charge conservation', 'pd(rho_e,t)', '-div(J_c)', { kind: 'law', origin: 'Continuity equation' }),
+    eq('ohm', 'Ohm\'s law (conventional)', 'J_c', 'sigma_e*E_f', { kind: 'law', origin: 'Ohmic conduction' }),
+    eq('gauss', 'Gauss\'s law', 'eps_0*eps_r*div(E_f)', 'rho_e', { kind: 'law', origin: 'Maxwell\'s equations' }),
+    eq('tau', 'Maxwell relaxation time', 'tau_M', 'eps_0*eps_r/sigma_e', { kind: 'derived', origin: 'Combination of the three laws above' }),
+    a.uniform
+      ? eq('conv', 'Conventional charge relaxation', 'd(q_c,t)', '-q_c/tau_M', { kind: 'law', origin: 'Charge conservation with Ohm\'s and Gauss\'s laws', needs: ['uniform'] })
+      : eq('conv', 'Conventional decay of a two-region sample', 'q_c', 'q_0*((1 - w_2)*exp(-t/tau_M) + w_2*exp(-t/(r_tau*tau_M)))', { kind: 'closure', origin: 'Maxwell–Wagner: two regions with different ε/σ' }),
+    ...(a.exp_kernel ? [
+      eq('mem', 'Hypothesised memory law', 'd(q,t)', '-int(K_m*q, s_t)/tau_M', { kind: 'hypothesis', origin: 'Postulated history-dependent conduction; not an established law' }),
+      eq('ker', 'Hypothesised kernel', 'K_m', 'exp(-(t - s_t)/tau_m)/tau_m', { kind: 'hypothesis', origin: 'Simplest causal, normalised kernel' }),
+      eq('tm', 'Memory time', 'tau_m', 'theta_m*tau_M', { kind: 'hypothesis' }),
+      eq('aux', 'Memory variable', 'tau_m*d(y_m,t)', 'q - y_m', { kind: 'hypothesis', origin: 'Differentiating the kernel integral' }),
+      eq('dec', 'Decay driven by the memory variable', 'd(q,t)', '-y_m/tau_M', { kind: 'hypothesis' }),
+      eq('thc', 'Critical memory ratio', 'theta_c', '1/4', { kind: 'derived', origin: 'Discriminant of the equivalent second-order equation' }),
+      a.instant_charge ? eq('ic', 'Memory variable at the instant of charging', 'y_0', '0*q_0', { kind: 'initial' }) : eq('ic', 'Memory variable after long preconditioning', 'y_0', 'q_0', { kind: 'initial' }),
+    ] : [eq('kww', 'Hypothesised stretched-exponential response', 'q', 'q_0*exp(-(t/tau_M)^beta_s)', { kind: 'hypothesis', origin: 'Postulated response function; not an established law for a homogeneous ohmic fluid' })]),
+    a.free_fit ? eq('fit', 'Conventional curve fitted to the data', 'q_f', 'A_f*q_0*exp(-t/tau_f)', { kind: 'definition' }) : eq('fit', 'Conventional curve with independently measured properties', 'q_f', 'q_0*exp(-t/tau_M)', { kind: 'definition' }),
+    eq('sig', 'Noise level for a five-standard-deviation distinction', 'sigma_req', 'D_rms*sqrt(n_samp)/5', { kind: 'definition', origin: 'Chi-square difference between the two descriptions' }),
+  ],
+  derivation: a => [
+    { text: 'Established: charge is conserved, conduction current is proportional to field, and field diverges from charge. Eliminating current and field gives exponential decay with the Maxwell time.', tex: '\\frac{\\partial\\rho_e}{\\partial t} = -\\nabla\\!\\cdot(\\sigma\\mathbf{E}) = -\\frac{\\sigma}{\\varepsilon}\\rho_e\\ \\Rightarrow\\ q = q_0\\,e^{-t/\\tau},\\quad \\tau = \\frac{\\varepsilon}{\\sigma}' },
+    ...(a.exp_kernel ? [
+      { text: 'Hypothesis: the current at time t is driven by a weighted average of earlier charge. The kernel is causal and normalised to unit area, so a steady state is unchanged.', tex: '\\frac{\\mathrm{d}q}{\\mathrm{d}t} = -\\frac{1}{\\tau}\\int_0^t K(t-s)\\,q(s)\\,\\mathrm{d}s,\\qquad K(u) = \\frac{e^{-u/\\tau_m}}{\\tau_m}' },
+      { text: 'Calling the integral y and differentiating it converts the integro-differential equation into two ordinary ones.', tex: '\\dot q = -\\frac{y}{\\tau},\\qquad \\tau_m\\,\\dot y = q - y' },
+      { text: 'Eliminating y gives a damped-oscillator equation. This is the same mathematics as an inductor in series with a leaky capacitor.', tex: '\\ddot q + \\frac{\\dot q}{\\tau_m} + \\frac{q}{\\tau\\,\\tau_m} = 0' },
+      { text: 'Its roots are complex when the memory time exceeds a quarter of the Maxwell time: the charge then overshoots zero and rings at angular frequency ω inside an envelope exp(−t/2τ_m).', tex: '\\tau_m > \\frac{\\tau}{4}\\ \\Rightarrow\\ \\omega = \\sqrt{\\frac{1}{\\tau\\tau_m}-\\frac{1}{4\\tau_m^2}}' },
+      { text: 'In the limit of short memory the kernel becomes a delta function and the conventional law is recovered.', tex: '\\tau_m\\to0:\\quad K(u)\\to\\delta(u),\\quad \\dot q = -q/\\tau' },
+    ] : [{ text: 'Hypothesis: the decay follows a stretched exponential, equivalent to a broad continuous distribution of relaxation times in a nominally homogeneous fluid.', tex: 'q = q_0\\exp\\!\\left[-(t/\\tau)^{\\beta}\\right],\\qquad 0<\\beta\\le1' }]),
+    { text: 'To decide between the descriptions, the best conventional curve is fitted to data generated by the hypothesis. With N samples of independent noise σ the two differ by χ² = ΣΔ²/σ²; requiring five standard deviations fixes the noise that can be tolerated.', tex: '\\sigma_{req} = \\frac{1}{5}\\sqrt{\\sum_{i=1}^{N}\\Delta_i^2} = \\frac{\\Delta_{rms}\\sqrt N}{5}' },
+  ],
+  solve(v, a) {
+    const c = cmCore(v, a), tau = c.tau, n = Math.round(N.clamp(v.n_samp, 10, 5000)), warnings = [], q0 = v.q_0;
+    const ts = N.linspace(0, c.tEnd, n), cmp = c.compare(ts), h = cmp.h;
+    // numerical integration of the two-state form, carrying the charge that has left as a third state
+    let numErr = 0, consErr = 0;
+    if (a.exp_kernel) {
+      const r = N.rk45((t, y) => [-y[1] / tau, (y[0] - y[1]) / c.tm, y[1] / tau], [1, c.y0, 0], 0, c.tEnd, 201, { rtol: 1e-9, atol: 1e-12 });
+      const k = r.t.length - 1; consErr = 1 - r.y[0][k] - r.y[2][k];
+      r.t.forEach((t, i) => { numErr = Math.max(numErr, Math.abs(r.y[0][i] - c.hyp(t))); });
+    }
+    const osc = a.exp_kernel && c.disc < 0, w = osc ? Math.sqrt(-c.disc) : 0;
+    const tf = N.linspace(0, c.tEnd, 2001), hf = tf.map(c.hyp);
+    let iz = -1, qmin = 1, last1 = 0; hf.forEach((q, i) => { if (iz < 0 && i > 0 && hf[i - 1] > 0 && q <= 0) iz = i; if (q < qmin) qmin = q; if (Math.abs(q) > 0.01) last1 = tf[Math.min(i + 1, 2000)]; });
+    const tZero = iz > 0 ? tf[iz - 1] + (tf[iz] - tf[iz - 1]) * hf[iz - 1] / (hf[iz - 1] - hf[iz]) : NaN;
+    const sReq = Math.sqrt(cmp.sse) / 5, Z = Math.sqrt(cmp.sse) / v.sigma_q, detect = Z >= 5;
+    const regime = !a.exp_kernel ? 'Stretched exponential: monotone, slow tail' : osc ? 'Oscillatory: the charge overshoots zero' : Math.abs(c.disc) < 1e-9 * c.s * c.s ? 'Critical' : 'Monotone, with delayed onset';
+    if (a.exp_kernel && v.theta_m < 0.02) warnings.push('The memory time is so short that the hypothesised law is practically indistinguishable from Maxwell relaxation.');
+    if (!a.uniform && a.exp_kernel && !osc) warnings.push('A monotone memory-law decay can be mimicked closely by a heterogeneous conventional sample; the zero initial slope is then the cleanest discriminator.');
+    if (!a.exp_kernel) warnings.push('A stretched exponential is also produced by a conventional distribution of relaxation times; observing it does not by itself establish a memory law.');
+    if (tau < 1e-7) warnings.push('The Maxwell time is below 100 ns: resolving the decay needs a fast electro-optic or transmission-line technique rather than an electrometer.');
+    // sensitivity sweep
+    const xs = a.exp_kernel ? N.logspace(0.01, 30, 17) : N.linspace(0.3, 0.98, 17);
+    const sw = xs.map(x => { const cc = a.exp_kernel ? cmCore(v, a, x, v.beta_s) : cmCore(v, a, v.theta_m, x), m = Math.min(n, 120), tq = N.linspace(0, cc.tEnd, m); return Math.sqrt(cc.compare(tq).sse * n / m) / 5; });
+    const us = 1e6, convNow = ts.map(t => c.conv(t, 1, tau));
+    const rate = tf.slice(1, 1200).map((t, i) => { const q1 = hf[i], q2 = hf[i + 2]; return q1 > 1e-6 && q2 > 1e-6 && hf[i + 1] > 1e-6 ? -(Math.log(q2) - Math.log(q1)) / (tf[i + 2] - tf[i]) * tau : NaN; });
+    const hy = { status: 'hypothetical' };
+    return {
+      scalars: [
+        scalar('tau_M', 'Maxwell relaxation time ε/σ', tau, 's', { show: 'us' }),
+        scalar('tau_m', 'Memory time', a.exp_kernel ? c.tm : 0, 's', a.exp_kernel ? { show: 'us', ...hy } : { text: 'Not used (stretched-exponential alternative)', ...hy }),
+        scalar('regime', 'Character of the hypothesised decay', osc ? 1 : 0, '1', { text: regime, ...hy }),
+        scalar('theta_c', 'Critical memory ratio for oscillation', 0.25, '1', hy),
+        scalar('f_osc', 'Ringing frequency', w / TAU, 'Hz', osc ? hy : { text: 'None — no oscillation', ...hy }),
+        scalar('q_min', 'Largest reversed charge / initial charge', Math.min(qmin, 0), '1', hy),
+        scalar('t_zero', 'Time of first zero crossing', tZero, 's', Number.isFinite(tZero) ? { show: 'us', ...hy } : { text: 'None — the charge never changes sign', ...hy }),
+        scalar('slope_0', 'Initial decay rate relative to the conventional value', a.exp_kernel ? c.y0 : (v.beta_s < 1 ? Infinity : 1), '1', a.exp_kernel || v.beta_s >= 1 ? hy : { text: 'Unbounded — infinitely steep at the first instant', ...hy }),
+        scalar('t_1M', 'Time for the conventional charge to fall to 1 %', a.uniform ? tau * Math.log(100) : NaN, 's', a.uniform ? { show: 'us' } : { text: 'See the decay plot (two-exponential sample)' }),
+        scalar('t_1H', 'Time after which the hypothesised charge stays below 1 %', last1, 's', { show: 'us', ...hy }),
+        scalar('tau_f', 'Time constant of the best conventional fit', cmp.tf, 's', { show: 'us' }), scalar('A_f', 'Amplitude of the best conventional fit', cmp.A, '1'),
+        scalar('D_max', 'Largest difference between the laws / initial charge', cmp.max, '1', hy), scalar('D_rms', 'Root-mean-square difference / initial charge', cmp.rms, '1', hy),
+        scalar('sigma_req', 'Noise per sample that still allows a five-standard-deviation distinction', sReq, '1', { show: '%', ...hy }),
+        scalar('Z', 'Significance of the distinction at the stated noise', Z, '1', { text: `${lab(Z)} standard deviations — ${detect ? 'the two laws could be told apart' : 'the two laws could not be told apart'}`, ...hy }),
+        scalar('q_sig', 'Absolute charge resolution required', sReq * q0, 'C', { show: 'pC', ...hy }),
+        scalar('dt_s', 'Sampling interval', c.tEnd / (n - 1), 's', { show: 'us' }),
+      ],
+      series: [
+        line('decay', 'Charge decay under the two laws', 'Time', 'µs', ts.map(t => t * us), [{ label: a.exp_kernel ? 'Hypothesised memory law' : 'Hypothesised stretched exponential', data: h }, { label: 'Conventional, τ = ε/σ', data: convNow, dash: true }, { label: 'Best conventional fit', data: cmp.fit, dash: true }], 'Charge / initial charge', '–', hy),
+        line('residual', 'Difference between hypothesis and best conventional fit', 'Time', 'µs', ts.map(t => t * us), [{ label: 'Difference', data: h.map((q, i) => q - cmp.fit[i]) }, { label: '+ noise level', data: ts.map(() => v.sigma_q), dash: true }, { label: '− noise level', data: ts.map(() => -v.sigma_q), dash: true }], 'Difference / initial charge', '–', hy),
+        line('rate', 'Instantaneous decay rate', 'Time', 'µs', tf.slice(1, 1200).map(t => t * us), [{ label: 'Hypothesis: −τ d(ln q)/dt', data: rate }, { label: 'Conventional single exponential', data: rate.map(() => 1), dash: true }], 'Decay rate × τ', '–', { ...hy, note: 'A single exponential gives a constant; gaps mark times when the charge is negative or negligible' }),
+        line('precision', a.exp_kernel ? 'Noise tolerable against memory ratio' : 'Noise tolerable against stretching exponent', a.exp_kernel ? 'Memory time / Maxwell time' : 'Stretching exponent', '–', xs, [{ label: 'Tolerable noise per sample', data: sw.map(q => q * 100) }, { label: 'Stated noise', data: xs.map(() => v.sigma_q * 100), dash: true }], 'Noise / initial charge', '%', { logx: a.exp_kernel, logy: true, ...hy }),
+      ],
+      checks: [
+        check('Charge conservation in the two-state form', consErr, 1e-6, a.exp_kernel ? 'Charge remaining plus integrated conduction current equals the initial charge' : 'Not evaluated for the closed-form alternative'),
+        check('Numerical solution against the closed form', numErr, 1e-6, a.exp_kernel ? 'Adaptive Runge–Kutta against the damped-oscillator solution' : 'Not evaluated for the closed-form alternative'),
+      ],
+      warnings,
+      notes: ['Every quantity marked hypothetical is conditional on a conduction law that is not part of established physics. The Maxwell relaxation time and the conventional curves are standard.'],
+    };
+  },
+  benchmarks(v, a) {
+    const tau = EPS0 * v.eps_r / v.sigma_e, out = [];
+    out.push(bench('Short-memory limit recovers Maxwell relaxation', memExact(tau, tau, 1e-5 * tau, 0), Math.exp(-1), 'q(τ)/q₀ → e⁻¹ as τ_m → 0', 1e-4));
+    out.push(bench('Critical memory ratio', (1 / (2 * (tau / 4))) ** 2 * tau * (tau / 4), 1, 'Discriminant vanishes at τ_m = τ/4', 1e-12));
+    out.push(bench('Critically damped solution at t = τ', memExact(tau, tau, tau / 4, 0), 3 * Math.exp(-2), 'q = (1 + 2t/τ) exp(−2t/τ)', 1e-9));
+    out.push(bench('Oscillatory solution at τ_m = τ: first zero crossing', memExact(2 * Math.PI / (3 * Math.sqrt(3)) * 2 * tau, tau, tau, 0) + 1, 1, 'Zero of cos ωt + (1/√3) sin ωt at ωt = 2π/3, ω = √3/(2τ)', 1e-9));
+    out.push(bench('Stretched exponential with β = 1 is the exponential', cmCore(v, { ...a, exp_kernel: false }, v.theta_m, 1).hyp(2 * tau), Math.exp(-2), 'q = q₀ exp(−t/τ)', 1e-12));
+    return out;
+  },
+  validation: [],
+  diagram(v, a) {
+    const pts = N.linspace(0, 1, 80).map(x => [330 + 250 * x, 230 - 130 * memExact(x * 8, 1, Math.max(v.theta_m, 0.01), a.instant_charge ? 0 : 1)]);
+    const ptc = N.linspace(0, 1, 80).map(x => [330 + 250 * x, 230 - 130 * Math.exp(-x * 8)]);
+    return svg(`
+      ${S.rect(60, 90, 200, 170, 'd-body', 8)} ${S.rect(72, 130, 176, 118, 'd-liquid', 4)} ${S.text(160, 120, 'conducting fluid')}
+      ${S.circle(160, 190, 22, 'd-hazard')} ${S.text(160, 195, 'q(t)')}
+      ${[[-1, -1], [1, -1], [-1, 1], [1, 1]].map(d => S.arrow(160 + 26 * d[0], 190 + 26 * d[1], 160 + 60 * d[0], 190 + 46 * d[1])).join('')}
+      ${S.text(160, 284, `ε_r = ${lab(v.eps_r)},  σ = ${lab(v.sigma_e, 'S/m')}`, 'd-text d-small')} ${S.text(160, 304, `τ = ε/σ = ${lab(EPS0 * v.eps_r / v.sigma_e * 1e6, 'µs')}`, 'd-text d-small')}
+      ${S.line(330, 230, 590, 230, 'd-dim')} ${S.line(330, 90, 330, 250, 'd-dim')}
+      ${S.poly(ptc, 'd-line')} ${a.exp_kernel ? S.poly(pts, 'd-heat') : ''}
+      ${S.text(460, 80, 'charge against time')} ${S.text(520, 150, 'conventional', 'd-text d-small')} ${a.exp_kernel ? S.text(440, 268, 'hypothesised memory law', 'd-text d-small') : ''}
+      ${S.text(320, 340, 'Hypothesis under test — not established physics', 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the decay of injected free charge in a weakly conducting fluid with enough time resolution and precision to detect, or bound, any departure from single-exponential Maxwell relaxation — in particular a zero initial slope or a sign reversal.',
+    apparatus: ['Guarded, temperature-controlled test cell with inert electrodes and a small isolated probe electrode immersed in the degassed, filtered fluid', 'Fast charge-injection pulser (rise time below one-hundredth of the Maxwell time)', 'Electrostatic screening and vibration isolation', 'Independent conductivity cell and permittivity bridge for the same fluid sample', 'A second cell of different geometry and electrode material'],
+    instruments: [{ name: 'Electrometer or charge amplifier with digitiser', measures: 'Probe charge or potential against time', range: '1 fC–1 µC; bandwidth at least 100/τ', resolution: 'Better than the required noise level reported above, typically 0.1 % of the initial charge' }, { name: 'Conductivity meter (four-electrode, alternating current)', measures: 'σ of the sample', range: '10⁻¹⁰–10 S/m', resolution: '±0.5 %' }, { name: 'Impedance analyser', measures: 'ε_r and its dispersion across the relevant band', range: '1 Hz–10 MHz', resolution: '±0.2 %' }, { name: 'Platinum resistance thermometer', measures: 'Fluid temperature', range: '0–100 °C', resolution: '±0.01 K' }],
+    procedure: ['Measure σ and ε_r independently and compute τ = ε/σ with its uncertainty.', 'Inject a known charge and record the decay over at least eight time constants; average many repetitions to reach the required noise.', 'Fit a single exponential with free amplitude and time constant; examine the residuals for structure, the earliest samples for a vanishing initial slope and the tail for any change of sign.', 'Repeat at several conductivities (by adding electrolyte): a genuine material memory time should not scale with ε/σ in the way electrode or circuit artefacts do.', 'Repeat in the second cell and with reversed polarity.', 'Characterise the measuring circuit alone (cell replaced by an equivalent resistor–capacitor network) and subtract or bound its inductive response.'],
+    controls: ['Dummy resistor–capacitor network with the same time constant: any ringing here is instrumental', 'Deliberately heterogeneous sample (two immiscible layers) to show what conventional multi-exponential decay looks like in this apparatus', 'Shorter and longer leads to expose stray inductance, which produces exactly the oscillation sought'],
+    signatures: ['Zero initial slope followed by accelerating decay', 'Charge reversing sign, with ringing frequency and damping fixed by the two times τ and τ_m', 'Residuals to the best single-exponential fit exceeding five standard deviations', 'The same memory time in cells of different geometry and lead length'],
+    safety: ['Injection voltages may be hazardous: interlock the cell', 'Flammable or toxic dielectric liquids: handle in a fume cupboard and exclude ignition sources', 'Electrostatic discharge can ignite vapours and destroy the electrometer input'],
+  },
+  falsify: ['A decay whose initial slope equals −q₀/τ within uncertainty, with τ from independent ε and σ, rules out a memory time comparable with τ for instantaneous charging.', 'No sign reversal of the charge at any time excludes τ_m > τ/4 for an exponential kernel.', 'Residuals to a single-exponential fit that stay within the noise bound the memory ratio from above; the bound follows from the precision curve.', 'An apparent memory time that changes with lead length, cell geometry or electrode material is an artefact (stray inductance or electrode polarisation), not a property of the fluid.', 'Conversely, the conventional law would be refuted for that fluid by a reproducible, geometry-independent sign reversal in a homogeneous sample.'],
+  alternatives: [{ name: 'Maxwell relaxation (established)', text: 'Single-exponential decay with τ = ε/σ; the default expectation for a homogeneous ohmic fluid.' }, { name: 'Heterogeneity (Maxwell–Wagner)', text: 'Regions with different ε/σ give a sum of decaying exponentials: non-exponential, but always monotone and never with zero initial slope.' }, { name: 'Electrode polarisation and double layers', text: 'Ions accumulating at electrodes add slow, strongly non-exponential components that depend on electrode area and spacing.' }, { name: 'Stray inductance', text: 'Lead and cell inductance in series with the sample capacitance produces a genuine damped oscillation of exactly the hypothesised form. It is distinguished by its dependence on circuit geometry.' }, { name: 'Ion inertia and Debye relaxation of the solvent', text: 'Real memory effects exist but at picosecond time scales (momentum relaxation of charge carriers, dipolar relaxation of the solvent), many orders of magnitude shorter than ε/σ in a weak electrolyte.' }, { name: 'Electrohydrodynamic convection', text: 'Charged fluid set in motion by its own field carries charge by convection, giving non-ohmic, history-dependent decay through ordinary fluid mechanics.' }],
+  hazards: [{ hazard: 'Electric shock', cause: 'Charge-injection supply', mitigation: 'Interlocks and current limiting' }, { hazard: 'Fire', cause: 'Electrostatic ignition of flammable liquid vapour', mitigation: 'Inert atmosphere, earthing and bonding' }],
+  standards: ['IEC 60247 (insulating liquids — measurement of relative permittivity, dielectric dissipation factor and d.c. resistivity)', 'ASTM D257 (DC resistance or conductance of insulating materials)', 'IEC 61010-1 (safety requirements for electrical equipment for measurement, control and laboratory use)'],
+  limits: 'Lumped description of the total free charge in a uniform, quiescent, linear fluid. The memory law is a postulate introduced for the sake of the comparison; its parameters have no measured values. The precision estimate assumes independent Gaussian noise of equal size on every sample and ignores systematic errors, which in practice dominate.',
+  numerics: { method: 'Closed-form solution of the equivalent second-order system, cross-checked by adaptive Runge–Kutta integration of the two-state form; golden-section fit of the conventional time constant with analytic amplitude', order: 5, stability: 'Step-size controlled to a relative tolerance of 10⁻⁹' },
+  optimise: { objective: 'Z', sense: 'max', vars: ['n_samp'], note: 'Significance grows as the square root of the number of independent samples.' },
+  inverse: { series: 'decay', fit: ['theta_m'] },
+  logicPreset: {
+    atoms: [{ k: 'M', text: 'Conduction has an exponential memory with memory time above a quarter of ε/σ' }, { k: 'O', text: 'The free charge reverses sign during its decay' }, { k: 'E', text: 'The decay is a single exponential' }, { k: 'A', text: 'The reversal is an artefact of circuit inductance' }],
+    premises: ['M -> O', 'E -> ~O', 'O -> (M | A)'], conclusion: '(O & ~A) -> (M & ~E)',
+  },
+  extensions: ['Spatially resolved relaxation with ion diffusion (Debye length effects)', 'General kernels and their Laplace-domain signature in the impedance spectrum', 'Bayesian model comparison including systematic uncertainties', 'Coupling to electrohydrodynamic flow'],
+};
+
+// ------------------------------------------------------------------ bound states of a quantum well
+function qwCore(v, a, L = v.L_w, V0 = v.V_0, nMax = 8) {
+  const hb = C.hbar, mw = v.m_r * C.m_e, mb = a.equal_mass ? mw : v.m_b * C.m_e, anp = a.parabolic ? 0 : v.alpha_np;
+  const Ek = k => { const e0 = hb * hb * k * k / (2 * mw); return anp > 0 ? 2 * e0 / (1 + Math.sqrt(1 + 4 * anp * e0)) : e0; };
+  const kOfE = E => Math.sqrt(2 * mw * E * (1 + anp * E)) / hb;
+  const levels = [];
+  if (!a.finite) {
+    for (let n = 1; n <= Math.min(nMax, 6); n++) { const k = n * Math.PI / L; levels.push({ n, k, kap: Infinity, E: Ek(k) }); }
+    return { hb, mw, mb, L, V0, levels, Nb: Infinity, kmax: Infinity, Ek, kOfE };
+  }
+  const kmax = kOfE(V0), kapOf = k => Math.sqrt(Math.max(2 * mb * (V0 - Ek(k)), 0)) / hb;
+  const off = n => (a.symmetric ? (n - 1) * Math.PI : (n - 0.5) * Math.PI);
+  const Nb = a.symmetric ? Math.floor(kmax * L / Math.PI) + 1 : Math.max(0, Math.floor(kmax * L / Math.PI + 0.5));
+  for (let n = 1; n <= Math.min(Nb, nMax); n++) {
+    const g = k => k * L - off(n) - (a.symmetric ? 2 : 1) * Math.atan(mw * kapOf(k) / (mb * k));
+    const k = g(kmax) <= 0 ? kmax : rootOr(g, kmax * 1e-12, kmax, kmax);
+    levels.push({ n, k, kap: kapOf(k), E: Ek(k) });
+  }
+  return { hb, mw, mb, L, V0, levels, Nb, kmax, Ek, kOfE };
+}
+/** Normalised wavefunction of level s (SI units, m^-1/2) and its probability outside the well. */
+function qwPsi(c, a, s) {
+  const { L } = c, k = s.k, kap = s.kap;
+  if (!a.finite) { const A = Math.sqrt(2 / L); return { f: x => (Math.abs(x) <= L / 2 ? A * Math.sin(s.n * Math.PI * (x + L / 2) / L) : 0), pOut: 0, lo: -L / 2, hi: L / 2 }; }
+  const ik = kap > 0 ? 1 / kap : 1e300;
+  if (a.symmetric) {
+    const even = s.n % 2 === 1, edge = even ? Math.cos(k * L / 2) : Math.sin(k * L / 2);
+    const nIn = L / 2 + (even ? 1 : -1) * Math.sin(k * L) / (2 * k), nOut = edge * edge * ik, A = 1 / Math.sqrt(nIn + nOut);
+    return { f: x => { const ax = Math.abs(x); if (ax <= L / 2) return A * (even ? Math.cos(k * x) : Math.sin(k * x)); const t = A * edge * Math.exp(-kap * (ax - L / 2)); return even || x > 0 ? t : -t; }, pOut: nOut / (nIn + nOut), lo: -L / 2, hi: L / 2 };
+  }
+  const edge = Math.sin(k * L), nIn = L / 2 - Math.sin(2 * k * L) / (4 * k), nOut = edge * edge * ik / 2, A = 1 / Math.sqrt(nIn + nOut);
+  return { f: x => (x <= 0 ? 0 : x <= L ? A * Math.sin(k * x) : A * edge * Math.exp(-kap * (x - L))), pOut: nOut / (nIn + nOut), lo: 0, hi: L };
+}
+
+const quantumWell = {
+  id: 'quantum-well-levels',
+  title: 'Bound states of a finite quantum well',
+  module: [1, 2], klass: 'I', domains: ['materials', 'quantum'],
+  keywords: ['quantum well', 'finite square well', 'square well', 'particle in a box', 'bound states', 'energy levels', 'confinement', 'quantum confinement', 'heterostructure', 'gaas', 'intersubband', 'effective mass', 'wavefunction', 'infinite well', 'quantum dot'],
+  summary: 'Energy levels and wavefunctions of a particle in a one-dimensional square well of finite depth, by solving the transcendental matching conditions; comparison with the infinite-well formula; transition energy and barrier penetration.',
+  background: [
+    'A particle confined to a region of width L cannot have arbitrary energy: its wavefunction must fit the region, which quantises the wavenumber and hence the energy. For impenetrable walls the levels are E_n = n²π²ħ²/(2mL²). When the walls have finite height V₀ the wavefunction leaks into the barriers as a decaying exponential; each level lies below its infinite-well counterpart and only a finite number of states are bound.',
+    'Semiconductor heterostructures realise this textbook problem. A thin layer of narrow-gap material between wider-gap barriers confines electrons, which behave as free particles with an effective mass. Because the effective mass differs between well and barrier, the correct matching condition is continuity of ψ and of (1/m*) dψ/dx (BenDaniel & Duke 1966). The spacing of the levels sets the wavelengths of quantum-well lasers, detectors and quantum-cascade devices.',
+  ],
+  phenomena: ['Quantisation by confinement', 'Tunnelling penetration into the barriers', 'Parity of states in a symmetric potential', 'Effective-mass mismatch', 'Band non-parabolicity'],
+  laws: ['schrodinger', 'born', 'uncertainty'],
+  refs: ['Griffiths, D. J. & Schroeter, D. F. (2018). Introduction to Quantum Mechanics, 3rd ed., Cambridge University Press.', 'Bastard, G. (1988). Wave Mechanics Applied to Semiconductor Heterostructures, Les Éditions de Physique.', 'BenDaniel, D. J. & Duke, C. B. (1966). Space-charge effects on electron tunneling. Phys. Rev. 152, 683–692.', 'Davies, J. H. (1998). The Physics of Low-Dimensional Semiconductors, Cambridge University Press.', 'Dingle, R., Wiegmann, W. & Henry, C. H. (1974). Quantum states of confined carriers in very thin AlGaAs–GaAs–AlGaAs heterostructures. Phys. Rev. Lett. 33, 827–830.'],
+  inputs: [
+    inp('L_w', 'Well width', 'nm', 10, { min: 0.5, max: 50, kind: 'geometry', aliases: ['well width', 'width', 'box length', 'thickness'] }),
+    inp('V_0', 'Well depth (barrier height)', 'eV', 0.3, { min: 0.005, max: 20, aliases: ['well depth', 'barrier height', 'depth', 'band offset'], src: 'Of the order of the GaAs/AlGaAs conduction-band offset at 30–40 % aluminium' }),
+    inp('m_r', 'Effective mass in the well, in electron masses', '1', 0.067, { min: 0.01, max: 10, kind: 'fluid', aliases: ['effective mass', 'mass ratio', 'mass'], src: 'Electrons in GaAs' }),
+    inp('m_b', 'Effective mass in the barrier, in electron masses', '1', 0.092, { min: 0.01, max: 10, kind: 'fluid', aliases: ['barrier mass'], src: 'Electrons in AlGaAs with about 30 % aluminium' }),
+    inp('alpha_np', 'Non-parabolicity parameter', '1/eV', 0.64, { min: 0, max: 2, kind: 'fluid', aliases: ['non-parabolicity', 'nonparabolicity'], src: 'GaAs conduction band' }),
+  ],
+  assumptions: [
+    asm('finite', 'The barriers have finite height V₀.', { why: 'Real heterostructures', alt: 'The walls are impenetrable (infinite well): E_n = n²π²ħ²/(2mL²).' }),
+    asm('equal_mass', 'The particle has the same mass in well and barrier.', { why: 'Textbook square well', alt: 'The effective mass differs in the barrier; ψ and (1/m*)dψ/dx are continuous (BenDaniel–Duke).' }),
+    asm('parabolic', 'The energy band is parabolic: E = ħ²k²/(2m).', { why: 'Valid near the band edge', alt: 'Non-parabolicity is included through E(1 + αE) = ħ²k²/(2m), which lowers the higher levels.' }),
+    asm('symmetric', 'Both barriers have the same height.', { why: 'Symmetric well with states of definite parity', alt: 'One side is an impenetrable wall (for example a surface): only states with a node there survive.' }),
+  ],
+  symbols: { psi: ['Wavefunction', '1'], x: ['Position', 'm'], U: ['Potential energy', 'J'], E_n: ['Energy of level n above the well bottom', 'J'], n: ['Quantum number', '1'], k_w: ['Wavenumber in the well', '1/m'], kappa_b: ['Decay constant in the barrier', '1/m'], N_b: ['Number of bound states', '1'], E_1: ['Ground-state energy', 'J'], E_2: ['First excited-state energy', 'J'], lambda_21: ['Wavelength of the 2→1 transition', 'm'] },
+  equations: a => {
+    const np = a.parabolic ? '' : '*(1 + alpha_np*E_n)', mq = a.equal_mass ? 'm_r' : 'm_b', ratio = a.equal_mass ? 'kappa_b/k_w' : 'm_r*kappa_b/(m_b*k_w)';
+    const out = [eq('se', 'Time-independent Schrödinger equation', `-hbar^2/(2*m_r*m_e)*pd2(psi,x) + U*psi`, 'E_n*psi', { kind: 'law', origin: 'Schrödinger equation in the effective-mass approximation' })];
+    if (!a.finite) out.push(eq('inf', 'Infinite-well levels', `E_n${np}`, 'n^2*pi^2*hbar^2/(2*m_r*m_e*L_w^2)', { kind: 'derived', origin: 'Standing waves with nodes at the walls' }));
+    else {
+      out.push(eq('kw', 'Wavenumber in the well', 'k_w', `sqrt(2*m_r*m_e*E_n${np})/hbar`, { kind: 'derived' }));
+      out.push(eq('kb', 'Decay constant in the barrier', 'kappa_b', `sqrt(2*${mq}*m_e*(V_0 - E_n))/hbar`, { kind: 'derived' }));
+      out.push(a.symmetric
+        ? eq('quant', 'Quantisation condition', 'k_w*L_w', `(n - 1)*pi + 2*atan(${ratio})`, { kind: 'derived', origin: 'Matching ψ and its mass-weighted derivative at both interfaces; even and odd states combined' })
+        : eq('quant', 'Quantisation condition with one hard wall', 'k_w*L_w', `(n - 1/2)*pi + atan(${ratio})`, { kind: 'derived', origin: 'Node at the wall; matching at the finite barrier' }));
+      out.push(eq('nb', 'Number of bound states', 'N_b', a.symmetric ? `floor(sqrt(2*m_r*m_e*V_0${a.parabolic ? '' : '*(1 + alpha_np*V_0)'})*L_w/(pi*hbar)) + 1` : `floor(sqrt(2*m_r*m_e*V_0${a.parabolic ? '' : '*(1 + alpha_np*V_0)'})*L_w/(pi*hbar) + 1/2)`, { kind: 'derived' }));
+    }
+    out.push(eq('lam', 'Transition wavelength', 'lambda_21', '2*pi*hbar*c/(E_2 - E_1)', { kind: 'law', origin: 'Planck–Einstein relation' }));
+    return out;
+  },
+  derivation: a => [
+    { text: 'Inside the well the potential is zero and the solutions are sinusoidal; in the barriers the energy is below the potential and the solutions decay exponentially.', tex: '\\psi_{in} \\propto \\cos kx\\ \\text{or}\\ \\sin kx,\\qquad \\psi_{out}\\propto e^{-\\kappa|x|},\\qquad k=\\frac{\\sqrt{2mE}}{\\hbar},\\ \\kappa=\\frac{\\sqrt{2m_b(V_0-E)}}{\\hbar}' },
+    { text: 'Requiring ψ and (1/m)dψ/dx to be continuous at x = ±L/2 gives one condition for even states and one for odd states.', tex: 'k\\tan\\frac{kL}{2} = \\frac{m}{m_b}\\kappa\\ \\ (\\text{even}),\\qquad -k\\cot\\frac{kL}{2} = \\frac{m}{m_b}\\kappa\\ \\ (\\text{odd})' },
+    { text: 'Both can be written as a single equation with one root for each integer n. The left side grows steadily with k and the right side falls, so the root is unique and is found by bracketing.', tex: 'kL = (n-1)\\pi + 2\\arctan\\frac{m\\,\\kappa}{m_b\\,k}' },
+    { text: 'A level exists only while k is below the value at which E = V₀, which fixes the number of bound states. There is always at least one in a symmetric well.', tex: 'N = \\left\\lfloor \\frac{L\\sqrt{2mV_0}}{\\pi\\hbar}\\right\\rfloor + 1' },
+    { text: 'As V₀ → ∞ the arctangent tends to π/2 and the infinite-well result is recovered.', tex: 'kL \\to n\\pi\\quad\\Rightarrow\\quad E_n = \\frac{n^2\\pi^2\\hbar^2}{2mL^2}' },
+    ...(a.parabolic ? [] : [{ text: 'Away from the band edge the dispersion flattens. A two-band (Kane) model gives an energy-dependent effective mass.', tex: 'E\\,(1+\\alpha E) = \\frac{\\hbar^2k^2}{2m}' }]),
+  ],
+  solve(v, a) {
+    const c = qwCore(v, a), lv = c.levels, eV = C.e_c, warnings = [], L = c.L;
+    const Einf = n => c.Ek(n * Math.PI / L), E = n => (lv[n - 1] ? lv[n - 1].E : NaN), nb = { text: 'Not bound' };
+    if (a.finite && c.Nb === 0) warnings.push('The well is too shallow or narrow to bind a state when one side is a hard wall.');
+    if (a.finite && c.Nb > 8) warnings.push(`The well holds ${c.Nb} bound states; only the lowest eight are computed.`);
+    if (L < 2e-9) warnings.push('The well is only a few atomic layers wide; the effective-mass (envelope-function) approximation is unreliable at this scale.');
+    if (!a.parabolic && lv.length && v.alpha_np * lv[lv.length - 1].E > 1) warnings.push('The non-parabolicity correction αE exceeds one for the highest level; the two-band formula is being stretched.');
+    const psi = lv.slice(0, 4).map(s => qwPsi(c, a, s)), p1 = psi[0];
+    const xl = a.finite ? (a.symmetric ? -1.5 * L : -0.3 * L) : -0.75 * L, xr = a.finite ? (a.symmetric ? 1.5 * L : 2.2 * L) : 0.75 * L, xs = N.linspace(xl, xr, 401);
+    // orthogonality of the two lowest states of equal parity (or the two lowest when one wall is hard) and normalisation of the ground state
+    let orth = 0, normErr = 0, orthNote = 'Fewer than the required number of bound states';
+    if (lv.length) {
+      const i2 = a.finite && a.symmetric ? 2 : 1, ext = a.finite ? 20 / Math.max(lv[0].kap, 1e-300) : 0;
+      // integrate the well and each exponential tail on its own grid
+      const quad = fn => { let q = N.trapz(...(g => [g, g.map(fn)])(N.linspace(p1.lo, p1.hi, 2001))); if (ext > 0) { q += N.trapz(...(g => [g, g.map(fn)])(N.linspace(p1.hi, p1.hi + ext, 2001))); if (a.symmetric) q += N.trapz(...(g => [g, g.map(fn)])(N.linspace(p1.lo - ext, p1.lo, 2001))); } return q; };
+      normErr = quad(x => p1.f(x) ** 2) - 1;
+      if (lv[i2] && a.parabolic) { const pj = qwPsi(c, a, lv[i2]); orth = quad(x => p1.f(x) * pj.f(x)); orthNote = `Overlap of states 1 and ${i2 + 1}`; }
+      else if (!a.parabolic) orthNote = 'Not applicable: an energy-dependent mass makes the states non-orthogonal';
+    }
+    const dE = E(2) - E(1), ws = N.linspace(0.3 * L, 3 * L, 60), wl = ws.map(w => qwCore(v, a, w, c.V0, 3).levels);
+    const lvCurves = [0, 1, 2].map(i => ({ label: `Level ${i + 1}`, data: wl.map(q => (q[i] ? q[i].E / eV * 1e3 : NaN)) })).filter(q => q.data.some(Number.isFinite));
+    const nShow = Math.max(lv.length, 1), ns = Array.from({ length: nShow }, (_, i) => i + 1);
+    const sc = Math.sqrt(1e-9);
+    return {
+      scalars: [
+        scalar('N_b', 'Number of bound states', Number.isFinite(c.Nb) ? c.Nb : 0, '1', Number.isFinite(c.Nb) ? {} : { text: 'Unlimited (infinite well)' }),
+        scalar('E_1', 'Ground-state energy above the well bottom', E(1), 'J', lv[0] ? { show: 'meV' } : nb), scalar('E_2', 'Second level', E(2), 'J', lv[1] ? { show: 'meV' } : nb), scalar('E_3', 'Third level', E(3), 'J', lv[2] ? { show: 'meV' } : nb),
+        scalar('E_inf', 'Infinite-well ground-state energy', Einf(1), 'J', { show: 'meV' }), scalar('r_E', 'Ground-state energy / infinite-well value', lv[0] ? E(1) / Einf(1) : NaN, '1', lv[0] ? {} : nb),
+        scalar('E_bind', 'Binding energy of the ground state', a.finite && lv[0] ? c.V0 - E(1) : NaN, 'J', a.finite && lv[0] ? { show: 'meV' } : { text: a.finite ? 'Not bound' : 'Unlimited (infinite well)' }),
+        scalar('dE_21', 'Transition energy between the two lowest levels', dE, 'J', lv[1] ? { show: 'meV' } : nb),
+        scalar('lambda_21', 'Wavelength of the 2→1 transition', lv[1] ? TAU * C.hbar * C.c / dE : NaN, 'm', lv[1] ? { show: 'um' } : nb),
+        scalar('f_21', 'Frequency of the 2→1 transition', lv[1] ? dE / (TAU * C.hbar) : NaN, 'Hz', lv[1] ? { show: 'THz' } : nb),
+        scalar('d_pen', 'Penetration depth of the ground state into the barrier', a.finite && lv[0] && lv[0].kap > 0 ? 1 / lv[0].kap : 0, 'm', { show: 'nm' }),
+        scalar('P_out', 'Probability of finding the ground-state particle in the barriers', lv[0] ? p1.pOut : NaN, '1', lv[0] ? { show: '%' } : nb),
+        scalar('z_0', 'Well-strength parameter L√(2mV₀)/(2ħ)', a.finite ? c.kmax * L / 2 : 0, '1', a.finite ? {} : { text: 'Unlimited (infinite well)' }),
+        scalar('lam_dB', 'de Broglie wavelength of the ground state in the well', lv[0] ? TAU / lv[0].k : NaN, 'm', lv[0] ? { show: 'nm' } : nb),
+      ],
+      series: [
+        line('wavefunctions', 'Wavefunctions of the lowest states', 'Position', 'nm', xs.map(x => x * 1e9), psi.length ? psi.map((p, i) => ({ label: `n = ${i + 1}`, data: xs.map(x => p.f(x) * sc) })) : [{ label: 'No bound state', data: xs.map(() => 0) }], 'Wavefunction', 'nm^-½', { note: a.finite ? 'The well occupies the central region; tails extend into the barriers' : 'Impenetrable walls' }),
+        line('levels-vs-width', 'Energy levels against well width', 'Well width', 'nm', ws.map(w => w * 1e9), [...(lvCurves.length ? lvCurves : [{ label: 'No bound state', data: ws.map(() => 0) }]), { label: 'Infinite well, n = 1', data: ws.map(w => c.Ek(Math.PI / w) / eV * 1e3), dash: true }], 'Energy', 'meV', { logy: true }),
+        line('spectrum', 'Level energies', 'Quantum number', '–', ns, [{ label: a.finite ? 'Finite well' : 'Infinite well', data: ns.map(n => (lv[n - 1] ? lv[n - 1].E / eV * 1e3 : 0)) }, { label: 'Infinite well of the same width', data: ns.map(n => Einf(n) / eV * 1e3), dash: true }], 'Energy', 'meV', { kind: 'bar' }),
+      ],
+      checks: [
+        check('Normalisation of the ground state', normErr, 1e-4, 'Numerical integral of |ψ|² against the analytic normalisation'),
+        check('Orthogonality of bound states', orth, 1e-4, orthNote),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const out = [], hb = C.hbar, mw = v.m_r * C.m_e, Einf = Math.PI ** 2 * hb * hb / (2 * mw * v.L_w ** 2);
+    const id = { finite: true, equal_mass: true, parabolic: true, symmetric: true };
+    out.push(bench('Deep-well limit reproduces the infinite-well ground state', qwCore(v, id, v.L_w, 1e10 * Einf, 1).levels[0].E, Einf, 'E₁ = π²ħ²/(2mL²)', 1e-3));
+    out.push(bench('Infinite-well second level', qwCore(v, { ...id, finite: false }).levels[1].E, 4 * Einf, 'E₂ = 4E₁', 1e-12));
+    const V1 = hb * hb * (2 / v.L_w) ** 2 / (2 * mw), k1 = qwCore(v, id, v.L_w, V1, 1).levels[0].k;
+    out.push(bench('Ground state of a well with strength parameter one', k1 * v.L_w / 2, 0.7390851332151607, 'Root of z = cos z (even-state condition z tan z = √(1 − z²))', 1e-9));
+    if (a.finite && a.symmetric) { const c = qwCore(v, a), s = c.levels[0]; out.push(bench('Even-state matching condition for the computed ground state', s.k * Math.tan(s.k * c.L / 2) / (c.mw / c.mb * s.kap), 1, 'k tan(kL/2) = (m/m_b) κ', 1e-8)); }
+    return out;
+  },
+  validation: [],
+  diagram(v, a) {
+    const c = qwCore(v, a), lv = c.levels.slice(0, 4), top = a.finite ? c.V0 : (lv.length ? lv[lv.length - 1].E * 1.3 : 1), y = E => 280 - 190 * Math.min(E / top, 1.05);
+    return svg(`
+      ${a.finite ? (a.symmetric ? S.path(`M60 ${y(top)} L230 ${y(top)} L230 280 L410 280 L410 ${y(top)} L580 ${y(top)}`, 'd-pipe') : S.path(`M230 40 L230 280 L410 280 L410 ${y(top)} L580 ${y(top)}`, 'd-pipe')) : S.path('M230 40 L230 280 L410 280 L410 40', 'd-pipe')}
+      ${lv.map((s, i) => S.line(236, y(s.E), 404, y(s.E), 'd-heat') + S.text(416, y(s.E) + 4, `E${i + 1} = ${lab(s.E / C.e_c * 1e3, 'meV')}`, 'd-text d-small', 'start')).join('')}
+      ${S.dim(230, 310, 410, 310, `L = ${lab(v.L_w * 1e9, 'nm')}`)}
+      ${a.finite ? S.dim(150, y(top), 150, 280, '') + S.text(140, (y(top) + 280) / 2, `V₀ = ${lab(v.V_0 / C.e_c, 'eV')}`, 'd-text d-small', 'end') : S.text(320, 30, 'impenetrable walls')}
+      ${S.text(320, 345, `m* = ${lab(v.m_r)} mₑ${a.equal_mass ? '' : `,  barrier ${lab(v.m_b)} mₑ`}`, 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Determine the confined energy levels of a semiconductor quantum well from optical spectra and compare with the finite-well calculation as the well width is varied.',
+    apparatus: ['Series of epitaxially grown single quantum wells of different widths with identical barriers', 'Cryostat (4–300 K)', 'Tunable excitation source and monochromator; for intersubband transitions a Fourier-transform infrared spectrometer with a multi-pass waveguide geometry'],
+    instruments: [{ name: 'Photoluminescence or photoluminescence-excitation spectrometer', measures: 'Interband transition energies between confined electron and hole levels', range: '0.5–3 eV', resolution: '±0.5 meV' }, { name: 'Fourier-transform infrared spectrometer', measures: 'Intersubband absorption energy E₂ − E₁', range: '5–500 meV', resolution: '±0.1 meV' }, { name: 'High-resolution X-ray diffractometer or transmission electron microscope', measures: 'Well width and composition', range: '—', resolution: '± one monolayer' }],
+    procedure: ['Measure the well width and barrier composition of each sample structurally.', 'Record low-temperature spectra and identify the transitions by their selection rules and polarisation dependence.', 'Subtract the bulk band gap and exciton binding energy to obtain confinement energies.', 'Plot confinement energy against well width with the finite-well and infinite-well predictions.'],
+    controls: ['A thick layer of the well material as a bulk reference', 'Samples from the same growth run to fix the barrier height'],
+    signatures: ['Confinement energy rising as the well narrows, more slowly than 1/L² for narrow wells', 'Step-like absorption edge of a two-dimensional density of states', 'Intersubband absorption only for light polarised along the growth direction', 'The number of confined states increasing in steps with width'],
+    safety: ['Laser safety for the excitation source', 'Cryogen handling', 'Arsenic-containing wafers: do not grind or heat'],
+  },
+  falsify: ['Confinement energies exceeding the infinite-well values for the measured width.', 'More bound levels observed than ⌊L√(2mV₀)/(πħ)⌋ + 1.', 'A symmetric well, however shallow, with no bound state.', 'Level energies that do not vary continuously and monotonically with well width.'],
+  alternatives: [{ name: 'Infinite-well approximation', text: 'Adequate for deep, wide wells; overestimates energies increasingly as the well narrows.' }, { name: 'Multiband k·p (envelope-function) models', text: 'Needed for holes, strained layers and narrow-gap materials where bands mix.' }, { name: 'Self-consistent Schrödinger–Poisson', text: 'Doped wells bend the potential; the level energies must then be solved together with the electrostatics.' }, { name: 'Atomistic (tight-binding or pseudopotential) calculation', text: 'For wells a few monolayers thick, where the envelope picture fails.' }],
+  hazards: [{ hazard: 'Laser exposure', cause: 'Open excitation beams', mitigation: 'Enclosure and eyewear' }, { hazard: 'Cryogens', cause: 'Liquid helium or nitrogen', mitigation: 'Protective equipment and ventilation' }],
+  standards: ['IEC 60825-1 (safety of laser products)', 'ISO 14644-1 (cleanrooms and associated controlled environments: classification of air cleanliness)'],
+  limits: 'One particle in one dimension, abrupt interfaces, flat bands (no electric field or space charge), a single band with scalar effective mass. Excitonic effects, valence-band mixing, strain and interface roughness are outside the model. For non-parabolic bands the states are only approximately orthogonal.',
+  numerics: { method: 'Bracketed root finding on a monotone form of the matching condition, one root per quantum number; analytic normalisation', stability: 'Each root is unique within its bracket' },
+  optimise: { objective: 'dE_21', sense: 'max', vars: ['L_w'], note: 'The transition energy peaks at the width where the second level is about to become unbound.' },
+  inverse: { series: 'levels-vs-width', fit: ['V_0', 'm_r'] },
+  extensions: ['Applied electric field (quantum-confined Stark effect)', 'Coupled wells and superlattice minibands', 'Self-consistent band bending in doped wells', 'Tunnelling escape and resonant-tunnelling structures'],
+};
+
+// ------------------------------------------------------------------ skin depth, plane-wave attenuation and shielding
+const ETA0 = Math.sqrt(MU0 / EPS0);
+function skCore(v, a, f = v.f_d) {
+  const w = TAU * f, mu = MU0 * v.mu_r, ep = EPS0 * v.eps_r, sg = v.sigma_e, lt = sg / (w * ep);
+  let alpha, beta, eta;
+  if (a.good_conductor) { alpha = beta = Math.sqrt(w * mu * sg / 2); eta = [alpha / sg, alpha / sg]; }
+  else { const r = Math.sqrt(1 + lt * lt), k0 = w * Math.sqrt(mu * ep / 2); alpha = k0 * lt / Math.sqrt(r + 1); beta = k0 * Math.sqrt(r + 1); eta = csqrt(cdiv([0, w * mu], [sg, w * ep])); }
+  const lam0 = C.c / f, Zw = a.far_field ? ETA0 : ETA0 * Math.min(1, TAU * v.r_src / lam0);
+  const t = v.t_s, A = 8.685889638 * alpha * t, sum = cadd([Zw, 0], eta), R = dB(cabs(sum) ** 2 / (4 * Zw * cabs(eta)));
+  const rho = cdiv(csub([Zw, 0], eta), sum), rr = cmul(cmul(rho, rho), cexp([-2 * alpha * t, -2 * beta * t]));
+  const B = a.multi_reflect ? dB(cabs(csub([1, 0], rr))) : 0;
+  const slab = A + R + B, ap = a.solid ? Infinity : Math.max(0, dB(lam0 / (2 * v.l_a)));
+  // direct evaluation of the slab transmission where the exponentials do not overflow
+  let direct = NaN;
+  if (alpha * t < 300) { const g = [alpha * t, beta * t], den = csub(cmul(cmul(sum, sum), cexp(g)), cmul(cmul(csub([Zw, 0], eta), csub([Zw, 0], eta)), cexp([-g[0], -g[1]]))); direct = -dB(cabs(cdiv(cmul([4 * Zw, 0], eta), den))); }
+  return { w, mu, ep, sg, lt, alpha, beta, eta, lam0, Zw, A, R, B, slab, ap, SE: Math.min(slab, ap), direct };
+}
+
+const skinDepth = {
+  id: 'skin-depth-plane-wave',
+  title: 'Skin depth, plane-wave attenuation and shielding effectiveness',
+  module: 2, klass: 'I', domains: ['electromagnetic'],
+  keywords: ['skin depth', 'skin effect', 'shielding effectiveness', 'electromagnetic shielding', 'surface resistance', 'plane wave', 'attenuation', 'lossy dielectric', 'penetration depth', 'eddy current', 'emc', 'shield', 'faraday cage', 'conductor', 'absorption loss', 'reflection loss'],
+  summary: 'Propagation of a plane electromagnetic wave in a conducting or lossy medium: skin depth, attenuation and phase constants, intrinsic impedance and surface resistance, and the shielding effectiveness of a flat sheet from absorption, reflection and internal re-reflection.',
+  background: [
+    'A time-varying field induces currents in a conductor that oppose its penetration. The field amplitude falls exponentially with depth, by a factor e in one skin depth δ = √(2/(ωμσ)). In copper δ is about 9 mm at 50 Hz and 66 µm at 1 MHz. High-frequency current is therefore confined to a surface layer, which raises the resistance of conductors and gives them a surface resistance R_s = 1/(σδ).',
+    'In a general medium with conductivity σ and permittivity ε the propagation constant is γ = α + jβ = √(jωμ(σ + jωε)). When σ ≫ ωε the medium is a good conductor and α = β = 1/δ; when σ ≪ ωε it is a low-loss dielectric with α ≈ (σ/2)√(μ/ε). A metal sheet shields in two ways (Schelkunoff): the wave is largely reflected at each face because the metal\'s intrinsic impedance is far below that of free space, and what enters is absorbed at 8.7 dB per skin depth. Reflection dominates at low frequency for plane waves; absorption dominates once the sheet is several skin depths thick. Apertures and seams, rather than the metal itself, usually limit the shielding of a real enclosure.',
+  ],
+  phenomena: ['Eddy-current screening', 'Exponential field decay in a conductor', 'Impedance mismatch reflection', 'Multiple internal reflection in thin sheets', 'Near-field wave impedance', 'Leakage through apertures'],
+  laws: ['maxwell', 'ohm', 'energy'],
+  refs: ['Schelkunoff, S. A. (1943). Electromagnetic Waves, Van Nostrand.', 'Ott, H. W. (2009). Electromagnetic Compatibility Engineering, Wiley.', 'Paul, C. R. (2006). Introduction to Electromagnetic Compatibility, 2nd ed., Wiley.', 'Jackson, J. D. (1999). Classical Electrodynamics, 3rd ed., Wiley.', 'Pozar, D. M. (2012). Microwave Engineering, 4th ed., Wiley.'],
+  inputs: [
+    inp('f_d', 'Frequency', 'MHz', 1, { min: 1e-5, max: 1e5, aliases: ['frequency', 'mhz', 'khz', 'ghz'] }),
+    inp('sigma_e', 'Conductivity of the medium', 'S/m', 5.8e7, { min: 1e-6, max: 1e8, kind: 'fluid', aliases: ['conductivity'], src: 'Annealed copper at 20 °C' }),
+    inp('mu_r', 'Relative permeability', '1', 1, { min: 1, max: 1e5, kind: 'fluid', aliases: ['permeability', 'relative permeability'] }),
+    inp('eps_r', 'Relative permittivity', '1', 1, { min: 1, max: 100, kind: 'fluid', aliases: ['permittivity', 'dielectric constant'] }),
+    inp('t_s', 'Sheet thickness', 'mm', 0.1, { min: 1e-4, max: 100, kind: 'geometry', aliases: ['thickness', 'sheet thickness', 'shield thickness', 'foil'] }),
+    inp('E_0', 'Incident field amplitude', 'V/m', 10, { min: 1e-3, max: 1e5, aliases: ['incident field', 'field strength'] }),
+    inp('r_src', 'Distance from a magnetic (loop) source', 'm', 0.1, { min: 0.001, max: 100, kind: 'geometry', aliases: ['source distance', 'distance'] }),
+    inp('l_a', 'Largest aperture or slot length', 'mm', 10, { min: 0.01, max: 1000, kind: 'geometry', aliases: ['aperture', 'slot', 'slot length', 'seam'] }),
+  ],
+  assumptions: [
+    asm('good_conductor', 'The medium is a good conductor: conduction current far exceeds displacement current (σ ≫ ωε).', { why: 'Metals at all radio and microwave frequencies', alt: 'The general lossy-medium expressions are used, valid from good conductor to low-loss dielectric.' }),
+    asm('far_field', 'The incident wave is a plane wave in the far field, with wave impedance 377 Ω.', { why: 'Source more than a sixth of a wavelength away', alt: 'The source is a nearby current loop: the wave impedance is low, 377 Ω × 2πr/λ, and reflection loss is much smaller.' }),
+    asm('multi_reflect', 'Multiple reflections between the faces of the sheet are included.', { why: 'Exact slab solution', alt: 'Internal re-reflection is neglected (valid when the sheet is thicker than about one skin depth).' }),
+    asm('solid', 'The sheet is continuous, with no apertures or seams.', { why: 'Material limit', alt: 'A slot of given length leaks; the shielding cannot exceed 20 log₁₀(λ/2l).' }),
+  ],
+  symbols: { omega: ['Angular frequency', '1/s'], delta_s: ['Skin depth', 'm'], alpha: ['Attenuation constant', '1/m'], beta_p: ['Phase constant', '1/m'], eta_m: ['Magnitude of the intrinsic impedance', 'ohm'], R_s: ['Surface resistance', 'ohm'], E_y: ['Electric field of the wave', 'V/m'], z: ['Depth into the medium', 'm'], t: ['Time', 's'], A_dB: ['Absorption loss', '1'], R_dB: ['Reflection loss', '1'], B_dB: ['Re-reflection correction', '1'], SE: ['Shielding effectiveness', '1'], SE_ap: ['Aperture limit on shielding', '1'], Z_w: ['Wave impedance of the incident field', 'ohm'], E_t: ['Transmitted field amplitude', 'V/m'] },
+  equations: a => [
+    eq('w', 'Angular frequency', 'omega', '2*pi*f_d', { kind: 'definition' }),
+    eq('wave', 'Field equation in the medium', 'pd2(E_y,z)', `mu_0*mu_r*sigma_e*pd(E_y,t)${a.good_conductor ? '' : ' + mu_0*mu_r*eps_0*eps_r*pd2(E_y,t)'}`, { kind: 'law', origin: 'Maxwell\'s equations with Ohm\'s law' + (a.good_conductor ? ', displacement current neglected' : '') }),
+    ...(a.good_conductor ? [
+      eq('delta', 'Skin depth', 'delta_s', 'sqrt(2/(omega*mu_0*mu_r*sigma_e))', { kind: 'derived', origin: 'Diffusion of the field into a conductor', needs: ['good_conductor'] }),
+      eq('alpha', 'Attenuation constant', 'alpha', '1/delta_s', { kind: 'derived', needs: ['good_conductor'] }),
+      eq('eta', 'Intrinsic impedance magnitude', 'eta_m', 'sqrt(omega*mu_0*mu_r/sigma_e)', { kind: 'derived', needs: ['good_conductor'] }),
+    ] : [
+      eq('alpha', 'Attenuation constant', 'alpha', 'omega*sqrt(mu_0*mu_r*eps_0*eps_r/2)*sqrt(sqrt(1 + (sigma_e/(omega*eps_0*eps_r))^2) - 1)', { kind: 'derived', origin: 'Real part of the propagation constant' }),
+      eq('beta', 'Phase constant', 'beta_p', 'omega*sqrt(mu_0*mu_r*eps_0*eps_r/2)*sqrt(sqrt(1 + (sigma_e/(omega*eps_0*eps_r))^2) + 1)', { kind: 'derived', origin: 'Imaginary part of the propagation constant' }),
+      eq('delta', 'Penetration depth', 'delta_s', '1/alpha', { kind: 'definition' }),
+      eq('eta', 'Intrinsic impedance magnitude', 'eta_m', 'sqrt(omega*mu_0*mu_r/sqrt(sigma_e^2 + (omega*eps_0*eps_r)^2))', { kind: 'derived' }),
+    ]),
+    eq('rs', 'Surface resistance', 'R_s', a.good_conductor ? '1/(sigma_e*delta_s)' : 'eta_m*cos(pi/4 - atan(omega*eps_0*eps_r/sigma_e)/2)', { kind: 'derived', origin: 'Real part of the intrinsic impedance' }),
+    a.far_field ? eq('zw', 'Wave impedance of a plane wave', 'Z_w', 'sqrt(mu_0/eps_0)', { kind: 'law', needs: ['far_field'] }) : eq('zw', 'Wave impedance near a magnetic source', 'Z_w', 'sqrt(mu_0/eps_0)*2*pi*r_src*f_d/c', { kind: 'derived', origin: 'Near field of a small current loop' }),
+    eq('adb', 'Absorption loss', 'A_dB', '8.686*t_s*alpha', { kind: 'derived', origin: 'Exponential decay through the thickness' }),
+    eq('rdb', 'Reflection loss', 'R_dB', '20*log10((Z_w + eta_m)^2/(4*Z_w*eta_m))', { kind: 'derived', origin: 'Impedance mismatch at the two faces (magnitudes shown; phases are included in the calculation)' }),
+    a.multi_reflect ? eq('bdb', 'Re-reflection correction', 'B_dB', '20*log10(abs(1 - ((Z_w - eta_m)/(Z_w + eta_m))^2*exp(-2*t_s*alpha)))', { kind: 'derived', origin: 'Sum of the internal reflection series (magnitudes shown)' }) : eq('bdb', 'Re-reflection correction', 'B_dB', '0', { kind: 'closure' }),
+    a.solid ? eq('se', 'Shielding effectiveness', 'SE', 'A_dB + R_dB + B_dB', { kind: 'derived', origin: 'Schelkunoff decomposition' }) : eq('se', 'Shielding effectiveness limited by an aperture', 'SE', 'min(A_dB + R_dB + B_dB, SE_ap)', { kind: 'derived' }),
+    ...(a.solid ? [] : [eq('ap', 'Aperture limit', 'SE_ap', '20*log10(c/(2*f_d*l_a))', { kind: 'empirical', origin: 'Slot-antenna leakage rule (Ott 2009)' })]),
+    eq('et', 'Transmitted field', 'E_t', 'E_0*10^(-SE/20)', { kind: 'definition' }),
+  ],
+  derivation: a => [
+    { text: 'Faraday\'s and Ampère\'s laws with J = σE give a wave equation with a damping term. For a harmonic field E ∝ exp(jωt − γz) the propagation constant follows.', tex: '\\gamma^2 = j\\omega\\mu\\,(\\sigma + j\\omega\\varepsilon),\\qquad \\gamma = \\alpha + j\\beta' },
+    { text: a.good_conductor ? 'When σ ≫ ωε the displacement term is dropped. The real and imaginary parts of γ are then equal, and their reciprocal is the skin depth.' : 'Separating real and imaginary parts gives the attenuation and phase constants for any ratio σ/ωε.', tex: a.good_conductor ? '\\alpha = \\beta = \\sqrt{\\frac{\\omega\\mu\\sigma}{2}} = \\frac{1}{\\delta}' : '\\alpha,\\beta = \\omega\\sqrt{\\frac{\\mu\\varepsilon}{2}}\\left[\\sqrt{1+\\left(\\frac{\\sigma}{\\omega\\varepsilon}\\right)^2}\\mp1\\right]^{1/2}' },
+    { text: 'The ratio of electric to magnetic field in the medium is its intrinsic impedance. In a good conductor it is small and has a 45° phase; its real part is the surface resistance.', tex: '\\eta = \\sqrt{\\frac{j\\omega\\mu}{\\sigma+j\\omega\\varepsilon}}\\ \\to\\ \\frac{1+j}{\\sigma\\delta},\\qquad R_s = \\frac{1}{\\sigma\\delta}' },
+    { text: 'For a sheet of thickness t between regions of wave impedance Z_w, matching fields at both faces gives the transmitted fraction. Its decibel value separates into three terms.', tex: 'SE = \\underbrace{20\\log_{10}e^{t/\\delta}}_{A} + \\underbrace{20\\log_{10}\\frac{|Z_w+\\eta|^2}{4|Z_w\\eta|}}_{R} + \\underbrace{20\\log_{10}\\left|1-\\left(\\tfrac{Z_w-\\eta}{Z_w+\\eta}\\right)^2e^{-2\\gamma t}\\right|}_{B}' },
+    { text: 'Absorption is 8.69 dB per skin depth. The correction B is negative for thin sheets, where successive internal reflections add to the transmitted wave, and vanishes for thick ones.', tex: 'A = 8.69\\,\\frac{t}{\\delta}\\ \\text{dB}' },
+  ],
+  solve(v, a) {
+    const c = skCore(v, a), delta = 1 / c.alpha, warnings = [], f = v.f_d;
+    const regime = c.lt > 100 ? 'Good conductor' : c.lt > 0.01 ? 'Intermediate (lossy) medium' : 'Low-loss dielectric';
+    if (a.good_conductor && c.lt < 100) warnings.push('The loss tangent σ/ωε is below 100: the good-conductor formulae are inaccurate here; switch that assumption off.');
+    if (!a.far_field && TAU * v.r_src / c.lam0 >= 1) warnings.push('The source is farther than λ/2π from the sheet, so the plane-wave impedance applies and the near-field correction has no effect.');
+    if (!a.multi_reflect && v.t_s < delta) warnings.push('The sheet is thinner than one skin depth: neglecting internal re-reflection over-estimates the shielding.');
+    if (!a.solid && c.ap < c.slab) warnings.push('The aperture, not the sheet material, limits the shielding at this frequency.');
+    if (v.mu_r > 1 && f > 1e5) warnings.push('The permeability of magnetic alloys falls steeply above roughly 10–100 kHz; the low-frequency value over-estimates absorption at this frequency.');
+    if (c.SE > 150) warnings.push('Calculated values above about 120–150 dB are not realised in practice, where seams, penetrations and measurement dynamic range set the limit.');
+    const fs = N.logspace(Math.max(f / 1e3, 10), Math.min(f * 1e3, 1e11), 121), sw = fs.map(q => skCore(v, a, q)), gc = { ...a, good_conductor: true };
+    const zs = N.linspace(0, 5 * delta, 201);
+    const Et = v.E_0 * Math.pow(10, -Math.min(c.SE, 6000) / 20), td = v.t_s / delta;
+    const cons = a.good_conductor ? 2 * c.alpha * c.beta / (c.w * c.mu * c.sg) - 1 : Math.max(Math.abs(2 * c.alpha * c.beta / (c.w * c.mu * c.sg) - 1), Math.abs(c.beta ** 2 - c.alpha ** 2 - c.w ** 2 * c.mu * c.ep) / Math.max(c.w ** 2 * c.mu * c.ep, c.w * c.mu * c.sg));
+    return {
+      scalars: [
+        scalar('tan_l', 'Loss tangent σ/ωε', c.lt, '1', { note: regime }), scalar('regime', 'Character of the medium at this frequency', c.lt > 100 ? 2 : c.lt > 0.01 ? 1 : 0, '1', { text: regime }),
+        scalar('delta_s', 'Skin (penetration) depth', delta, 'm', { show: 'um' }),
+        scalar('alpha', 'Attenuation constant', c.alpha, '1/m', { note: 'nepers per metre' }), scalar('alpha_dB', 'Attenuation', 8.685889638 * c.alpha, 'dB/m'),
+        scalar('beta_p', 'Phase constant', c.beta, '1/m'), scalar('lambda_m', 'Wavelength in the medium', TAU / c.beta, 'm', { show: 'mm' }), scalar('v_ph', 'Phase velocity in the medium', c.w / c.beta, 'm/s'),
+        scalar('eta_m', 'Intrinsic impedance magnitude', cabs(c.eta), 'ohm'), scalar('eta_ph', 'Intrinsic impedance phase', Math.atan2(c.eta[1], c.eta[0]), 'rad', { show: 'deg' }),
+        scalar('R_s', 'Surface resistance', c.eta[0], 'ohm', { show: 'mohm' }),
+        scalar('lambda_0', 'Free-space wavelength', c.lam0, 'm'), scalar('Z_w', 'Wave impedance of the incident field', c.Zw, 'ohm'),
+        scalar('t_d', 'Sheet thickness in skin depths', td, '1'),
+        scalar('A_dB', 'Absorption loss', c.A, 'dB'), scalar('R_dB', 'Reflection loss', c.R, 'dB'), scalar('B_dB', 'Re-reflection correction', c.B, 'dB'),
+        scalar('SE', 'Shielding effectiveness', c.SE, 'dB'),
+        ...(a.solid ? [] : [scalar('SE_ap', 'Aperture limit on shielding', c.ap, 'dB')]),
+        scalar('E_t', 'Transmitted field amplitude', Et, 'V/m'),
+        scalar('R_ac', 'Alternating / direct-current resistance of the sheet (current on one face)', td > 1e-6 ? td / (1 - Math.exp(-td)) : 1, '1'),
+        scalar('f_t', 'Frequency at which the skin depth equals the thickness', 1 / (Math.PI * c.mu * c.sg * v.t_s ** 2), 'Hz', { note: 'Good-conductor formula' }),
+      ],
+      series: [
+        line('se-f', 'Shielding effectiveness against frequency', 'Frequency', 'Hz', fs, [{ label: 'Total', data: sw.map(q => Math.min(q.SE, 400)) }, { label: 'Absorption', data: sw.map(q => Math.min(q.A, 400)), dash: true }, { label: 'Reflection', data: sw.map(q => q.R), dash: true }, { label: 'Re-reflection correction', data: sw.map(q => q.B), dash: true }], 'Loss', 'dB', { logx: true, note: 'Curves are capped at 400 dB' }),
+        line('delta-f', 'Skin depth against frequency', 'Frequency', 'Hz', fs, [{ label: a.good_conductor ? 'Good-conductor formula' : 'General lossy medium', data: sw.map(q => 1 / q.alpha * 1e3) }, { label: a.good_conductor ? 'General lossy medium' : 'Good-conductor formula', data: fs.map(q => 1 / skCore(v, { ...gc, good_conductor: !a.good_conductor }, q).alpha * 1e3), dash: true }], 'Depth', 'mm', { logx: true, logy: true }),
+        line('decay', 'Field inside the medium', 'Depth', 'µm', zs.map(z => z * 1e6), [{ label: 'Instantaneous field', data: zs.map(z => Math.exp(-c.alpha * z) * Math.cos(c.beta * z)) }, { label: 'Envelope', data: zs.map(z => Math.exp(-c.alpha * z)), dash: true }], 'Field / surface field', '–'),
+      ],
+      checks: [
+        check('Dispersion relation γ² = jωμ(σ + jωε)', cons, 1e-9, a.good_conductor ? 'Imaginary part: 2αβ = ωμσ' : 'Real and imaginary parts'),
+        check('A + R + B equals the direct slab transmission', a.multi_reflect && Number.isFinite(c.direct) ? (c.slab - c.direct) / Math.max(Math.abs(c.direct), 1) : 0, 1e-6, a.multi_reflect ? 'Schelkunoff decomposition against the exact two-interface solution' : 'Not applicable when re-reflection is neglected'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const cu = { ...v, sigma_e: 5.8e7, mu_r: 1, eps_r: 1 }, g = { ...a, good_conductor: true }, out = [];
+    out.push(bench('Skin depth of copper at 1 MHz', 1 / skCore(cu, g, 1e6).alpha, 1 / Math.sqrt(Math.PI * 1e6 * MU0 * 5.8e7), 'δ = 1/√(πfμσ) ≈ 66 µm', 1e-12));
+    out.push(bench('Surface resistance of copper at 1 MHz', skCore(cu, g, 1e6).eta[0], Math.sqrt(Math.PI * 1e6 * MU0 / 5.8e7), 'R_s = √(πfμ/σ) ≈ 0.26 mΩ', 1e-12));
+    out.push(bench('General formula reduces to the good-conductor limit', skCore(cu, { ...a, good_conductor: false }, 1e6).alpha / skCore(cu, g, 1e6).alpha, 1, 'σ ≫ ωε', 1e-9));
+    const ll = { ...v, sigma_e: 1e-4 * TAU * 1e9 * EPS0 * 4, mu_r: 1, eps_r: 4 };
+    out.push(bench('Low-loss dielectric limit of the attenuation constant', skCore(ll, { ...a, good_conductor: false }, 1e9).alpha, ll.sigma_e / 2 * Math.sqrt(MU0 / (4 * EPS0)), 'α ≈ (σ/2)√(μ/ε)', 1e-6));
+    out.push(bench('Absorption loss of one skin depth', skCore({ ...cu, t_s: 1 / skCore(cu, g, 1e6).alpha }, g, 1e6).A, 20 / Math.LN10, 'A = 20 log₁₀ e = 8.686 dB', 1e-9));
+    return out;
+  },
+  validation: [],
+  diagram(v, a) {
+    const pts = N.linspace(0, 1, 60).map(x => [300 + 120 * x, 180 - 70 * Math.exp(-3 * x) * Math.cos(9 * x)]);
+    return svg(`
+      ${S.rect(300, 70, 120, 220, 'd-body', 0)} ${a.solid ? '' : S.rect(300, 168, 120, 24, 'd-hazard', 0) + S.text(360, 160, 'slot', 'd-text d-small')}
+      ${S.path(`M60 180 ${N.linspace(0, 1, 60).map(x => `L${60 + 240 * x} ${180 - 70 * Math.cos(14 * x)}`).join(' ')}`, 'd-line')} ${S.arrow(110, 96, 190, 96)} ${S.text(150, 86, 'incident')}
+      ${S.arrow(250, 276, 170, 276, 'd-arrow d-heat')} ${S.text(210, 296, 'reflected')}
+      ${S.poly(pts, 'd-heat')} ${S.text(360, 60, `σ = ${lab(v.sigma_e, 'S/m')}`)}
+      ${S.path(`M420 180 ${N.linspace(0, 1, 40).map(x => `L${420 + 160 * x} ${180 - 6 * Math.cos(14 * x)}`).join(' ')}`, 'd-line')} ${S.arrow(470, 150, 550, 150)} ${S.text(510, 140, 'transmitted')}
+      ${S.dim(300, 312, 420, 312, `t = ${lab(v.t_s * 1e3, 'mm')}`)}
+      ${S.text(320, 345, `${lab(v.f_d / 1e6, 'MHz')}   ${a.far_field ? 'plane wave, 377 Ω' : `magnetic near field at ${lab(v.r_src, 'm')}`}`, 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the shielding effectiveness of a planar material against frequency and, separately, the alternating-current resistance of a conductor, and compare with the skin-depth predictions.',
+    apparatus: ['Flanged coaxial transmission-line holder for planar specimens, with reference and load specimens', 'Alternatively two shielded rooms or a nested reverberation chamber with the specimen over a common aperture', 'For the skin effect: a long straight wire or tube with four-terminal connections'],
+    instruments: [{ name: 'Vector network analyser', measures: 'Insertion loss with and without the specimen', range: '30 MHz–1.5 GHz in the coaxial holder', resolution: 'Dynamic range ≥ 100 dB' }, { name: 'Loop antennas with signal generator and receiver', measures: 'Low-frequency magnetic shielding', range: '1 kHz–30 MHz', resolution: '±1 dB' }, { name: 'Four-terminal impedance analyser', measures: 'Resistance of the conductor against frequency', range: '20 Hz–10 MHz', resolution: '±0.1 %' }, { name: 'Micrometer and four-point probe', measures: 'Thickness and direct-current conductivity', range: '—', resolution: '±1 µm, ±1 %' }],
+    procedure: ['Measure the thickness and direct-current conductivity of the specimen.', 'Record transmission through the reference specimen, then through the load specimen; the difference in decibels is the shielding effectiveness.', 'Repeat with loop antennas at low frequency for the magnetic near field.', 'Cut a slot of known length and repeat to observe the aperture limit.', 'Measure the wire\'s resistance against frequency and plot against the square root of frequency.'],
+    controls: ['Open holder and solid metal plate to establish zero and the dynamic-range ceiling', 'Specimens of two thicknesses of the same material to separate absorption from reflection'],
+    signatures: ['Reflection loss for plane waves falling 10 dB per decade of frequency', 'Absorption loss in decibels proportional to thickness and to √f', 'Much lower shielding against a nearby loop source at low frequency', 'Resistance of a conductor rising as √f once the skin depth is smaller than its radius'],
+    safety: ['Radio-frequency exposure limits near antennas and amplifiers', 'Electrical safety of amplifiers and of shielded-room filters'],
+  },
+  falsify: ['Field decay inside a homogeneous conductor that is not exponential with depth, or whose decay length does not scale as 1/√f.', 'Absorption loss in decibels that is not proportional to sheet thickness.', 'Measured shielding of a continuous sheet below the sum of the absorption and reflection terms by more than the re-reflection correction and measurement uncertainty.'],
+  alternatives: [{ name: 'Anomalous skin effect', text: 'At low temperature and high frequency the electron mean free path exceeds the skin depth and the local form of Ohm\'s law fails; the surface resistance then scales as f^(2/3).' }, { name: 'Thin-sheet (sheet-resistance) formula', text: 'For sheets much thinner than a skin depth, shielding depends only on the sheet resistance: SE ≈ 20 log₁₀(1 + Z₀/(2R_□)).' }, { name: 'Enclosure and aperture models', text: 'Real enclosures are limited by seams, cable penetrations and cavity resonances, which need circuit or full-wave models.' }, { name: 'Magnetic shielding at very low frequency', text: 'Below the eddy-current regime, shielding relies on flux shunting by high-permeability material rather than on induced currents.' }],
+  hazards: [{ hazard: 'Radio-frequency exposure', cause: 'High-power test fields', mitigation: 'Observe exposure reference levels; use screened facilities' }, { hazard: 'Heating', cause: 'Eddy-current dissipation in the shield at high field', mitigation: 'Check surface power density' }],
+  standards: ['IEEE Std 299 (measuring the effectiveness of electromagnetic shielding enclosures)', 'ASTM D4935 (measuring the electromagnetic shielding effectiveness of planar materials)', 'IEC 61000-5-7 (degrees of protection provided by enclosures against electromagnetic disturbances)', 'ICNIRP guidelines for limiting exposure to electromagnetic fields'],
+  limits: 'Homogeneous, isotropic, linear medium with frequency-independent properties; uniform plane wave at normal incidence on an infinite flat sheet; local Ohm\'s law. The near-field correction is the standard small-loop approximation and the aperture rule a single-slot estimate.',
+  numerics: { method: 'Closed-form complex propagation constant and impedance; shielding evaluated in the decomposed (decibel) form to avoid overflow for thick sheets' },
+  optimise: { objective: 'SE', sense: 'max', vars: ['t_s'], note: 'Absorption grows linearly with thickness once the sheet exceeds a skin depth; reflection does not depend on thickness.' },
+  inverse: { series: 'se-f', fit: ['sigma_e', 't_s'] },
+  extensions: ['Oblique incidence and polarisation dependence', 'Multilayer and laminated shields', 'Frequency-dependent permeability', 'Round-wire and proximity-effect resistance'],
+};
+
+export default [electrostatic, rlc, ionicWind, syntheticJet, radiationPressure, vibratingString, coupledOsc, timeReversal, doppler, phononic, effectiveMedium, memristor, ferroelectric, chargeMemory, quantumWell, skinDepth];

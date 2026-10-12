@@ -1478,4 +1478,1132 @@ const scaling = {
   extensions: ['Stiff and Davis index for sea-water concentrates', 'Barium and strontium sulphate, silica and calcium fluoride', 'Temperature-dependent solubility products', 'Acid dosing required to reach a target index'],
 };
 
-export default [conduction, exchanger, rankine, refrigeration, airCar, freeEnergy, reverseOsmosis, brinePlume, scaling];
+// ------------------------------------------------------------------ CSTR and PFR
+/** Build the kinetics for the chosen assumptions. rate(X) is in 1/s: dX/dτ for a PFR, X/τ for a CSTR. */
+function reactorKinetics(v, a) {
+  const n = a.first_order ? 1 : 2, eps = a.liquid ? 0 : 1;
+  const dTad = a.isothermal ? 0 : -v.dH_r * v.C_A0 / (v.rho * v.cp);
+  const Tof = X => Math.max(v.T_0 + dTad * X, 100);
+  const kof = T => v.A_f * Math.exp(-v.E_a / (C.R_u * T));
+  const rate = X => { const T = Tof(X), vol = a.liquid ? 1 : (1 + eps * X) * T / v.T_0; return kof(T) * Math.pow(Math.max(1 - X, 0) / vol, n); };
+  return { n, eps, dTad, Tof, kof, rate };
+}
+/** PFR: tabulate τ(X) = ∫dX/r on a grid clustered toward X = 1, which avoids integrating a stiff ODE in τ. */
+function pfrTable(kin, nPts = 2400) {
+  const xi = N.linspace(0, 27, nPts), X = xi.map(q => 1 - Math.exp(-q)), f = xi.map((q, i) => Math.exp(-q) / kin.rate(X[i]));
+  const tau = [0];
+  for (let i = 1; i < nPts; i++) tau.push(tau[i - 1] + 0.5 * (f[i] + f[i - 1]) * (xi[i] - xi[i - 1]));
+  return { X, tau, at: t => (t >= tau[nPts - 1] ? X[nPts - 1] : N.interp1(tau, X, t)) };
+}
+/** CSTR steady states leaving a tank fed at conversion Xin: roots of X − Xin − τ r(X) = 0 on [Xin, 1]. */
+function cstrRoots(kin, tau, Xin = 0, nScan = 500) {
+  const G = X => X - Xin - tau * kin.rate(X), roots = [];
+  let x0 = Xin, g0 = G(x0);
+  for (let i = 1; i <= nScan; i++) {
+    const s = i / nScan, x1 = Xin + (1 - Xin) * (1 - Math.pow(1 - s, 3)), g1 = G(x1);
+    if (g0 === 0) roots.push(x0); else if (g0 * g1 < 0) roots.push(N.bisect(G, x0, x1, 1e-14));
+    x0 = x1; g0 = g1;
+  }
+  if (!roots.length) roots.push(Xin);
+  return roots;
+}
+
+const reactors = {
+  id: 'reactor-kinetics-cstr-pfr',
+  title: 'Conversion in stirred-tank and plug-flow reactors',
+  module: 2, klass: 'I', domains: ['chemical'],
+  keywords: ['cstr', 'pfr', 'plug flow reactor', 'stirred tank', 'chemical reactor', 'conversion', 'residence time', 'arrhenius', 'damkohler', 'reaction kinetics', 'first order', 'second order', 'adiabatic reactor', 'space time', 'reactor'],
+  summary: 'Conversion of a first- or second-order reaction in an ideal continuous stirred tank and an ideal plug-flow reactor, isothermal or adiabatic, with Arrhenius kinetics.',
+  background: [
+    'The two ideal continuous reactors bracket real behaviour. In a continuous stirred-tank reactor (CSTR) the contents are perfectly mixed, so the reaction proceeds everywhere at the low concentration of the outlet. In a plug-flow reactor (PFR) there is no axial mixing and each element of fluid reacts as in a batch for a time equal to the residence time. For any reaction of positive order at constant temperature the PFR therefore needs less volume for the same conversion.',
+    'The rate constant rises steeply with temperature according to the Arrhenius law. In an adiabatic reactor an exothermic reaction heats the mixture in proportion to conversion, which accelerates the reaction; in a CSTR this feedback can produce several steady states for the same feed, with ignition and extinction as the residence time is varied.',
+  ],
+  phenomena: ['Chemical reaction with Arrhenius temperature dependence', 'Back-mixing', 'Thermal feedback and multiple steady states', 'Volume change on reaction in gases'],
+  laws: ['mass', 'species', 'energy', 'ideal_gas'],
+  refs: ['Levenspiel, O. (1999). Chemical Reaction Engineering, 3rd ed., Wiley.', 'Fogler, H. S. (2016). Elements of Chemical Reaction Engineering, 5th ed., Prentice Hall.', 'Aris, R. (1969). Elementary Chemical Reactor Analysis. Prentice-Hall.', 'van Heerden, C. (1953). Autothermic processes: properties and reactor design. Industrial & Engineering Chemistry 45, 1242–1247.'],
+  inputs: [
+    inp('A_f', 'Frequency factor (first-order equivalent at feed concentration)', '1/s', 3e6, { min: 1e3, max: 1e12, kind: 'fluid', aliases: ['frequency factor', 'pre-exponential'] }),
+    inp('E_a', 'Activation energy', 'kJ/mol', 60, { min: 20, max: 150, kind: 'fluid', aliases: ['activation energy'] }),
+    inp('T_0', 'Feed temperature', '°C', 57, { min: 0, max: 200, aliases: ['feed temperature', 'inlet temperature', 'temperature'] }),
+    inp('tau', 'Space time V/v₀', 's', 1000, { min: 1, max: 1e5, aliases: ['residence time', 'space time'] }),
+    inp('C_A0', 'Feed concentration of the reactant', 'mol/m^3', 1000, { min: 10, max: 2e4, aliases: ['feed concentration', 'inlet concentration', 'concentration'] }),
+    inp('dH_r', 'Heat of reaction (negative when exothermic)', 'kJ/mol', -80, { min: -200, max: 50, kind: 'fluid', aliases: ['heat of reaction', 'enthalpy of reaction'] }),
+    inp('rho', 'Mixture density', 'kg/m^3', 1000, { min: 500, max: 1500, kind: 'fluid', aliases: ['density'] }),
+    inp('cp', 'Mixture specific heat', 'J/(kg K)', 4000, { min: 1500, max: 4500, kind: 'fluid', aliases: ['specific heat', 'heat capacity'] }),
+  ],
+  assumptions: [
+    asm('isothermal', 'The reactor is held at the feed temperature.', { why: 'Good heat removal or a dilute feed', alt: 'The reactor is adiabatic: temperature rises (or falls) in proportion to conversion.' }),
+    asm('first_order', 'The reaction A → products is first order in A.', { why: 'Simplest kinetics', alt: 'The reaction is second order in A.' }),
+    asm('liquid', 'Density is constant (liquid phase).', { why: 'Volumetric flow does not change', alt: 'Ideal-gas reaction A → 2B at constant pressure: the volumetric flow grows with conversion and temperature.' }),
+    asm('single_tank', 'The stirred reactor is a single tank.', { why: 'Limit of complete back-mixing', alt: 'Three equal tanks in series with the same total volume, which moves the behaviour toward plug flow.' }),
+  ],
+  symbols: { k: ['Rate constant', '1/s'], Da: ['Damköhler number', '1'], X: ['Conversion', '1'], X_cstr: ['Conversion in the stirred tank', '1'], X_pfr: ['Conversion in the plug-flow reactor', '1'], T: ['Reactor temperature', 'K'], dT_ad: ['Adiabatic temperature rise at full conversion', 'K'], r_X: ['Rate of conversion', '1/s'], t: ['Space-time coordinate', 's'], eps_v: ['Fractional volume change at full conversion', '1'] },
+  equations: a => {
+    const conc = a.liquid ? '(1 - X)' : (a.isothermal ? '((1 - X)/(1 + eps_v*X))' : '((1 - X)*T_0/((1 + eps_v*X)*T))');
+    return [
+      eq('arr', 'Arrhenius law', 'k', 'A_f*exp(-E_a/(R_u*T))', { kind: 'law', origin: 'Arrhenius (1889); transition-state theory' }),
+      eq('rate', 'Rate of conversion', 'r_X', a.first_order ? `k*${conc}` : `k*${conc}^2`, { kind: 'law', origin: 'Mass-action kinetics' + (a.liquid ? '' : ' with ideal-gas volume change'), needs: [a.first_order ? 'first_order' : 'liquid'].filter(q => a[q]) }),
+      eq('pfr', 'Plug-flow design equation', 'd(X,t)', 'r_X', { kind: 'law', origin: 'Species balance on a differential volume' }),
+      eq('cstr', 'Stirred-tank design equation', 'X_cstr', a.single_tank ? 'tau*r_X' : 'tau*r_X/3 + X', { kind: 'law', origin: a.single_tank ? 'Species balance on a perfectly mixed tank' : 'Species balance on each of three tanks, written for one tank with inlet conversion X', needs: a.single_tank ? ['single_tank'] : [] }),
+      a.isothermal ? eq('en', 'Energy balance', 'T', 'T_0', { kind: 'closure', needs: ['isothermal'] }) : eq('en', 'Adiabatic energy balance', 'rho*cp*(T - T_0)', '-dH_r*C_A0*X', { kind: 'law', origin: 'First law with no heat exchange' }),
+      eq('da', 'Damköhler number', 'Da', 'k*tau', { kind: 'definition' }),
+      ...(a.isothermal ? [] : [eq('dtad', 'Adiabatic temperature rise', 'dT_ad', '-dH_r*C_A0/(rho*cp)', { kind: 'derived' })]),
+    ];
+  },
+  derivation: a => [
+    { text: 'A steady species balance on a perfectly mixed tank equates the reactant consumed to the rate evaluated at outlet conditions times the volume.', tex: 'v_0 C_{A0} X = (-r_A)\\big|_{out} V \;\\Rightarrow\; X = \\tau\\,r_X(X)' },
+    { text: 'The same balance on a differential slice of a plug-flow reactor gives an ordinary differential equation in space time.', tex: '\\frac{\\mathrm{d}X}{\\mathrm{d}\\tau} = r_X(X) \;\\Rightarrow\; \\tau = \\int_0^X \\frac{\\mathrm{d}X\'}{r_X(X\')}' },
+    { text: a.first_order ? 'For first-order isothermal kinetics in a liquid both integrate in closed form.' : 'For second-order isothermal kinetics in a liquid, with Da = k τ:', tex: a.first_order ? 'X_{PFR} = 1 - e^{-k\\tau},\\qquad X_{CSTR} = \\frac{k\\tau}{1+k\\tau}' : 'X_{PFR} = \\frac{\\mathrm{Da}}{1+\\mathrm{Da}},\\qquad X_{CSTR} = \\frac{1+2\\mathrm{Da}-\\sqrt{1+4\\mathrm{Da}}}{2\\mathrm{Da}}' },
+    { text: 'The rate constant follows the Arrhenius law.', tex: 'k = A\\,\\exp\\!\\left(-\\frac{E_a}{RT}\\right)' },
+    ...(a.isothermal ? [] : [{ text: 'With no heat exchange, the enthalpy released by reaction appears as sensible heat, so temperature is linear in conversion.', tex: 'T = T_0 + \\Delta T_{ad}\\,X,\\qquad \\Delta T_{ad} = \\frac{(-\\Delta H_r)\\,C_{A0}}{\\rho c_p}' }]),
+    ...(a.liquid ? [] : [{ text: 'For a gas at constant pressure the volumetric flow changes with moles and temperature, diluting the reactant.', tex: 'C_A = C_{A0}\\,\\frac{1-X}{1+\\varepsilon X}\\,\\frac{T_0}{T}' }]),
+  ],
+  solve(v, a) {
+    const kin = reactorKinetics(v, a), k0 = kin.kof(v.T_0), Da = k0 * v.tau, tab = pfrTable(kin);
+    const Xp = tab.at(v.tau);
+    const tanks = a.single_tank ? 1 : 3;
+    const cstr = tau => { let lo = 0, hi = 0, multi = 1; for (let j = 0; j < tanks; j++) { const rl = cstrRoots(kin, tau / tanks, lo), rh = j === 0 ? rl : cstrRoots(kin, tau / tanks, hi); multi = Math.max(multi, rl.length, rh.length); lo = rl[0]; hi = rh[rh.length - 1]; } return { lo, hi, multi }; };
+    const c = cstr(v.tau), Xc = c.hi;
+    const taus = N.logspace(Math.max(v.tau / 100, 1e-3), v.tau * 100, 70), cs = taus.map(cstr);
+    const Xg = N.linspace(0, 0.99, 100), inv = Xg.map(x => 1 / kin.rate(x));
+    // independent quadrature of the PFR design equation (Simpson on a uniform grid in −ln(1 − X))
+    const zq = N.linspace(0, -Math.log(1 - Math.min(Xp, 1 - 1e-12)), 2001), fq = zq.map(z => Math.exp(-z) / kin.rate(1 - Math.exp(-z)));
+    let simp = fq[0] + fq[2000]; for (let i = 1; i < 2000; i++) simp += (i % 2 ? 4 : 2) * fq[i]; simp *= (zq[1] - zq[0]) / 3;
+    const tauEq = N.interp1(tab.X, tab.tau, Math.min(Xc, tab.X[tab.X.length - 1]));
+    const warnings = [];
+    if (c.multi > 1) warnings.push(`The adiabatic stirred tank has ${c.multi} steady states at this space time (conversions from ${lab(c.lo)} to ${lab(c.hi)}). Which one is reached depends on start-up; the middle state is unstable.`);
+    if (!a.isothermal && kin.Tof(1) > 1500) warnings.push(`The adiabatic temperature at full conversion (${lab(kin.Tof(1) - 273.15, '°C')}) is unrealistically high: a real system would boil, decompose or run away. Dilute the feed or remove heat.`);
+    if (!a.isothermal && v.T_0 + kin.dTad < 100) warnings.push('The endothermic temperature fall has been limited at 100 K to keep the rate law defined.');
+    if (!a.liquid && v.rho > 100) warnings.push('The gas-phase option uses the stated density only in the energy balance; check that it is a gas density if the adiabatic option is also selected.');
+    return {
+      scalars: [
+        scalar('k', 'Rate constant at feed temperature', k0, '1/s'), scalar('Da', 'Damköhler number k τ', Da, '1'),
+        scalar('X_pfr', 'Conversion in the plug-flow reactor', Xp, '1', { show: '%' }), scalar('X_cstr', a.single_tank ? 'Conversion in the stirred tank' : 'Conversion after three tanks in series', Xc, '1', { show: '%', note: c.multi > 1 ? 'ignited (upper) steady state' : '' }),
+        scalar('X_cstr_lo', 'Lowest stirred-tank steady state', c.lo, '1', { show: '%' }), scalar('n_ss', 'Number of stirred-tank steady states', c.multi, '1'),
+        scalar('T_pfr', 'Plug-flow outlet temperature', kin.Tof(Xp), 'K', { show: '°C' }), scalar('T_cstr', 'Stirred-tank temperature', kin.Tof(Xc), 'K', { show: '°C' }),
+        scalar('dT_ad', 'Adiabatic temperature change at full conversion', kin.dTad, 'K'),
+        scalar('C_A_pfr', 'Reactant leaving the plug-flow reactor per unit feed volume', v.C_A0 * (1 - Xp), 'mol/m^3'), scalar('C_A_cstr', 'Reactant leaving the stirred tank per unit feed volume', v.C_A0 * (1 - Xc), 'mol/m^3'),
+        scalar('V_ratio', 'Stirred-tank volume over plug-flow volume for the stirred-tank conversion', v.tau / Math.max(tauEq, 1e-300), '1'),
+      ],
+      series: [
+        line('X-tau', 'Conversion against space time', 'Space time', 's', taus, [{ label: 'Plug flow', data: taus.map(tab.at) }, { label: a.single_tank ? 'Stirred tank' : 'Three tanks in series', data: cs.map(q => q.hi) }, ...(a.isothermal ? [] : [{ label: 'Stirred tank, lower steady state', data: cs.map(q => q.lo), dash: true }])], 'Conversion', '–', { logx: true, marker: [v.tau, Xp] }),
+        line('levenspiel', 'Levenspiel plot', 'Conversion', '–', Xg, [{ label: 'Reciprocal rate 1/r_X', data: inv }], 'Reciprocal rate', 's', { logy: true, note: 'Plug-flow space time is the area under the curve; stirred-tank space time is the rectangle X/r_X(X).' }),
+        line('T-X', 'Temperature and rate constant along the reaction path', 'Conversion', '–', Xg, [{ label: 'Temperature (°C)', data: Xg.map(x => kin.Tof(x) - 273.15) }, { label: 'log₁₀ of the rate constant (1/s)', data: Xg.map(x => Math.log10(kin.kof(kin.Tof(x)))), dash: true }], 'Temperature, log₁₀ k', '°C, –'),
+      ],
+      checks: [
+        check('Plug-flow design equation by independent quadrature', (simp - Math.min(v.tau, tab.tau[tab.tau.length - 1])) / v.tau, 2e-4, 'τ = ∫dX/r_X evaluated by Simpson’s rule up to the computed conversion'),
+        check('Stirred-tank design equation residual', tanks === 1 ? Xc - v.tau * kin.rate(Xc) : 0, 1e-9, 'X = τ r_X(X) at the reported steady state'),
+        check('Conversion within physical bounds', (Xp < 0 || Xp > 1 || Xc < 0 || Xc > 1) ? 1 : 0, 0, '0 ≤ X ≤ 1'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const b = { isothermal: true, first_order: true, liquid: true, single_tank: true }, k = v.A_f * Math.exp(-v.E_a / (C.R_u * v.T_0)), Da = k * v.tau;
+    const r1 = this.solve(v, b), r2 = this.solve(v, { ...b, first_order: false }), r3 = this.solve(v, { ...b, single_tank: false }), r4 = this.solve(v, { ...b, liquid: false });
+    // first-order gas with ε = 1: kτ = −2 ln(1 − X) − X
+    const Xg = val(r4, 'X_pfr');
+    return [
+      bench('First-order PFR', val(r1, 'X_pfr'), 1 - Math.exp(-Da), 'X = 1 − e^{−kτ}', 1e-5),
+      bench('First-order CSTR', val(r1, 'X_cstr'), Da / (1 + Da), 'X = kτ/(1 + kτ)', 1e-9),
+      bench('Second-order PFR', val(r2, 'X_pfr'), Da / (1 + Da), 'X = Da/(1 + Da)', 1e-4),
+      bench('Second-order CSTR', val(r2, 'X_cstr'), (1 + 2 * Da - Math.sqrt(1 + 4 * Da)) / (2 * Da), 'X = [1 + 2Da − √(1 + 4Da)]/(2Da)', 1e-9),
+      bench('Three first-order tanks in series', val(r3, 'X_cstr'), 1 - 1 / Math.pow(1 + Da / 3, 3), 'X = 1 − (1 + kτ/N)^{−N}', 1e-9),
+      bench('First-order gas-phase PFR with ε = 1', -2 * Math.log(1 - Xg) - Xg, Da, 'kτ = (1 + ε) ln[1/(1 − X)] − εX', 1e-4),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(90, 80, 130, 150, 'd-body', 10)} ${S.rect(92, 130, 126, 98, 'd-liquid', 8)} ${S.path('M155 60 L155 190 M130 190 L180 190', 'd-line')}
+      ${S.text(155, 255, a.single_tank ? 'stirred tank' : 'tank 1 of 3')} ${S.arrow(30, 110, 88, 110)} ${S.arrow(222, 200, 280, 200)}
+      ${S.rect(360, 135, 230, 40, 'd-pipe-fill', 6)} ${[0, 1, 2, 3, 4, 5].map(i => S.line(390 + i * 34, 137, 390 + i * 34, 173, 'd-line')).join('')}
+      ${S.text(475, 200, 'plug-flow reactor')} ${S.arrow(310, 155, 358, 155)} ${S.arrow(592, 155, 630, 155)}
+      ${S.text(320, 40, `feed ${lab(v.C_A0, 'mol/m³')} at ${lab(v.T_0 - 273.15, '°C')},  τ = ${lab(v.tau, 's')}`)}
+      ${S.text(320, 320, `${a.first_order ? 'first' : 'second'}-order, ${a.isothermal ? 'isothermal' : 'adiabatic'}, ${a.liquid ? 'liquid' : 'gas A → 2B'}`, 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure conversion against residence time for the same reaction in a laboratory stirred tank and a tubular reactor, and extract the rate constant and activation energy.',
+    apparatus: ['Jacketed stirred-tank reactor with overflow', 'Coiled tubular reactor immersed in a thermostat bath', 'Metering pumps for reactant feeds', 'A well-characterised reaction such as the saponification of ethyl acetate with sodium hydroxide'],
+    instruments: [{ name: 'Conductivity probe at each outlet', measures: 'Hydroxide concentration, hence conversion', range: '0–20 mS/cm', resolution: '±0.5 %' }, { name: 'Pt100 probes', measures: 'Reactor and bath temperature', range: '0–100 °C', resolution: '±0.1 K' }, { name: 'Balance and stopwatch or Coriolis meter', measures: 'Feed flow rates', range: '1–500 mL/min', resolution: '±0.5 %' }],
+    procedure: ['Calibrate conductivity against known mixtures of reactant and product.', 'At fixed temperature, run each reactor at five or more flow rates, waiting at least five residence times for steady state.', 'Plot X/(1 − X)ⁿ against τ for the tank and the integrated form for the tube; the slopes give k.', 'Repeat at three temperatures; the slope of ln k against 1/T gives E_a/R.', 'Inject a tracer pulse to verify that the residence-time distributions approach the ideal limits.'],
+    controls: ['Tracer test for dead volume and bypassing', 'Blank run without one reactant to check the conductivity baseline'],
+    signatures: ['Plug-flow conversion above stirred-tank conversion at equal residence time', 'ln k linear in 1/T', 'Stirred-tank data linear in the appropriate rearranged form'],
+    safety: ['Caustic solutions: eye protection and gloves', 'For exothermic systems, a tested emergency cooling and quench procedure'],
+  },
+  falsify: ['Isothermal stirred-tank conversion exceeding plug-flow conversion at the same space time for a reaction of positive order.', 'Rate constants that do not follow a straight line in ln k against 1/T over a moderate temperature range.'],
+  alternatives: [{ name: 'Axial-dispersion and tanks-in-series models', text: 'One-parameter descriptions of real reactors between the two ideal limits, fitted to a measured residence-time distribution.' }, { name: 'Segregated-flow and maximum-mixedness models', text: 'Bound the effect of micromixing for non-first-order reactions with a given residence-time distribution.' }, { name: 'Non-adiabatic reactor with heat exchange', text: 'Adds a heat-removal line to the stirred-tank energy balance; the intersections with the heat-generation curve give the steady states.' }],
+  hazards: [{ hazard: 'Thermal runaway', cause: 'Exothermic reaction with insufficient heat removal', mitigation: 'Reaction calorimetry, dilution, emergency cooling, relief sizing' }, { hazard: 'Over-pressure', cause: 'Gas generation or boiling on runaway', mitigation: 'Relief system designed for two-phase flow' }],
+  standards: ['IEC 61511 (safety instrumented systems for the process industry)', 'API Standard 520/521 (pressure-relieving and depressuring systems)', 'DIERS methodology for emergency relief system design (AIChE)'],
+  limits: 'Single irreversible reaction with power-law kinetics, ideal mixing or ideal plug flow, constant physical properties. Reversible reactions, catalyst deactivation, mass-transfer limitation and heat exchange with a jacket are not included.',
+  numerics: { method: 'Quadrature of the plug-flow design equation in conversion; bracketed root search for stirred-tank steady states', order: 2, stability: 'No time stepping; stiffness of ignited states is avoided by integrating in conversion' },
+  optimise: { objective: 'X_pfr', sense: 'max', vars: ['T_0', 'tau'], note: 'Conversion rises monotonically with temperature and space time for an irreversible reaction; cost and selectivity set the practical optimum.' },
+  inverse: { series: 'X-tau', curve: 0, fit: ['A_f', 'E_a'] },
+  extensions: ['Reversible and parallel reactions with selectivity', 'Jacket cooling and the van Heerden stability diagram', 'Residence-time distribution with axial dispersion', 'Dynamic start-up and oscillation of a cooled CSTR'],
+};
+
+// ------------------------------------------------------------------ three-component isothermal flash
+// Antoine constants, log10(p/mmHg) = A − B/(C + t/°C); critical constants for the Wilson correlation.
+const BTX = [
+  { name: 'Benzene', A: 6.90565, B: 1211.033, Cc: 220.790, Tc: 562.05, pc: 48.95e5, w: 0.2103, Tb: 80.10 },
+  { name: 'Toluene', A: 6.95464, B: 1344.800, Cc: 219.482, Tc: 591.75, pc: 41.08e5, w: 0.2640, Tb: 110.63 },
+  { name: 'o-Xylene', A: 6.99891, B: 1474.679, Cc: 213.686, Tc: 630.30, pc: 37.32e5, w: 0.3120, Tb: 144.41 },
+];
+const MMHG = 133.322368421;
+const antoine = (c, T) => MMHG * Math.pow(10, c.A - c.B / (c.Cc + T - 273.15));
+const kValues = (T, p, raoult, eff) => BTX.map(c => { const K = raoult ? antoine(c, T) / p : c.pc / p * Math.exp(5.373 * (1 + c.w) * (1 - c.Tc / T)); return 1 + eff * (K - 1); });
+const rrFun = (z, K, psi) => z.reduce((s, zi, i) => s + zi * (K[i] - 1) / (1 + psi * (K[i] - 1)), 0);
+function flashTP(z, K) {
+  const f0 = rrFun(z, K, 0), f1 = rrFun(z, K, 1);
+  const psi = f0 <= 0 ? 0 : f1 >= 0 ? 1 : N.bisect(q => rrFun(z, K, q), 0, 1, 1e-15);
+  let x = z.map((zi, i) => zi / (1 + psi * (K[i] - 1))), y = x.map((xi, i) => K[i] * xi);
+  // single-phase feeds: the absent phase is reported at its incipient composition, normalised
+  const sx = N.sum(x), sy = N.sum(y); x = x.map(q => q / sx); y = y.map(q => q / sy);
+  return { psi, x, y, f0, f1, state: f0 <= 0 ? 0 : f1 >= 0 ? 2 : 1 };
+}
+const FLASH_STATES = ['Subcooled liquid (below the bubble point)', 'Two-phase', 'Superheated vapour (above the dew point)'];
+
+const flash = {
+  id: 'flash-rachford-rice',
+  title: 'Isothermal flash of a benzene–toluene–xylene mixture',
+  module: 2, klass: 'I', domains: ['chemical'],
+  keywords: ['flash', 'rachford-rice', 'rachford rice', 'vapour-liquid equilibrium', 'vapor-liquid equilibrium', 'vle', 'k-value', 'raoult', 'antoine', 'bubble point', 'dew point', 'flash drum', 'phase split', 'benzene', 'toluene', 'xylene', 'vapour fraction'],
+  summary: 'Vapour fraction and phase compositions for an isothermal flash of a benzene–toluene–o-xylene feed, with K-values from Raoult’s law and the Antoine equation or from the Wilson correlation.',
+  background: [
+    'When a liquid mixture is brought to a temperature and pressure between its bubble and dew points it splits into a vapour enriched in the more volatile components and a liquid enriched in the heavier ones. If the two phases leave in equilibrium, each component’s vapour and liquid mole fractions are related by its K-value.',
+    'Combining the component balances with the requirement that mole fractions in each phase sum to one gives a single equation in the vapour fraction, due to Rachford and Rice. It is monotonic in the vapour fraction, which makes it robust to solve. Benzene, toluene and the xylenes form nearly ideal solutions, so Raoult’s law with Antoine vapour pressures is accurate at low pressure.',
+  ],
+  phenomena: ['Vapour–liquid equilibrium', 'Relative volatility', 'Partial vaporisation'],
+  laws: ['mass', 'species', 'second'],
+  refs: ['Rachford, H. H. & Rice, J. D. (1952). Procedure for use of electronic digital computers in calculating flash vaporization hydrocarbon equilibrium. J. Petroleum Technology 4(10), 19–20.', 'Wilson, G. M. (1968). A modified Redlich–Kwong equation of state, application to general physical data calculations. AIChE National Meeting, Cleveland, Paper 15C.', 'Poling, B. E., Prausnitz, J. M. & O’Connell, J. P. (2001). The Properties of Gases and Liquids, 5th ed., McGraw-Hill.', 'Smith, J. M., Van Ness, H. C. & Abbott, M. M. (2005). Introduction to Chemical Engineering Thermodynamics, 7th ed., McGraw-Hill.', 'Seader, J. D., Henley, E. J. & Roper, D. K. (2011). Separation Process Principles, 3rd ed., Wiley.'],
+  inputs: [
+    inp('z_1', 'Benzene mole fraction in the feed', '1', 0.4, { min: 0.05, max: 0.6, kind: 'fluid', aliases: ['benzene'] }),
+    inp('z_2', 'Toluene mole fraction in the feed', '1', 0.35, { min: 0.05, max: 0.35, kind: 'fluid', aliases: ['toluene'] }),
+    inp('T', 'Flash temperature', '°C', 105, { min: 60, max: 160, aliases: ['temperature', 'flash temperature'] }),
+    inp('p', 'Flash pressure', 'bar', 1.01325, { min: 0.2, max: 5, aliases: ['pressure', 'flash pressure'] }),
+    inp('F', 'Feed rate', 'kmol/h', 100, { min: 1, max: 1e4, aliases: ['feed rate', 'feed'] }),
+    inp('psi_s', 'Specified vapour fraction (used when temperature is not specified)', '1', 0.5, { min: 0.02, max: 0.98, aliases: ['vapour fraction', 'vapor fraction'] }),
+  ],
+  assumptions: [
+    asm('raoult', 'K-values follow Raoult’s law with Antoine vapour pressures.', { why: 'Nearly ideal aromatic mixture at low pressure', alt: 'K-values come from the Wilson correlation based on critical constants and acentric factors.' }),
+    asm('tp_spec', 'Temperature and pressure are specified.', { why: 'Isothermal flash', alt: 'Pressure and vapour fraction are specified and the temperature is found.' }),
+    asm('equilibrium', 'Vapour and liquid leave in equilibrium.', { why: 'Adequate residence time in the drum', alt: 'Approach to equilibrium is 80 %: each K-value is moved 20 % of the way back toward one.' }),
+  ],
+  symbols: { z_3: ['o-Xylene mole fraction in the feed', '1'], K_1: ['K-value of benzene', '1'], K_2: ['K-value of toluene', '1'], K_3: ['K-value of o-xylene', '1'], psi: ['Vapour fraction V/F', '1'], x_1: ['Benzene in the liquid', '1'], y_1: ['Benzene in the vapour', '1'], V: ['Vapour rate', 'mol/s'], L: ['Liquid rate', 'mol/s'], p_s1: ['Vapour pressure of benzene', 'Pa'], p_mm: ['Reference pressure 1 mmHg', 'Pa'], A_1: ['Antoine A of benzene', '1'], B_1: ['Antoine B of benzene', 'K'], C_1: ['Antoine C of benzene', 'K'], T_z: ['Ice-point temperature 273.15 K', 'K'], p_c1: ['Critical pressure of benzene', 'Pa'], T_c1: ['Critical temperature of benzene', 'K'], omega_1: ['Acentric factor of benzene', '1'], E_s: ['Stage efficiency', '1'], K_e1: ['Equilibrium K-value of benzene', '1'] },
+  equations: a => [
+    eq('z3', 'Feed composition closure', 'z_3', '1 - z_1 - z_2', { kind: 'law', origin: 'Mole fractions sum to one' }),
+    ...(a.raoult
+      ? [eq('ant', 'Antoine vapour pressure (shown for benzene)', 'log10(p_s1/p_mm)', 'A_1 - B_1/(C_1 + T - T_z)', { kind: 'empirical', origin: 'Antoine (1888); constants from standard compilations' }), eq('k', 'Raoult’s law (shown for benzene)', a.equilibrium ? 'K_1' : 'K_e1', 'p_s1/p', { kind: 'law', origin: 'Equal fugacities with ideal liquid and vapour', needs: ['raoult'] })]
+      : [eq('k', 'Wilson correlation (shown for benzene)', a.equilibrium ? 'K_1' : 'K_e1', '(p_c1/p)*exp(5.373*(1 + omega_1)*(1 - T_c1/T))', { kind: 'empirical', origin: 'Wilson (1968)' })]),
+    ...(a.equilibrium ? [] : [eq('eff', 'Approach to equilibrium', 'K_1', '1 + E_s*(K_e1 - 1)', { kind: 'closure', origin: 'Stage-efficiency closure with E = 0.8' })]),
+    eq('rr', 'Rachford–Rice equation', 'z_1*(K_1 - 1)/(1 + psi*(K_1 - 1)) + z_2*(K_2 - 1)/(1 + psi*(K_2 - 1)) + z_3*(K_3 - 1)/(1 + psi*(K_3 - 1))', '0', { kind: 'law', origin: 'Component balances with Σy − Σx = 0', needs: a.tp_spec ? ['tp_spec'] : [] }),
+    eq('x', 'Liquid composition (shown for benzene)', 'x_1', 'z_1/(1 + psi*(K_1 - 1))', { kind: 'law', origin: 'Component balance' }),
+    eq('y', 'Vapour composition (shown for benzene)', 'y_1', 'K_1*x_1', { kind: 'law', origin: 'Definition of the K-value' }),
+    eq('v', 'Vapour rate', 'V', 'psi*F', { kind: 'definition' }),
+    eq('l', 'Liquid rate', 'L', '(1 - psi)*F', { kind: 'law', origin: 'Overall balance' }),
+  ],
+  derivation: a => [
+    { text: 'Write a mole balance for each component over the drum, with ψ the fraction of the feed leaving as vapour.', tex: 'z_i = \\psi\\,y_i + (1-\\psi)\\,x_i' },
+    { text: 'Equilibrium relates the two compositions through the K-value. Substituting gives each liquid mole fraction in terms of ψ.', tex: 'y_i = K_i x_i \;\\Rightarrow\; x_i = \\frac{z_i}{1+\\psi\\,(K_i-1)}' },
+    { text: 'Both sets of mole fractions must sum to one. Subtracting the two sums gives the Rachford–Rice equation, which decreases monotonically in ψ.', tex: '\\sum_i \\frac{z_i\\,(K_i-1)}{1+\\psi\\,(K_i-1)} = 0' },
+    { text: 'A two-phase solution exists only between the bubble and dew points, where the function is positive at ψ = 0 and negative at ψ = 1.', tex: '\\sum_i z_i K_i > 1 \\quad\\text{and}\\quad \\sum_i \\frac{z_i}{K_i} > 1' },
+    { text: a.raoult ? 'For an ideal mixture the K-value is the ratio of the pure-component vapour pressure to the total pressure.' : 'The Wilson correlation estimates K-values from corresponding states.', tex: a.raoult ? 'K_i = \\frac{p_i^{sat}(T)}{p},\\qquad \\log_{10} p_i^{sat} = A_i - \\frac{B_i}{C_i + t}' : 'K_i = \\frac{p_{c,i}}{p}\\exp\\!\\left[5.373\\,(1+\\omega_i)\\left(1-\\frac{T_{c,i}}{T}\\right)\\right]' },
+  ],
+  solve(v, a) {
+    const z = [v.z_1, v.z_2, Math.max(1 - v.z_1 - v.z_2, 1e-9)], eff = a.equilibrium ? 1 : 0.8;
+    const Kof = T => kValues(T, v.p, a.raoult, eff);
+    const Tbub = N.bisect(T => N.sum(Kof(T).map((K, i) => z[i] * K)) - 1, 200, 700, 1e-12), Tdew = N.bisect(T => 1 - N.sum(Kof(T).map((K, i) => z[i] / K)), 200, 700, 1e-12);
+    const T = a.tp_spec ? v.T : N.bisect(q => rrFun(z, Kof(q), v.psi_s), Tbub - 1e-6, Tdew + 1e-6, 1e-13);
+    const K = Kof(T), fl = flashTP(z, K), V = fl.psi * v.F, L = v.F - V;
+    const Kp1 = kValues(T, 1, a.raoult, 1), pBub = N.sum(z.map((zi, i) => zi * Kp1[i])), pDew = 1 / N.sum(z.map((zi, i) => zi / Kp1[i]));
+    const Ts = N.linspace(Tbub - 10, Tdew + 10, 81), sw = Ts.map(q => flashTP(z, Kof(q)));
+    const bal = BTX.map((_, i) => (v.F * z[i] - L * fl.x[i] - V * fl.y[i]) / v.F);
+    const warnings = [];
+    if (fl.state !== 1) warnings.push(`At these conditions the feed is a ${FLASH_STATES[fl.state].toLowerCase()}; no phase split occurs. The bubble point is ${lab(Tbub - 273.15, '°C')} and the dew point ${lab(Tdew - 273.15, '°C')} at this pressure.`);
+    if (a.raoult && v.p > 3e5) warnings.push('Above about 3 bar the vapour is noticeably non-ideal; Raoult’s law then over-predicts K-values by a few per cent.');
+    if (!a.raoult) warnings.push('The Wilson correlation is intended for initial estimates; it is typically within 10–20 % of measured K-values for hydrocarbons at low pressure.');
+    return {
+      scalars: [
+        scalar('state', 'Phase state', fl.state, '1', { text: FLASH_STATES[fl.state] }), scalar('T_f', 'Flash temperature', T, 'K', { show: '°C' }),
+        scalar('psi', 'Vapour fraction V/F', fl.psi, '1'), scalar('V', 'Vapour rate', V, 'mol/s', { show: 'kmol/h' }), scalar('L', 'Liquid rate', L, 'mol/s', { show: 'kmol/h' }),
+        ...BTX.map((c, i) => scalar(`K_${i + 1}`, `K-value of ${c.name.toLowerCase()}`, K[i], '1')),
+        ...BTX.map((c, i) => scalar(`x_${i + 1}`, `${c.name} in the liquid`, fl.x[i], '1')),
+        ...BTX.map((c, i) => scalar(`y_${i + 1}`, `${c.name} in the vapour`, fl.y[i], '1')),
+        scalar('alpha_13', 'Relative volatility, benzene to o-xylene', K[0] / K[2], '1'),
+        scalar('T_bub', 'Bubble-point temperature at this pressure', Tbub, 'K', { show: '°C' }), scalar('T_dew', 'Dew-point temperature at this pressure', Tdew, 'K', { show: '°C' }),
+        scalar('p_bub', 'Bubble-point pressure at this temperature', pBub, 'Pa', { show: 'bar' }), scalar('p_dew', 'Dew-point pressure at this temperature', pDew, 'Pa', { show: 'bar' }),
+        scalar('rec_1', 'Fraction of the benzene recovered in the vapour', V * fl.y[0] / (v.F * z[0]), '1', { show: '%' }),
+      ],
+      series: [
+        line('psi-T', 'Vapour fraction against temperature', 'Temperature', '°C', Ts.map(q => q - 273.15), [{ label: 'Vapour fraction', data: sw.map(q => q.psi) }], 'Vapour fraction', '–', { marker: [T - 273.15, fl.psi] }),
+        line('comp-T', 'Benzene content of each phase against temperature', 'Temperature', '°C', Ts.map(q => q - 273.15), [{ label: 'Vapour', data: sw.map(q => q.y[0]) }, { label: 'Liquid', data: sw.map(q => q.x[0]) }, { label: 'Feed', data: Ts.map(() => z[0]), dash: true }], 'Benzene mole fraction', '–'),
+        line('rr', 'Rachford–Rice function', 'Vapour fraction', '–', N.linspace(0, 1, 51), [{ label: 'f(ψ)', data: N.linspace(0, 1, 51).map(q => rrFun(z, K, q)) }, { label: 'Zero', data: N.linspace(0, 1, 51).map(() => 0), dash: true }], 'f(ψ)', '–'),
+        line('psat', 'Vapour pressures', 'Temperature', '°C', Ts.map(q => q - 273.15), BTX.map(c => ({ label: c.name, data: Ts.map(q => antoine(c, q) / 1e5) })), 'Vapour pressure', 'bar', { logy: true }),
+      ],
+      checks: [
+        check('Liquid mole fractions sum to one', N.sum(fl.x) - 1, 1e-10, 'Σx = 1'), check('Vapour mole fractions sum to one', N.sum(fl.y) - 1, 1e-10, 'Σy = 1'),
+        check('Component balances', fl.state === 1 ? N.maxOf(bal.map(Math.abs)) : 0, 1e-10, 'F z_i = L x_i + V y_i for each component'),
+        check('Equilibrium relation', fl.state === 1 ? N.maxOf(fl.y.map((y, i) => Math.abs(y - K[i] * fl.x[i]))) : 0, 1e-10, 'y_i = K_i x_i'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const nb = c => N.bisect(T => antoine(c, T) - 101325, 300, 500, 1e-13) - 273.15;
+    // binary check: for two components the Rachford–Rice equation has the closed form ψ = [z1(K1 − 1) + z2(K2 − 1)] / [−(K1 − 1)(K2 − 1)]
+    const K = [2.2, 0.6, 1], z = [0.45, 0.55, 0], exact = -(z[0] * (K[0] - 1) + z[1] * (K[1] - 1)) / ((K[0] - 1) * (K[1] - 1));
+    return [
+      bench('Normal boiling point of benzene from the Antoine constants', nb(BTX[0]), 80.10, 'Accepted value 80.1 °C', 1e-3),
+      bench('Normal boiling point of toluene from the Antoine constants', nb(BTX[1]), 110.63, 'Accepted value 110.6 °C', 1e-3),
+      bench('Normal boiling point of o-xylene from the Antoine constants', nb(BTX[2]), 144.41, 'Accepted value 144.4 °C', 1e-3),
+      bench('Binary flash vs closed-form vapour fraction', flashTP(z, K).psi, exact, 'Analytical solution of the two-component Rachford–Rice equation', 1e-10),
+      bench('Wilson K-value equals p_c/p at the critical temperature', BTX[0].pc / 1e5 * Math.exp(5.373 * (1 + BTX[0].w) * 0), 48.95, 'Limit of the Wilson correlation', 1e-12),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(270, 60, 110, 240, 'd-body', 50)} ${S.rect(272, 200, 106, 98, 'd-liquid', 40)} ${S.path('M272 200 L378 200', 'd-liquid-line')}
+      ${S.arrow(90, 180, 268, 180)} ${S.text(170, 168, `feed ${lab(v.F * 3.6, 'kmol/h')}`)} ${S.text(170, 198, `z = ${lab(v.z_1, '', 2)} / ${lab(v.z_2, '', 2)} / ${lab(1 - v.z_1 - v.z_2, '', 2)}`, 'd-text d-small')}
+      ${S.path('M325 60 L325 30 L520 30', 'd-pipe')} ${S.arrow(520, 30, 590, 30)} ${S.text(520, 20, 'vapour V, y')}
+      ${S.path('M325 300 L325 330 L520 330', 'd-pipe')} ${S.arrow(520, 330, 590, 330)} ${S.text(520, 320, 'liquid L, x')}
+      ${S.text(470, 170, `${lab(v.T - 273.15, '°C')}, ${lab(v.p / 1e5, 'bar')}`)} ${S.text(470, 192, 'benzene / toluene / o-xylene', 'd-text d-small')}
+      ${[0, 1, 2].map(i => S.arrow(300 + i * 25, 195, 300 + i * 25, 150)).join('')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure equilibrium vapour and liquid compositions of the ternary mixture at fixed temperature and pressure and compare with the flash prediction.',
+    apparatus: ['Recirculating vapour–liquid equilibrium still (Othmer or Gillespie type) with pressure control', 'Heating mantle and condenser', 'Sampling ports on the liquid and condensed-vapour loops'],
+    instruments: [{ name: 'Gas chromatograph with flame-ionisation detector', measures: 'Mole fractions in each phase', range: '0–1', resolution: '±0.002' }, { name: 'Pt100 in the equilibrium chamber', measures: 'Equilibrium temperature', range: '0–200 °C', resolution: '±0.05 K' }, { name: 'Absolute pressure transducer', measures: 'System pressure', range: '0–5 bar', resolution: '±0.05 %' }],
+    procedure: ['Charge a mixture of known composition and bring it to steady boiling at the set pressure.', 'Recirculate until the temperature is constant to 0.05 K for 30 minutes.', 'Sample both phases and analyse by gas chromatography.', 'Repeat over a range of charge compositions and pressures.', 'Check thermodynamic consistency of the data before comparing with the model.'],
+    controls: ['Pure-component boiling points to verify the thermometer and pressure gauge', 'Replicate injections for chromatographic repeatability'],
+    signatures: ['Vapour richer in benzene than the liquid at every condition', 'K-values close to p_sat/p for each component', 'Vapour fraction rising from zero at the bubble point to one at the dew point'],
+    safety: ['Benzene is a carcinogen: closed handling, extraction and exposure monitoring', 'Flammable vapours: ignition control and inert purging', 'Hot surfaces and glassware under pressure'],
+  },
+  falsify: ['Measured K-values differing from p_sat/p by much more than experimental uncertainty at low pressure for this nearly ideal system.', 'A two-phase region observed outside the computed bubble and dew temperatures.'],
+  alternatives: [{ name: 'Activity-coefficient models (Wilson, NRTL, UNIQUAC)', text: 'Needed for non-ideal liquids such as alcohol–water mixtures, where K-values depend on composition.' }, { name: 'Cubic equations of state (Peng–Robinson, Soave–Redlich–Kwong)', text: 'Give K-values from fugacity coefficients of both phases; required at high pressure and near critical conditions.' }, { name: 'Adiabatic (enthalpy-specified) flash', text: 'Adds an energy balance so that temperature is an outcome; relevant to flashing across a valve.' }],
+  hazards: [{ hazard: 'Toxic exposure', cause: 'Benzene vapour', mitigation: 'Containment, ventilation, monitoring' }, { hazard: 'Fire and explosion', cause: 'Flammable aromatic vapours', mitigation: 'Hazardous-area equipment, inerting, relief to a safe location' }, { hazard: 'Liquid carry-over', cause: 'Excess vapour velocity in the drum', mitigation: 'Drum sizing by the Souders–Brown criterion, demister' }],
+  standards: ['API Standard 521 (pressure-relieving and depressuring systems)', 'API RP 12J (specification for oil and gas separators)', 'ASME BPVC Section VIII (pressure vessels)'],
+  limits: 'Low to moderate pressure, nearly ideal liquid mixtures. K-values are independent of composition. Not valid near critical conditions or for polar or associating components.',
+  numerics: { method: 'Bisection on the monotonic Rachford–Rice function; bisection for bubble and dew temperatures' },
+  optimise: { objective: 'rec_1', sense: 'max', vars: ['T', 'p'], note: 'Recovery rises with temperature at the cost of purity; a single flash gives limited separation.' },
+  inverse: { series: 'psi-T', curve: 0, fit: ['p'] },
+  extensions: ['Adiabatic flash with an enthalpy balance', 'Composition-dependent K-values from an equation of state', 'Multistage distillation built from linked flashes', 'Drum sizing from the Souders–Brown velocity'],
+};
+
+// ------------------------------------------------------------------ produced-water separation
+/** Stokes velocity, optionally with the Schiller–Naumann drag correction solved by fixed-point iteration. */
+function settlingVelocity(d, drho, mu, rhoC, acc, stokes) {
+  const vs = acc * d * d * Math.abs(drho) / (18 * mu);
+  if (stokes) return vs;
+  let u = vs;
+  for (let i = 0; i < 60; i++) { const Re = rhoC * u * d / mu, un = vs / (1 + 0.15 * Math.pow(Re, 0.687)); if (Math.abs(un - u) < 1e-12 * vs) { u = un; break; } u = 0.5 * (u + un); }
+  return u;
+}
+/** Volume-weighted log-normal size distribution on a logarithmic grid. */
+function lognormalGrid(d50, sg, n = 161) {
+  const s = Math.log(sg), u = N.linspace(-4.5, 4.5, n), d = u.map(q => d50 * Math.exp(q * s)), w = u.map(q => Math.exp(-q * q / 2) / Math.sqrt(2 * Math.PI));
+  const du = u[1] - u[0], wt = w.map((q, i) => q * du * (i === 0 || i === n - 1 ? 0.5 : 1)), tot = N.sum(wt);
+  return { d, wt: wt.map(q => q / tot) };
+}
+
+const producedWater = {
+  id: 'produced-water-separation',
+  title: 'Produced-water treatment: gravity and hydrocyclone separation',
+  module: 2, klass: 'I', domains: ['chemical', 'offshore'],
+  keywords: ['produced water', 'oil-water separation', 'oil water separator', 'oil in water', 'hydrocyclone', 'deoiling', 'skim tank', 'gravity separator', 'stokes', 'settling velocity', 'cut size', 'grade efficiency', 'discharge limit', 'sand', 'api separator'],
+  summary: 'Removal of dispersed oil and solids from produced water by gravity settling or a deoiling hydrocyclone: Stokes velocities, cut size, grade efficiency and outlet oil content against a discharge limit.',
+  background: [
+    'Water produced with oil and gas carries dispersed oil droplets and solid particles that must be removed before discharge or reinjection. Droplets rise and solids settle at a terminal velocity given by Stokes’ law, proportional to the density difference and to the square of the diameter and inversely proportional to the water viscosity.',
+    'In an ideal horizontal separator a droplet is captured if it can cross the liquid depth within the residence time, which reduces to a comparison of its rise velocity with the overflow rate Q/A (Hazen’s principle); depth cancels out. A hydrocyclone applies the same principle with gravity replaced by a centrifugal acceleration of the order of a thousand times larger, allowing residence times of a few seconds. Because capture depends on the square of the diameter, performance is controlled by the fine end of the droplet-size distribution, which is in turn set by upstream shear in valves and pumps.',
+  ],
+  phenomena: ['Buoyant rise of droplets and settling of solids', 'Creeping flow drag', 'Centrifugal separation', 'Polydisperse size distribution'],
+  laws: ['mass', 'momentum', 'archimedes', 'newton2'],
+  refs: ['Stokes, G. G. (1851). On the effect of the internal friction of fluids on the motion of pendulums. Trans. Cambridge Phil. Soc. 9, 8–106.', 'Hazen, A. (1904). On sedimentation. Trans. American Society of Civil Engineers 53, 45–71.', 'Schiller, L. & Naumann, A. (1933). Über die grundlegenden Berechnungen bei der Schwerkraftaufbereitung. Zeitschrift des Vereines Deutscher Ingenieure 77, 318–320.', 'Arnold, K. & Stewart, M. (2008). Surface Production Operations, Vol. 1, 3rd ed., Gulf Professional Publishing.', 'Colman, D. A. & Thew, M. T. (1983). Correlation of separation results from light dispersion hydrocyclones. Chemical Engineering Research and Design 61, 233–240.'],
+  inputs: [
+    inp('Q', 'Produced-water flow rate', 'm^3/h', 200, { min: 5, max: 2000, aliases: ['flow rate', 'water rate', 'throughput'] }),
+    inp('L_sep', 'Separator effective length', 'm', 12, { min: 2, max: 40, kind: 'geometry', aliases: ['separator length', 'length'] }),
+    inp('W_sep', 'Separator width', 'm', 3, { min: 0.5, max: 10, kind: 'geometry', aliases: ['separator width', 'width'] }),
+    inp('rho_w', 'Water density', 'kg/m^3', 1030, { min: 980, max: 1200, kind: 'fluid', aliases: ['water density'] }),
+    inp('mu_w', 'Water viscosity', 'cP', 0.6, { min: 0.2, max: 2, kind: 'fluid', aliases: ['water viscosity', 'viscosity'], src: 'Brine near 50 °C' }),
+    inp('rho_o', 'Oil density', 'kg/m^3', 850, { min: 700, max: 950, kind: 'fluid', aliases: ['oil density'] }),
+    inp('d_50', 'Volume-median oil droplet diameter', 'um', 60, { min: 5, max: 500, kind: 'fluid', aliases: ['droplet size', 'droplet diameter', 'median droplet'] }),
+    inp('sigma_g', 'Geometric standard deviation of the droplet sizes', '1', 2, { min: 1.2, max: 3.5, kind: 'fluid', aliases: ['geometric standard deviation'] }),
+    inp('C_in', 'Oil-in-water concentration at the inlet', 'mg/L', 800, { min: 50, max: 5000, aliases: ['inlet oil', 'oil in water', 'oil concentration'] }),
+    inp('C_lim', 'Discharge limit for oil in water', 'mg/L', 30, { min: 5, max: 100, aliases: ['discharge limit', 'limit'], src: 'OSPAR Recommendation 2001/1: 30 mg/L monthly average' }),
+    inp('rho_s', 'Solids density', 'kg/m^3', 2650, { min: 1500, max: 4500, kind: 'fluid', aliases: ['sand density', 'solids density'] }),
+    inp('d_s', 'Median solids diameter', 'um', 60, { min: 5, max: 500, kind: 'fluid', aliases: ['sand size', 'particle size'] }),
+    inp('C_s', 'Solids concentration at the inlet', 'mg/L', 150, { min: 1, max: 2000, aliases: ['solids concentration', 'sand concentration'] }),
+    inp('D_c', 'Hydrocyclone liner diameter', 'mm', 35, { min: 20, max: 80, kind: 'geometry', aliases: ['liner diameter', 'cyclone diameter'] }),
+    inp('L_c', 'Hydrocyclone liner active length', 'm', 1.2, { min: 0.5, max: 2, kind: 'geometry', aliases: ['liner length'] }),
+    inp('n_c', 'Number of hydrocyclone liners', '1', 40, { min: 4, max: 400, kind: 'geometry', aliases: ['liners', 'number of liners'] }),
+    inp('a_c', 'Centrifugal acceleration in the hydrocyclone', 'g0', 1000, { min: 100, max: 3000, aliases: ['centrifugal acceleration', 'g-force'] }),
+  ],
+  assumptions: [
+    asm('gravity', 'Separation is by gravity in a horizontal skim vessel or plate-free API separator.', { why: 'Simple primary treatment', alt: 'Separation is in deoiling hydrocyclone liners, where centrifugal acceleration replaces gravity and solids are not removed.' }),
+    asm('stokes', 'Droplets and particles move at the Stokes velocity.', { why: 'Particle Reynolds number well below one for fine droplets', alt: 'The Schiller–Naumann drag correction is applied for finite Reynolds number.' }),
+    asm('plug_flow', 'Flow through the separator is ideal plug flow.', { why: 'Hazen’s ideal basin', alt: 'The vessel is fully back-mixed, which lowers the capture of every size.' }),
+    asm('no_coalescence', 'Droplets neither coalesce nor break up inside the separator.', { why: 'Conservative for dilute dispersions', alt: 'Not resolved: a warning notes that coalescence would improve, and shear would worsen, the result.' }),
+  ],
+  symbols: { v_t: ['Rise velocity of the median droplet', 'm/s'], v_o: ['Overflow rate', 'm/s'], d_100: ['Smallest droplet fully captured (cut size)', 'm'], d_p: ['Droplet diameter', 'm'], eta_d: ['Grade efficiency', '1'], E_T: ['Total oil-removal efficiency', '1'], C_out: ['Oil in water at the outlet', 'kg/m^3'], m_rec: ['Oil recovered', 'kg/s'], t_res: ['Residence time in a liner', 's'], Re_p: ['Particle Reynolds number', '1'] },
+  equations: a => [
+    eq('stokes', 'Terminal velocity', 'v_t', a.gravity ? (a.stokes ? 'g*d_50^2*(rho_w - rho_o)/(18*mu_w)' : 'g*d_50^2*(rho_w - rho_o)/(18*mu_w*(1 + 0.15*Re_p^0.687))') : (a.stokes ? 'a_c*d_50^2*(rho_w - rho_o)/(18*mu_w)' : 'a_c*d_50^2*(rho_w - rho_o)/(18*mu_w*(1 + 0.15*Re_p^0.687))'), { kind: 'law', origin: a.stokes ? 'Stokes (1851): balance of buoyancy and creeping-flow drag' : 'Stokes drag with the Schiller–Naumann (1933) correction', needs: a.stokes ? ['stokes'] : [] }),
+    eq('rep', 'Particle Reynolds number', 'Re_p', 'rho_w*v_t*d_50/mu_w', { kind: 'definition' }),
+    ...(a.gravity
+      ? [eq('vo', 'Overflow rate', 'v_o', 'Q/(L_sep*W_sep)', { kind: 'definition', origin: 'Hazen (1904)', needs: ['gravity'] }), eq('d100', 'Cut size', 'd_100', 'sqrt(18*mu_w*v_o/(g*(rho_w - rho_o)))', { kind: 'derived', origin: 'Rise velocity equal to overflow rate' })]
+      : [eq('tres', 'Liner residence time', 't_res', 'n_c*pi*D_c^2*L_c/(4*Q)', { kind: 'definition' }), eq('d100', 'Cut size', 'd_100', 'sqrt(9*mu_w*D_c/(a_c*(rho_w - rho_o)*t_res))', { kind: 'closure', origin: 'Radial migration across the liner radius within the residence time; a simplified model of a deoiling hydrocyclone' })]),
+    a.plug_flow ? eq('grade', 'Grade efficiency', 'eta_d', 'min(1, (d_p/d_100)^2)', { kind: 'derived', origin: 'Uniform inlet distribution in ideal plug flow', needs: ['plug_flow'] }) : eq('grade', 'Grade efficiency', 'eta_d', '(d_p/d_100)^2/(1 + (d_p/d_100)^2)', { kind: 'derived', origin: 'Fully mixed basin, Hazen (1904)' }),
+    eq('cout', 'Outlet oil content', 'C_out', 'C_in*(1 - E_T)', { kind: 'law', origin: 'Oil mass balance' }),
+    eq('mrec', 'Oil recovered', 'm_rec', 'Q*C_in*E_T', { kind: 'law', origin: 'Oil mass balance' }),
+  ],
+  derivation: a => [
+    { text: 'A small sphere reaches terminal velocity when its net buoyancy equals the Stokes drag.', tex: '\\frac{\\pi d^3}{6}\\,\\Delta\\rho\\,g = 3\\pi\\mu\\,d\\,v_t \;\\Rightarrow\; v_t = \\frac{g\\,d^2\\,\\Delta\\rho}{18\\,\\mu}' },
+    ...(a.gravity
+      ? [{ text: 'In plug flow of depth H a droplet entering at the bottom is captured if it rises H within the residence time L W H/Q. Depth cancels, leaving a comparison with the overflow rate.', tex: 'v_t \\ge \\frac{Q}{L\\,W} = v_o \;\\Rightarrow\; d_{100} = \\sqrt{\\frac{18\\,\\mu\\,v_o}{g\\,\\Delta\\rho}}' }]
+      : [{ text: 'In a hydrocyclone the centrifugal acceleration a_c replaces gravity; a droplet must migrate inward across the liner radius within the residence time.', tex: 'd_{100} = \\sqrt{\\frac{9\\,\\mu\\,D_c}{a_c\\,\\Delta\\rho\\,t_{res}}}' }]),
+    { text: a.plug_flow ? 'Smaller droplets are captured only if they enter close enough to the collecting surface; for a uniform inlet the captured fraction is the ratio of velocities.' : 'If the vessel is fully mixed the captured fraction follows from a balance between removal at the surface and wash-out with the flow.', tex: a.plug_flow ? '\\eta(d) = \\min\\!\\left[1,\\ \\left(\\frac{d}{d_{100}}\\right)^2\\right]' : '\\eta(d) = \\frac{(d/d_{100})^2}{1+(d/d_{100})^2}' },
+    { text: 'The total efficiency is the grade efficiency weighted by the volume distribution of droplet sizes, here log-normal.', tex: 'E_T = \\int_0^\\infty \\eta(d)\\,f_v(d)\\,\\mathrm{d}d,\\qquad C_{out} = C_{in}\\,(1-E_T)' },
+  ],
+  solve(v, a) {
+    const drho = v.rho_w - v.rho_o, acc = a.gravity ? g : v.a_c, Ah = v.L_sep * v.W_sep, vo = v.Q / Ah;
+    const tres = v.n_c * Math.PI * v.D_c ** 2 * v.L_c / (4 * v.Q), vReq = a.gravity ? vo : (v.D_c / 2) / tres;
+    const vel = (d, dr) => settlingVelocity(d, dr, v.mu_w, v.rho_w, acc, a.stokes);
+    const d100s = Math.sqrt(18 * v.mu_w * vReq / (acc * drho));
+    const d100 = a.stokes ? d100s : N.bisect(d => vel(d, drho) - vReq, d100s * 0.5, d100s * 100, 1e-12);
+    const grade = (d, dr) => { const q = vel(d, dr) / vReq; return a.plug_flow ? Math.min(1, q) : q / (1 + q); };
+    const oil = lognormalGrid(v.d_50, v.sigma_g), ET = N.sum(oil.d.map((d, i) => grade(d, drho) * oil.wt[i]));
+    const Cout = v.C_in * (1 - ET), mIn = v.Q * v.C_in, mRec = mIn * ET, mOut = v.Q * Cout;
+    const sol = lognormalGrid(v.d_s, 1.8), drs = v.rho_s - v.rho_w, ES = a.gravity ? N.sum(sol.d.map((d, i) => grade(d, drs) * sol.wt[i])) : 0;
+    const sIn = v.Q * v.C_s, sSet = sIn * ES, sOut = sIn - sSet;
+    const vt50 = vel(v.d_50, drho), Re50 = v.rho_w * vt50 * v.d_50 / v.mu_w;
+    // required overflow-rate change to meet the limit (Stokes scaling of the cut size)
+    const outAt = k => v.C_in * (1 - N.sum(oil.d.map((d, i) => { const q = vel(d, drho) / (vReq * k); return (a.plug_flow ? Math.min(1, q) : q / (1 + q)) * oil.wt[i]; })));
+    const kReq = outAt(1e-6) > v.C_lim ? 0 : outAt(1e6) < v.C_lim ? Infinity : Math.exp(N.bisect(q => outAt(Math.exp(q)) - v.C_lim, Math.log(1e-6), Math.log(1e6), 1e-10));
+    const ds = N.logspace(1e-6, 1e-3, 80), cum = (grid, f) => ds.map(dd => N.sum(grid.d.map((d, i) => (d <= dd ? f(d) * grid.wt[i] : 0))));
+    const outTot = Math.max(1 - ET, 1e-300), Qs = N.linspace(0.2 * v.Q, 2 * v.Q, 40);
+    const warnings = [];
+    if (Cout > v.C_lim) warnings.push(`Outlet oil content of ${lab(Cout * 1000, 'mg/L')} exceeds the discharge limit of ${lab(v.C_lim * 1000, 'mg/L')}. ${Number.isFinite(kReq) && kReq > 0 ? `The ${a.gravity ? 'overflow rate' : 'flow per liner'} would have to fall to ${lab(kReq * 100, '%')} of its present value` : 'No practical size of this equipment would meet it'}; a secondary stage such as flotation is normally needed.`);
+    if (a.stokes && Re50 > 1) warnings.push(`The particle Reynolds number of the median droplet is ${lab(Re50)}; Stokes’ law over-predicts its velocity. Switch on the drag correction.`);
+    if (!a.gravity) warnings.push('Solids pass through a deoiling hydrocyclone with the water; a desander or solids-removal stage is needed upstream. The hydrocyclone model is a simplified migration-time estimate and should be calibrated against supplier data.');
+    if (!a.no_coalescence) warnings.push('Coalescence in the inlet zone or on plate packs would raise the capture of fine droplets; shear in valves and pumps would lower it. Neither is resolved here.');
+    if (a.gravity && vo > 0.01) warnings.push('The overflow rate is high enough that turbulence and short-circuiting will reduce performance well below the ideal value.');
+    return {
+      scalars: [
+        scalar('v_t', 'Rise velocity of the median droplet', vt50, 'm/s', { show: 'mm/s' }), scalar('Re_p', 'Reynolds number of the median droplet', Re50, '1'),
+        scalar('v_o', a.gravity ? 'Overflow rate Q/A' : 'Required radial migration velocity', vReq, 'm/s', { show: 'mm/s' }),
+        scalar('t_res', 'Residence time in a hydrocyclone liner', tres, 's'), scalar('d_100', 'Cut size (smallest droplet fully captured in plug flow)', d100, 'm', { show: 'um' }),
+        scalar('E_T', 'Total oil-removal efficiency', ET, '1', { show: '%' }), scalar('C_out', 'Oil in water at the outlet', Cout, 'kg/m^3', { show: 'mg/L' }),
+        scalar('margin', 'Margin to the discharge limit', v.C_lim - Cout, 'kg/m^3', { show: 'mg/L', text: Cout > v.C_lim ? `Limit exceeded by ${lab((Cout - v.C_lim) * 1000, 'mg/L')}` : undefined }),
+        scalar('k_req', 'Loading relative to present that would just meet the limit', kReq, '1', { text: kReq === 0 ? 'Limit cannot be met by resizing' : !Number.isFinite(kReq) ? 'Limit met at any loading' : undefined }),
+        scalar('m_water', 'Stream table: water', v.Q * v.rho_w, 'kg/s', { show: 't/h' }), scalar('m_oil_in', 'Stream table: oil in the feed', mIn, 'kg/s', { show: 'kg/h' }),
+        scalar('m_rec', 'Stream table: oil recovered', mRec, 'kg/s', { show: 'kg/h' }), scalar('m_oil_out', 'Stream table: oil in the treated water', mOut, 'kg/s', { show: 'kg/h' }),
+        scalar('E_S', 'Solids-removal efficiency', ES, '1', { show: '%' }), scalar('m_s_in', 'Stream table: solids in the feed', sIn, 'kg/s', { show: 'kg/h' }),
+        scalar('m_s_set', 'Stream table: solids settled', sSet, 'kg/s', { show: 'kg/h' }), scalar('m_s_out', 'Stream table: solids in the treated water', sOut, 'kg/s', { show: 'kg/h' }),
+      ],
+      series: [
+        line('grade', 'Grade efficiency and droplet-size distributions', 'Droplet diameter', 'µm', ds.map(q => q * 1e6), [{ label: 'Grade efficiency', data: ds.map(d => grade(d, drho)) }, { label: 'Inlet cumulative volume', data: cum(oil, () => 1), dash: true }, { label: 'Outlet cumulative volume', data: cum(oil, d => (1 - grade(d, drho)) / outTot), dash: true }], 'Fraction', '–', { logx: true }),
+        line('cout-Q', 'Outlet oil content against flow rate', 'Flow rate', 'm³/h', Qs.map(q => q * 3600), [{ label: 'Oil in water at the outlet', data: Qs.map(q => outAt(q / v.Q) * 1000) }, { label: 'Discharge limit', data: Qs.map(() => v.C_lim * 1000), dash: true }], 'Oil in water', 'mg/L'),
+      ],
+      checks: [
+        check('Oil mass balance', (mIn - mRec - mOut) / mIn, 1e-12, 'Oil in = oil recovered + oil in treated water'),
+        check('Solids mass balance', (sIn - sSet - sOut) / sIn, 1e-12, 'Solids in = solids settled + solids in treated water'),
+        check('Size distribution normalised', N.sum(oil.wt) - 1, 1e-12, 'Volume fractions sum to one'),
+        check('Efficiency within bounds', ET < 0 || ET > 1 ? 1 : 0, 0, '0 ≤ E_T ≤ 1'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const b = { gravity: true, stokes: true, plug_flow: true, no_coalescence: true };
+    const mono = this.solve({ ...v, sigma_g: 1.2, d_50: 20e-6 }, b), d100 = val(mono, 'd_100');
+    const narrow = lognormalGrid(20e-6, 1.0001), eNarrow = N.sum(narrow.d.map((d, i) => Math.min(1, (d / d100) ** 2) * narrow.wt[i]));
+    const vs = 1, u = settlingVelocity(1e-4, 100, 1e-3, 1000, 18 * 1e-3 * vs / (1e-8 * 100), false);
+    return [
+      bench('Stokes rise velocity of a 100 µm droplet', settlingVelocity(100e-6, 150, 1e-3, 1000, g, true), 9.80665 * 1e-8 * 150 / 0.018, 'v = g d² Δρ/(18 μ) = 0.817 mm/s', 1e-12),
+      bench('Grade efficiency at the cut size', Math.min(1, settlingVelocity(d100, v.rho_w - v.rho_o, v.mu_w, v.rho_w, g, true) / (v.Q / (v.L_sep * v.W_sep))), 1, 'Definition of d_100', 1e-9),
+      bench('Monodisperse limit of the total efficiency', eNarrow, Math.min(1, (20e-6 / d100) ** 2), 'E_T → (d/d_100)² as the distribution narrows', 1e-3),
+      bench('Schiller–Naumann velocity satisfies its own drag law', u * (1 + 0.15 * Math.pow(1000 * u * 1e-4 / 1e-3, 0.687)), vs, 'v (1 + 0.15 Re^0.687) = v_Stokes', 1e-8),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return a.gravity ? svg(`
+      ${S.rect(80, 110, 480, 150, 'd-body', 20)} ${S.rect(82, 140, 476, 118, 'd-liquid', 16)} ${S.path('M82 140 L558 140', 'd-liquid-line')}
+      ${S.rect(82, 124, 476, 16, 'd-hazard', 6)} ${S.text(320, 104, 'oil layer skimmed')}
+      ${S.arrow(20, 190, 78, 190)} ${S.text(46, 178, 'feed', 'd-text d-small')} ${S.arrow(562, 220, 622, 220)} ${S.text(596, 208, 'water', 'd-text d-small')}
+      ${[0, 1, 2, 3].map(i => S.arrow(160 + i * 90, 230 - i * 14, 190 + i * 90, 180 - i * 14)).join('')} ${S.text(240, 246, 'droplets rise at v_t')}
+      ${S.path('M120 256 L520 256', 'd-ground')} ${S.text(430, 250, 'solids settle', 'd-text d-small')}
+      ${S.dim(80, 300, 560, 300, `L = ${lab(v.L_sep, 'm')},  W = ${lab(v.W_sep, 'm')}`)}
+      ${S.text(320, 50, `Q = ${lab(v.Q * 3600, 'm³/h')},  median droplet ${lab(v.d_50 * 1e6, 'µm')}`)}
+    `) : svg(`
+      ${S.path('M120 130 L260 130 L560 165 L560 195 L260 230 L120 230 Z', 'd-body')}
+      ${S.arrow(150, 70, 150, 128)} ${S.text(150, 60, 'tangential feed')}
+      ${S.path('M130 180 L540 180', 'd-line d-hazard')} ${S.arrow(118, 180, 50, 180, 'd-arrow d-hazard')} ${S.text(70, 168, 'oil reject', 'd-text d-small')}
+      ${S.arrow(562, 180, 620, 180)} ${S.text(592, 168, 'water', 'd-text d-small')}
+      ${S.path('M180 140 Q200 180 180 220 M240 140 Q262 180 240 220 M310 146 Q328 180 310 214', 'd-line')}
+      ${S.text(330, 270, `${Math.round(v.n_c)} liners of ${lab(v.D_c * 1000, 'mm')},  ${lab(v.a_c / g, 'g')}`)}
+      ${S.text(320, 30, `Q = ${lab(v.Q * 3600, 'm³/h')},  median droplet ${lab(v.d_50 * 1e6, 'µm')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the grade efficiency of a separator by comparing inlet and outlet droplet-size distributions, and verify the outlet oil-in-water concentration.',
+    apparatus: ['Pilot gravity separator or single hydrocyclone liner on a test loop', 'Oil injection through a shear valve to generate a controlled dispersion', 'Isokinetic sampling points at inlet and outlet'],
+    instruments: [{ name: 'Laser-diffraction or in-line image-analysis particle sizer', measures: 'Droplet-size distribution', range: '1–1000 µm', resolution: '±3 % on median' }, { name: 'Infrared or gas-chromatographic oil-in-water analysis of extracted samples', measures: 'Dispersed oil concentration', range: '1–2000 mg/L', resolution: '±10 % or ±2 mg/L' }, { name: 'Electromagnetic flow meter', measures: 'Water flow rate', range: '1–500 m³/h', resolution: '±0.5 %' }, { name: 'Differential pressure transmitters', measures: 'Hydrocyclone pressure-drop ratio', range: '0–20 bar', resolution: '±0.1 %' }],
+    procedure: ['Establish steady flow and inlet dispersion; record inlet size distribution and concentration.', 'Sample the outlet after at least three residence times.', 'Compute the grade efficiency for each size class from the two distributions and the total efficiency.', 'Repeat over a range of flow rates and inlet droplet sizes.'],
+    controls: ['Oil mass balance including the recovered stream', 'Repeat samples to quantify analytical scatter', 'Check for droplet break-up in the sampling line'],
+    signatures: ['Grade efficiency rising as the square of diameter below the cut size', 'Outlet distribution depleted of large droplets', 'Efficiency falling as flow rate rises in a gravity vessel, but rising with flow in a hydrocyclone until break-up sets in'],
+    safety: ['Hydrocarbon handling: ventilation, ignition control, spill containment', 'Pressurised test loop precautions', 'Solvent handling in oil-in-water analysis'],
+  },
+  falsify: ['Droplets well above the cut size found in the outlet of a properly baffled gravity separator in quantity inconsistent with short-circuiting.', 'Rise velocities of single small droplets departing from Stokes’ law at particle Reynolds numbers below 0.1 in clean water.'],
+  alternatives: [{ name: 'Plate-pack (corrugated or parallel plate) interceptors', text: 'Reduce the rise distance to the plate spacing and so capture smaller droplets in the same footprint.' }, { name: 'Induced or dissolved gas flotation', text: 'Attaches droplets to gas bubbles, raising the effective density difference and diameter; the usual polishing stage after hydrocyclones.' }, { name: 'Empirical hydrocyclone correlations', text: 'Colman and Thew correlate migration probability with a hydrocyclone number; supplier curves are used in practice.' }],
+  hazards: [{ hazard: 'Discharge above the permitted oil content', cause: 'Fine droplets from upstream shear, chemical upset, overload', mitigation: 'On-line monitoring, recycle of off-specification water, low-shear valves' }, { hazard: 'Sand accumulation and erosion', cause: 'Solids settling in vessels or passing through liners', mitigation: 'Desanders, jetting systems, erosion-resistant liners' }, { hazard: 'Hydrocarbon release', cause: 'Loss of containment', mitigation: 'Closed drains, gas detection' }],
+  standards: ['OSPAR Recommendation 2001/1 (management of produced water from offshore installations)', 'API Publication 421 (design and operation of oil–water separators)', 'ISO 9377-2 (determination of hydrocarbon oil index in water)', 'US EPA 40 CFR Part 435 (oil and gas extraction effluent guidelines)'],
+  limits: 'Dilute dispersions of rigid spherical droplets with no coalescence or break-up, ideal flow patterns and a log-normal size distribution. The hydrocyclone model is a first estimate only.',
+  numerics: { method: 'Numerical quadrature over a logarithmic size grid; fixed-point iteration for the drag correction' },
+  optimise: { objective: 'C_out', sense: 'min', vars: ['L_sep', 'W_sep'], note: 'Outlet oil falls with plan area; plate packs give the same effect in less space.' },
+  inverse: { series: 'cout-Q', curve: 0, fit: ['d_50', 'sigma_g'] },
+  extensions: ['Plate-pack geometry with laminar-flow criteria', 'Population balance for coalescence and break-up', 'Hydrocyclone pressure-drop ratio and reject-rate control', 'Gas flotation as a polishing stage'],
+};
+
+// ------------------------------------------------------------------ water hammer
+function hammerSetup(v, a) {
+  const c1 = a.anchored ? 1 - v.nu ** 2 : 1;
+  const aw = Math.sqrt((v.K_f / v.rho) / (a.elastic ? 1 + v.K_f * v.D * c1 / (v.E_p * v.e_w) : 1));
+  let f = a.friction ? v.f_D : 0, limited = false;
+  if (f * v.L / v.D * v.v_0 ** 2 / (2 * g) > 0.9 * v.H_0) { f = 0.9 * v.H_0 * 2 * g * v.D / (v.L * v.v_0 ** 2); limited = true; }
+  return { aw, f, limited, c1 };
+}
+/** Method of characteristics for a reservoir–pipe–valve system. Returns heads in metres above the valve outlet. */
+function hammerMOC(v, a, setup, nReach, nPeriods = 4, tauOf) {
+  const { aw, f } = setup, n = nReach, dx = v.L / n, dt = dx / aw, B = aw / g, Rf = f * dt / (2 * v.D);
+  const x = N.linspace(0, v.L, n + 1);
+  let H = x.map(s => v.H_0 - f * s / v.D * v.v_0 ** 2 / (2 * g)), V = x.map(() => v.v_0);
+  const Hv0 = H[n], tau = tauOf || (t => (a.gradual ? Math.max(0, 1 - t / v.t_c) : 0));
+  const tEnd = nPeriods * 4 * v.L / aw + (a.gradual ? v.t_c : 0), nt = Math.min(Math.ceil(tEnd / dt), 40000);
+  const t = [0], Hvalve = [Hv0], Hmid = [H[n >> 1]], Vres = [v.v_0], frames = [H.slice()], ftimes = [0], every = Math.max(1, Math.floor(nt / 80));
+  let Hmax = Hv0, Hmin = Hv0, HminAll = N.minOf(H);
+  for (let k = 1; k <= nt; k++) {
+    const Hn = new Array(n + 1), Vn = new Array(n + 1);
+    for (let i = 1; i < n; i++) {
+      const Cp = V[i - 1] + H[i - 1] / B - Rf * V[i - 1] * Math.abs(V[i - 1]), Cm = V[i + 1] - H[i + 1] / B - Rf * V[i + 1] * Math.abs(V[i + 1]);
+      Vn[i] = 0.5 * (Cp + Cm); Hn[i] = 0.5 * B * (Cp - Cm);
+    }
+    Hn[0] = v.H_0; Vn[0] = V[1] - H[1] / B - Rf * V[1] * Math.abs(V[1]) + v.H_0 / B;
+    const Cp = V[n - 1] + H[n - 1] / B - Rf * V[n - 1] * Math.abs(V[n - 1]), tk = tau(k * dt), kv = (tk * v.v_0) ** 2 / Hv0;
+    if (tk <= 0 || Cp <= 0) { Vn[n] = 0; Hn[n] = B * Cp; } else { Vn[n] = 0.5 * (-kv * B + Math.sqrt((kv * B) ** 2 + 4 * kv * B * Cp)); Hn[n] = B * (Cp - Vn[n]); }
+    H = Hn; V = Vn;
+    t.push(k * dt); Hvalve.push(H[n]); Hmid.push(H[n >> 1]); Vres.push(V[0]);
+    if (H[n] > Hmax) Hmax = H[n]; if (H[n] < Hmin) Hmin = H[n];
+    const mn = N.minOf(H); if (mn < HminAll) HminAll = mn;
+    if (k % every === 0) { frames.push(H.slice()); ftimes.push(k * dt); }
+  }
+  return { x, t, Hvalve, Hmid, Vres, frames, ftimes, Hmax, Hmin, HminAll, Hv0, dt };
+}
+
+const waterHammer = {
+  id: 'water-hammer',
+  title: 'Water hammer on valve closure',
+  module: 2, klass: 'I', domains: ['pipeline', 'cfd'],
+  keywords: ['water hammer', 'waterhammer', 'surge pressure', 'pressure surge', 'joukowsky', 'valve closure', 'pressure wave', 'method of characteristics', 'wave speed', 'transient', 'fluid transient', 'surge', 'hydraulic transient'],
+  summary: 'Pressure surge when a valve closes at the end of a pipeline fed from a reservoir: wave speed with pipe elasticity, the Joukowsky pressure rise and a method-of-characteristics simulation of the transient.',
+  background: [
+    'When flow in a pipe is stopped suddenly, the kinetic energy of the liquid is converted to strain energy of the compressed liquid and stretched pipe wall. The disturbance travels upstream as a pressure wave at a speed set by the bulk modulus of the liquid and the hoop stiffness of the pipe. For an instantaneous stoppage the pressure rise is the product of density, wave speed and velocity change — the Joukowsky relation — and is independent of pipe length.',
+    'The wave reflects from the reservoir with a change of sign and returns to the valve after the pipe period 2L/a. If the valve is still closing when the reflection arrives, the peak pressure is reduced; closure slower than the pipe period is therefore the basic means of surge control. The governing equations are hyperbolic and are solved exactly along characteristic lines dx/dt = ±a.',
+  ],
+  phenomena: ['Compressibility of the liquid', 'Elastic dilation of the pipe', 'Wave reflection at a reservoir and a closed end', 'Frictional attenuation'],
+  laws: ['mass', 'momentum', 'hooke', 'darcy'],
+  refs: ['Joukowsky, N. (1900). Über den hydraulischen Stoss in Wasserleitungsröhren. Mémoires de l’Académie Impériale des Sciences de St.-Pétersbourg, Series 8, 9(5).', 'Wylie, E. B. & Streeter, V. L. (1993). Fluid Transients in Systems. Prentice Hall.', 'Chaudhry, M. H. (2014). Applied Hydraulic Transients, 3rd ed., Springer.', 'Ghidaoui, M. S., Zhao, M., McInnis, D. A. & Axworthy, D. H. (2005). A review of water hammer theory and practice. Applied Mechanics Reviews 58, 49–76.', 'Korteweg, D. J. (1878). Ueber die Fortpflanzungsgeschwindigkeit des Schalles in elastischen Röhren. Annalen der Physik 241, 525–542.'],
+  inputs: [
+    inp('L', 'Pipe length', 'm', 1000, { min: 50, max: 20000, kind: 'geometry', aliases: ['length', 'pipe length', 'long'] }),
+    inp('D', 'Inner diameter', 'm', 0.5, { min: 0.05, max: 3, kind: 'geometry', aliases: ['diameter', 'bore'] }),
+    inp('e_w', 'Wall thickness', 'mm', 8, { min: 1, max: 50, kind: 'geometry', aliases: ['wall thickness', 'thickness'] }),
+    inp('E_p', 'Young’s modulus of the pipe', 'GPa', 200, { min: 1, max: 220, kind: 'fluid', aliases: ['young modulus', 'elastic modulus', 'pipe modulus'], src: 'Carbon steel; about 3 GPa for PVC' }),
+    inp('nu', 'Poisson’s ratio of the pipe', '1', 0.3, { min: 0.2, max: 0.5, kind: 'fluid', aliases: ['poisson'] }),
+    inp('K_f', 'Bulk modulus of the liquid', 'GPa', 2.2, { min: 0.5, max: 3, kind: 'fluid', aliases: ['bulk modulus'], src: 'Water at 20 °C' }),
+    inp('rho', 'Liquid density', 'kg/m^3', 1000, { min: 600, max: 1100, kind: 'fluid', aliases: ['density'] }),
+    inp('v_0', 'Initial flow velocity', 'm/s', 1, { min: 0.1, max: 6, aliases: ['velocity', 'flow velocity', 'initial velocity'] }),
+    inp('H_0', 'Reservoir head above the valve', 'm', 120, { min: 10, max: 500, aliases: ['reservoir head', 'static head', 'head'] }),
+    inp('f_D', 'Darcy friction factor', '1', 0.018, { min: 0.005, max: 0.05, aliases: ['friction factor'] }),
+    inp('t_c', 'Valve closure time', 's', 4, { min: 0.01, max: 120, aliases: ['closure time', 'closing time', 'valve closes'] }),
+    inp('n_x', 'Number of pipe reaches', '1', 50, { min: 10, max: 400, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('elastic', 'The pipe wall is elastic and lowers the wave speed.', { why: 'Always true to some extent; large for plastic pipe', alt: 'The pipe is rigid: the wave travels at the speed of sound in the liquid.' }),
+    asm('friction', 'Wall friction is included with a constant Darcy factor (quasi-steady).', { why: 'Attenuates the oscillation and causes line-packing', alt: 'The pipe is frictionless.' }),
+    asm('gradual', 'The valve closes linearly over the stated closure time.', { why: 'Realistic actuator', alt: 'The valve closes instantaneously.' }),
+    asm('anchored', 'The pipe is anchored against axial movement throughout.', { why: 'Buried or well-restrained pipe', alt: 'The pipe has expansion joints throughout, so no axial stress develops.' }),
+  ],
+  symbols: { a_w: ['Wave speed', 'm/s'], c_1: ['Axial-restraint factor', '1'], dp_J: ['Joukowsky pressure rise', 'Pa'], T_p: ['Pipe period 2L/a', 's'], p: ['Pressure', 'Pa'], v: ['Velocity', 'm/s'], x: ['Distance from the reservoir', 'm'], t: ['Time', 's'], p_max: ['Peak pressure at the valve', 'Pa'], sigma_h: ['Peak hoop stress', 'Pa'] },
+  equations: a => [
+    a.elastic ? eq('aw', 'Wave speed', 'a_w', 'sqrt((K_f/rho)/(1 + K_f*D*c_1/(E_p*e_w)))', { kind: 'law', origin: 'Korteweg (1878): mass conservation with liquid compressibility and hoop strain', needs: ['elastic'] }) : eq('aw', 'Wave speed', 'a_w', 'sqrt(K_f/rho)', { kind: 'law', origin: 'Speed of sound in the liquid' }),
+    ...(a.elastic ? [a.anchored ? eq('c1', 'Restraint factor', 'c_1', '1 - nu^2', { kind: 'closure', origin: 'Pipe anchored against axial movement; Wylie & Streeter (1993)', needs: ['anchored'] }) : eq('c1', 'Restraint factor', 'c_1', '1', { kind: 'closure', origin: 'Expansion joints throughout' })] : []),
+    eq('jouk', 'Joukowsky pressure rise', 'dp_J', 'rho*a_w*v_0', { kind: 'law', origin: 'Momentum balance across the wave front; Joukowsky (1900)' }),
+    eq('cont', 'Continuity', 'pd(p,t)', '-rho*a_w^2*pd(v,x)', { kind: 'law', origin: 'Conservation of mass for a slightly compressible liquid in an elastic pipe' }),
+    eq('mom', 'Momentum', 'pd(v,t)', a.friction ? '-pd(p,x)/rho - f_D*v*abs(v)/(2*D)' : '-pd(p,x)/rho', { kind: 'law', origin: 'Conservation of momentum' + (a.friction ? ' with Darcy–Weisbach friction' : ''), needs: a.friction ? ['friction'] : [] }),
+    eq('per', 'Pipe period', 'T_p', '2*L/a_w', { kind: 'definition' }),
+    eq('hoop', 'Peak hoop stress', 'sigma_h', 'p_max*D/(2*e_w)', { kind: 'law', origin: 'Thin-wall equilibrium' }),
+  ],
+  derivation: a => [
+    { text: 'Consider a wave front moving upstream at speed a into liquid flowing at v₀, leaving stationary liquid behind. In a frame moving with the front, the momentum balance gives the pressure jump.', tex: '\\Delta p = \\rho\\,a\\,\\Delta v' },
+    { text: 'Mass conservation across the front requires the incoming liquid to be stored by compression of the liquid and dilation of the pipe, which fixes the wave speed.', tex: a.elastic ? 'a = \\sqrt{\\frac{K/\\rho}{1 + \\dfrac{K D}{E e}\\,c_1}}' : 'a = \\sqrt{K/\\rho}' },
+    { text: 'For small disturbances the continuity and momentum equations form a hyperbolic pair.', tex: '\\frac{\\partial p}{\\partial t} + \\rho a^2\\frac{\\partial v}{\\partial x} = 0,\\qquad \\frac{\\partial v}{\\partial t} + \\frac{1}{\\rho}\\frac{\\partial p}{\\partial x} + \\frac{f\\,v|v|}{2D} = 0' },
+    { text: 'Adding and subtracting them shows that the combinations p ± ρ a v are carried unchanged (apart from friction) along the lines dx/dt = ±a. A grid with Δx = a Δt places the characteristics exactly on the nodes.', tex: '\\frac{\\mathrm{d}}{\\mathrm{d}t}\\big(p \\pm \\rho a v\\big) = \\mp\\,\\rho a\\,\\frac{f\\,v|v|}{2D}\\quad\\text{on}\\quad \\frac{\\mathrm{d}x}{\\mathrm{d}t} = \\pm a' },
+    { text: 'The reflection from the reservoir returns after one pipe period. Closure faster than this produces the full Joukowsky rise.', tex: 'T_p = \\frac{2L}{a}' },
+  ],
+  solve(v, a) {
+    const st = hammerSetup(v, a), n = Math.round(v.n_x), m = hammerMOC(v, a, st, n);
+    const rg = v.rho * g, dpJ = v.rho * st.aw * v.v_0, Tp = 2 * v.L / st.aw, rapid = !a.gradual || v.t_c <= Tp;
+    const pMax = rg * m.Hmax, pMin = rg * m.Hmin, p0 = rg * m.Hv0, rise = pMax - p0;
+    const still = hammerMOC(v, a, st, Math.min(n, 20), 0.25, () => 1);
+    const drift = N.maxOf(still.Hvalve.map(h => Math.abs(h - still.Hv0))) / v.H_0;
+    const pVap = -(101325 - 2340) / rg;
+    const warnings = [];
+    if (st.limited) warnings.push('The stated velocity cannot be driven through this pipe by the reservoir head with the given friction factor; friction has been reduced so that the initial head at the valve is one tenth of the reservoir head.');
+    if (m.HminAll < pVap) warnings.push(`The computed minimum head (${lab(m.HminAll, 'm')}) is below vapour pressure. Column separation would occur; the pressures after that instant are not reliable and the re-joining of the column can produce a larger spike.`);
+    if (m.t.length >= 40001) warnings.push('The simulation was truncated at 40 000 time steps; reduce the number of reaches to cover the full duration.');
+    return {
+      scalars: [
+        scalar('a_w', 'Wave speed', st.aw, 'm/s'), scalar('T_p', 'Pipe period 2L/a', Tp, 's'),
+        scalar('closure', 'Closure classification', rapid ? 1 : 0, '1', { text: rapid ? 'Rapid (closure time not longer than the pipe period): full Joukowsky rise' : 'Slow (closure time longer than the pipe period): reflections relieve the surge' }),
+        scalar('dp_J', 'Joukowsky pressure rise ρ a v₀', dpJ, 'Pa', { show: 'bar' }), scalar('dH_J', 'Joukowsky head rise a v₀/g', st.aw * v.v_0 / g, 'm'),
+        scalar('p_0', 'Initial pressure at the valve (gauge)', p0, 'Pa', { show: 'bar' }), scalar('p_max', 'Peak pressure at the valve (gauge)', pMax, 'Pa', { show: 'bar' }),
+        scalar('dp_max', 'Peak pressure rise at the valve', rise, 'Pa', { show: 'bar' }), scalar('ratio', 'Peak rise over Joukowsky rise', rise / dpJ, '1'),
+        scalar('p_min', 'Minimum pressure at the valve (gauge)', pMin, 'Pa', { show: 'bar' }),
+        scalar('sigma_h', 'Peak hoop stress in the wall', Math.max(pMax, 0) * v.D / (2 * v.e_w), 'Pa', { show: 'MPa' }),
+        scalar('t_safe', 'Closure time above which the surge is relieved', Tp, 's'),
+        scalar('E_k', 'Kinetic energy of the liquid column', 0.5 * v.rho * Math.PI * v.D ** 2 / 4 * v.L * v.v_0 ** 2, 'J', { show: 'kJ' }),
+      ],
+      series: [
+        line('p-valve', 'Pressure at the valve', 'Time', 's', m.t, [{ label: 'At the valve', data: m.Hvalve.map(h => rg * h / 1e5) }, { label: 'At mid-length', data: m.Hmid.map(h => rg * h / 1e5), dash: true }], 'Gauge pressure', 'bar'),
+        line('v-res', 'Velocity at the reservoir end', 'Time', 's', m.t, [{ label: 'Velocity at the reservoir', data: m.Vres }], 'Velocity', 'm/s'),
+      ],
+      anims: [anim('wave', 'Pressure wave along the pipe', 'Distance from the reservoir', 'm', m.x, m.frames.map(fr => fr.map(h => rg * h / 1e5)), m.ftimes, 'Gauge pressure', 'bar')],
+      checks: [
+        check('Steady state preserved with the valve open', drift, 1e-9, 'The initial condition is an exact fixed point of the characteristic scheme'),
+        check('Courant number equals one', st.aw * m.dt / (v.L / n) - 1, 1e-12, 'Characteristics pass exactly through grid nodes'),
+        check('Peak rise bounded by the Joukowsky value plus line-packing', Math.max(rise - dpJ - (p0 >= 0 ? rg * (v.H_0 - m.Hv0) : 0) - 1e-6 * dpJ, 0) / dpJ, 1e-6, 'Friction can add at most the initial friction head (line-packing) to the Joukowsky rise'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const b = { elastic: true, friction: false, gradual: false, anchored: true }, st = hammerSetup(v, b), m = hammerMOC(v, b, st, 40, 2);
+    const rigid = hammerSetup({ ...v, K_f: 2.2e9, rho: 1000 }, { ...b, elastic: false });
+    // period of the valve-pressure oscillation: first return to the initial head after the first rise is at 2L/a
+    const iDrop = m.Hvalve.findIndex((h, i) => i > 1 && h < m.Hv0 - 1e-6);
+    return [
+      bench('Peak rise for instantaneous frictionless closure vs Joukowsky', v.rho * g * (m.Hmax - m.Hv0), v.rho * st.aw * v.v_0, 'Δp = ρ a Δv', 1e-9),
+      bench('Minimum for instantaneous frictionless closure', v.rho * g * (m.Hmin - m.Hv0), -v.rho * st.aw * v.v_0, 'Reflected wave: −ρ a Δv', 1e-9),
+      bench('Time at which the reflected wave reaches the valve', m.t[iDrop], 2 * v.L / st.aw, 'Pipe period 2L/a', 0.03),
+      bench('Wave speed in a rigid pipe, water', rigid.aw, 1483.24, '√(K/ρ) with K = 2.2 GPa', 1e-5),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(40, 70, 110, 150, 'd-body', 4)} ${S.rect(42, 100, 106, 118, 'd-liquid', 2)} ${S.path('M42 100 L148 100', 'd-liquid-line')} ${S.text(95, 60, 'reservoir')}
+      ${S.path('M150 250 L540 250', 'd-pipe')} ${S.path('M95 220 L95 250 L150 250', 'd-pipe')}
+      ${S.path('M540 232 L570 268 L570 232 L540 268 Z', 'd-body')} ${S.text(555, 222, a.gradual ? `valve, closes in ${lab(v.t_c, 's')}` : 'valve, instantaneous')}
+      ${S.arrow(230, 232, 300, 232)} ${S.text(265, 222, `v₀ = ${lab(v.v_0, 'm/s')}`)}
+      ${S.path('M420 250 L420 200 L540 200', 'd-line d-hazard')} ${S.arrow(470, 186, 425, 186, 'd-arrow d-hazard')} ${S.text(480, 176, 'pressure wave, speed a')}
+      ${S.dim(150, 300, 540, 300, `L = ${lab(v.L, 'm')},  D = ${lab(v.D * 1000, 'mm')}`)}
+      ${S.dim(20, 100, 20, 250, `H₀ = ${lab(v.H_0, 'm')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Record the pressure history at a fast-closing valve on a long pipe and compare the first peak with the Joukowsky value and the oscillation period with 4L/a.',
+    apparatus: ['Constant-head tank feeding a coiled or straight pipe at least 50 m long, rigidly anchored', 'Fast-acting ball or solenoid valve at the downstream end with a closure-time measurement', 'Flow-control valve and weigh tank for steady flow measurement'],
+    instruments: [{ name: 'Piezoelectric or piezoresistive pressure transducers at the valve and mid-length', measures: 'Transient pressure', range: '0–40 bar', resolution: '≥ 5 kHz bandwidth, ±0.25 %' }, { name: 'High-speed data acquisition', measures: 'Pressure against time', range: '—', resolution: '≥ 10 kHz per channel' }, { name: 'Electromagnetic flow meter', measures: 'Initial velocity', range: '0–5 m/s', resolution: '±0.5 %' }, { name: 'Valve position sensor', measures: 'Closure law', range: '0–90°', resolution: '±0.5°' }],
+    procedure: ['Establish steady flow and record velocity and static pressures.', 'Close the valve rapidly, logging pressure at both stations.', 'Measure the wave speed from the delay between the two transducers.', 'Compare the first pressure rise with ρ a v₀ and the oscillation period with 4L/a.', 'Repeat with progressively slower closures to show relief once the closure time exceeds 2L/a.'],
+    controls: ['Bleed all air: small gas fractions lower the wave speed dramatically', 'Repeat at several initial velocities to verify proportionality'],
+    signatures: ['First pressure rise proportional to initial velocity and independent of pipe length', 'Square-wave pressure trace of period 4L/a for rapid closure, decaying through friction', 'Peak falling roughly as 2L/(a t_c) for slow closure'],
+    safety: ['Rate all components for the full surge pressure with margin', 'Restrain the pipe against axial thrust', 'Keep clear of the valve end during rapid closure tests'],
+  },
+  falsify: ['A first pressure rise for closure faster than 2L/a that differs from ρ a v₀ by more than the measurement uncertainty in an air-free, well-anchored pipe.', 'A measured wave speed that does not follow the dependence on wall thickness and modulus predicted by the Korteweg formula.'],
+  alternatives: [{ name: 'Rigid-column (mass oscillation) theory', text: 'Neglects compressibility; adequate for slow transients such as surge-tank oscillations.' }, { name: 'Unsteady friction models (Zielke, Brunone)', text: 'Add frequency-dependent wall shear, reproducing the faster damping seen in experiments.' }, { name: 'Discrete vapour or gas cavity models', text: 'Allow column separation and re-joining when pressure reaches vapour pressure.' }, { name: 'Fluid–structure interaction', text: 'Couples axial pipe motion to the liquid, important for flexible or poorly restrained pipework.' }],
+  hazards: [{ hazard: 'Pipe or fitting rupture', cause: 'Surge pressure above rating', mitigation: 'Slow-closing valves, surge vessels, relief valves, higher pressure class' }, { hazard: 'Pipe collapse or column separation', cause: 'Sub-atmospheric pressure on the down-surge', mitigation: 'Air-inlet valves, surge tanks' }, { hazard: 'Support failure', cause: 'Unbalanced axial thrust as the wave passes bends', mitigation: 'Anchors and restraints designed for the transient load' }],
+  standards: ['ASME B31.4 (pipeline transportation systems for liquids): surge allowance', 'AWWA Manual M11 (steel pipe — a guide for design and installation)', 'EN 805 (water supply — requirements for systems and components outside buildings)', 'DNV-RP-D101 (structural analysis of piping systems)'],
+  limits: 'Single uniform pipe, single-phase liquid, thin-walled linearly elastic pipe, quasi-steady friction. Column separation, entrained gas, viscoelastic pipe walls and pump or check-valve dynamics are not modelled.',
+  numerics: { method: 'Method of characteristics on a fixed grid with Δx = a Δt; first-order treatment of friction', order: 1, stability: 'Courant number exactly one: no numerical dispersion or dissipation in the frictionless case', resolution: 'n_x' },
+  optimise: { objective: 'dp_max', sense: 'min', vars: ['t_c'], note: 'Surge falls once the closure time exceeds the pipe period 2L/a.' },
+  inverse: { series: 'p-valve', curve: 0, fit: ['E_p', 'f_D'] },
+  extensions: ['Non-linear valve characteristics and two-stage closure', 'Surge vessel or relief valve at the downstream end', 'Column separation with a discrete vapour cavity model', 'Pump trip with machine characteristics'],
+};
+
+// ------------------------------------------------------------------ lid-driven cavity
+// Ghia, Ghia & Shin (1982), Table I, Re = 100: u/U on the vertical centre-line.
+const GHIA_Y = [1, 0.9766, 0.9688, 0.9609, 0.9531, 0.8516, 0.7344, 0.6172, 0.5, 0.4531, 0.2813, 0.1719, 0.1016, 0.0703, 0.0625, 0.0547, 0];
+const GHIA_U100 = [1, 0.84123, 0.78871, 0.73722, 0.68717, 0.23151, 0.00332, -0.13641, -0.20581, -0.21090, -0.15662, -0.10150, -0.06434, -0.04775, -0.04192, -0.03717, 0];
+/** Streamfunction–vorticity solution in units of the cavity size and lid speed. */
+function cavitySolve(Re, n, o) {
+  const h = 1 / (n - 1), h2 = h * h, psi = new Float64Array(n * n), om = new Float64Array(n * n), on = new Float64Array(n * n);
+  const lid = new Float64Array(n); for (let i = 0; i < n; i++) { const x = i * h; lid[i] = o.uniform ? 1 : 16 * x * x * (1 - x) * (1 - x); }
+  const dt = o.central ? 0.8 * Math.min(Re * h2 / 4, 2 / Re) : 0.8 / (4 / (Re * h2) + 2 / h);
+  const maxSteps = Math.min(o.steady ? 6000 : Math.ceil(o.tStop / dt), 6000), w = 2 / (1 + Math.sin(Math.PI * h));
+  let steps = 0, change = Infinity;
+  for (; steps < maxSteps; steps++) {
+    for (let i = 1; i < n - 1; i++) {
+      if (o.thom) { om[i] = -2 * psi[n + i] / h2; om[(n - 1) * n + i] = -2 * psi[(n - 2) * n + i] / h2 - 2 * lid[i] / h; }
+      else { om[i] = (-8 * psi[n + i] + psi[2 * n + i]) / (2 * h2); om[(n - 1) * n + i] = (-8 * psi[(n - 2) * n + i] + psi[(n - 3) * n + i]) / (2 * h2) - 3 * lid[i] / h; }
+    }
+    for (let j = 1; j < n - 1; j++) {
+      if (o.thom) { om[j * n] = -2 * psi[j * n + 1] / h2; om[j * n + n - 1] = -2 * psi[j * n + n - 2] / h2; }
+      else { om[j * n] = (-8 * psi[j * n + 1] + psi[j * n + 2]) / (2 * h2); om[j * n + n - 1] = (-8 * psi[j * n + n - 2] + psi[j * n + n - 3]) / (2 * h2); }
+    }
+    change = 0;
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) {
+      const k = j * n + i, u = (psi[k + n] - psi[k - n]) / (2 * h), v = -(psi[k + 1] - psi[k - 1]) / (2 * h);
+      const conv = o.central ? u * (om[k + 1] - om[k - 1]) / (2 * h) + v * (om[k + n] - om[k - n]) / (2 * h)
+        : (u > 0 ? u * (om[k] - om[k - 1]) : u * (om[k + 1] - om[k])) / h + (v > 0 ? v * (om[k] - om[k - n]) : v * (om[k + n] - om[k])) / h;
+      const d = dt * (-conv + (om[k + 1] + om[k - 1] + om[k + n] + om[k - n] - 4 * om[k]) / (Re * h2));
+      on[k] = om[k] + d; if (Math.abs(d) > change) change = Math.abs(d);
+    }
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) om[j * n + i] = on[j * n + i];
+    for (let s = 0; s < 4; s++) for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) { const k = j * n + i; psi[k] += w * (0.25 * (psi[k + 1] + psi[k - 1] + psi[k + n] + psi[k - n] + h2 * om[k]) - psi[k]); }
+    if (!Number.isFinite(change)) break;
+    if (o.steady && steps > 50 && change / dt < 1e-5) { steps++; break; }
+  }
+  const U = [], V = [], P = [], Sp = [];
+  let pmin = 0, kmin = 0, res = 0, omax = 1e-30;
+  for (let j = 0; j < n; j++) {
+    const ru = new Array(n), rv = new Array(n), rp = new Array(n), rs = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i, inner = i > 0 && i < n - 1 && j > 0 && j < n - 1;
+      ru[i] = inner ? (psi[k + n] - psi[k - n]) / (2 * h) : (j === n - 1 ? lid[i] : 0); rv[i] = inner ? -(psi[k + 1] - psi[k - 1]) / (2 * h) : 0;
+      rp[i] = psi[k]; rs[i] = Math.hypot(ru[i], rv[i]);
+      if (psi[k] < pmin) { pmin = psi[k]; kmin = k; }
+      if (inner) { res = Math.max(res, Math.abs((psi[k + 1] + psi[k - 1] + psi[k + n] + psi[k - n] - 4 * psi[k]) / h2 + om[k])); omax = Math.max(omax, Math.abs(om[k])); }
+    }
+    U.push(ru); V.push(rv); P.push(rp); Sp.push(rs);
+  }
+  // circulation theorem: the area integral of vorticity equals the line integral of velocity round the walls
+  let circ = 0, lidInt = 0;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) circ += om[j * n + i] * (i === 0 || i === n - 1 ? 0.5 : 1) * (j === 0 || j === n - 1 ? 0.5 : 1) * h2;
+  for (let i = 0; i < n; i++) lidInt += lid[i] * (i === 0 || i === n - 1 ? 0.5 : 1) * h;
+  const mid = (n - 1) >> 1, y = N.linspace(0, 1, n), uc = U.map(r => r[mid]), vc = V[mid].slice();
+  let jm = 0; for (let j = 0; j < n; j++) if (uc[j] < uc[jm]) jm = j;
+  // parabolic refinement of the centre-line minimum
+  let umin = uc[jm], ymin = y[jm];
+  if (jm > 0 && jm < n - 1) { const a2 = 0.5 * (uc[jm + 1] - 2 * uc[jm] + uc[jm - 1]), b1 = 0.5 * (uc[jm + 1] - uc[jm - 1]); if (a2 > 0) { const s = -b1 / (2 * a2); umin = uc[jm] + b1 * s + a2 * s * s; ymin = y[jm] + s * h; } }
+  return { n, h, dt, steps, converged: change / dt < 1e-5, change: change / dt, U, V, P, Sp, pmin, xv: (kmin % n) * h, yv: Math.floor(kmin / n) * h, res: res / omax, circ, lidInt, y, uc, vc, umin, ymin, flux: N.trapz(y, uc), finite: Number.isFinite(change) };
+}
+
+const cavity = {
+  id: 'lid-driven-cavity',
+  title: 'Lid-driven cavity flow',
+  module: 2, klass: 'I', domains: ['cfd'], heavy: true,
+  keywords: ['lid-driven cavity', 'lid driven cavity', 'cavity flow', 'driven cavity', 'streamfunction', 'vorticity', 'navier-stokes', 'recirculation', 'ghia', 'cfd benchmark', 'incompressible flow', 'vortex', 'cavity'],
+  summary: 'Two-dimensional incompressible flow in a square cavity driven by its sliding lid, solved in streamfunction–vorticity form by finite differences and compared with the benchmark of Ghia, Ghia and Shin.',
+  background: [
+    'A square cavity filled with viscous fluid whose lid slides at constant speed is the standard test problem for incompressible Navier–Stokes solvers. The geometry is trivial, the boundary conditions are simple, and yet the flow contains a primary recirculating vortex, secondary corner eddies and thin wall layers whose structure changes with Reynolds number.',
+    'In two dimensions the pressure can be eliminated by writing the velocity as the curl of a streamfunction and transporting the vorticity. Continuity is then satisfied identically. The no-slip condition does not give the wall vorticity directly; it is obtained from a Taylor expansion of the streamfunction at the wall. The tabulated multigrid solutions of Ghia, Ghia and Shin (1982) on a 129 × 129 grid are the customary reference.',
+  ],
+  phenomena: ['Shear-driven recirculation', 'Viscous diffusion of vorticity', 'Advection of vorticity', 'Corner eddies', 'Corner singularity of a uniform lid'],
+  laws: ['mass', 'momentum'],
+  refs: ['Ghia, U., Ghia, K. N. & Shin, C. T. (1982). High-Re solutions for incompressible flow using the Navier–Stokes equations and a multigrid method. J. Computational Physics 48, 387–411.', 'Burggraf, O. R. (1966). Analytical and numerical studies of the structure of steady separated flows. J. Fluid Mechanics 24, 113–151.', 'Thom, A. (1933). The flow past circular cylinders at low speeds. Proc. Royal Society A 141, 651–669.', 'Roache, P. J. (1998). Fundamentals of Computational Fluid Dynamics. Hermosa Publishers.', 'Shankar, P. N. & Deshpande, M. D. (2000). Fluid mechanics in the driven cavity. Annual Review of Fluid Mechanics 32, 93–136.'],
+  inputs: [
+    inp('Re', 'Reynolds number U L/ν', '1', 100, { min: 10, max: 400, aliases: ['reynolds number', 'reynolds', 're'] }),
+    inp('L', 'Cavity side length', 'm', 0.1, { min: 0.001, max: 10, kind: 'geometry', aliases: ['cavity size', 'side length', 'side', 'size'] }),
+    inp('U_l', 'Lid speed', 'm/s', 0.01, { min: 1e-4, max: 10, aliases: ['lid speed', 'lid velocity', 'wall speed'] }),
+    inp('n_g', 'Grid points per side', '1', 41, { min: 21, max: 81, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('steady', 'The flow is marched to its steady state.', { why: 'The steady solution is unique and stable at these Reynolds numbers', alt: 'The impulsively started flow is shown after two lid-transit times L/U.' }),
+    asm('central', 'Advection of vorticity uses second-order central differences.', { why: 'Accurate while the cell Reynolds number is moderate', alt: 'First-order upwind differences are used: unconditionally bounded but numerically diffusive.' }),
+    asm('thom', 'Wall vorticity is given by Thom’s first-order formula.', { why: 'Robust and widely used', alt: 'Jensen’s second-order formula, using two interior points, is used.' }),
+    asm('uniform', 'The lid moves at uniform speed right into the corners.', { why: 'The classical problem, with singular corners', alt: 'The lid speed is regularised to 16 x²(1 − x)² so that it vanishes smoothly at the corners.' }),
+  ],
+  symbols: { psi: ['Streamfunction', 'm^2/s'], omega: ['Vorticity', '1/s'], u: ['Horizontal velocity', 'm/s'], v: ['Vertical velocity', 'm/s'], nu: ['Kinematic viscosity', 'm^2/s'], x: ['Horizontal coordinate', 'm'], y: ['Vertical coordinate', 'm'], t: ['Time', 's'], h_g: ['Grid spacing', 'm'], psi_1: ['Streamfunction one node in from the wall', 'm^2/s'], psi_2: ['Streamfunction two nodes in from the wall', 'm^2/s'], omega_w: ['Wall vorticity', '1/s'], U_w: ['Tangential wall speed', 'm/s'] },
+  equations: a => [
+    eq('re', 'Reynolds number', 'Re', 'U_l*L/nu', { kind: 'definition' }),
+    eq('u', 'Horizontal velocity', 'u', 'pd(psi,y)', { kind: 'definition', origin: 'Streamfunction: continuity satisfied identically' }),
+    eq('v', 'Vertical velocity', 'v', '-pd(psi,x)', { kind: 'definition', origin: 'Streamfunction: continuity satisfied identically' }),
+    eq('poisson', 'Streamfunction equation', 'lap(psi)', '-omega', { kind: 'law', origin: 'Definition of vorticity' }),
+    eq('vort', 'Vorticity transport', a.steady ? 'u*pd(omega,x) + v*pd(omega,y)' : 'pd(omega,t) + u*pd(omega,x) + v*pd(omega,y)', 'nu*lap(omega)', { kind: 'law', origin: 'Curl of the Navier–Stokes momentum equation in two dimensions', needs: a.steady ? ['steady'] : [] }),
+    a.thom ? eq('wall', 'Wall vorticity', 'omega_w', '-2*psi_1/h_g^2 - 2*U_w/h_g', { kind: 'boundary', origin: 'Thom (1933): Taylor expansion of ψ at a no-slip wall', needs: ['thom'] }) : eq('wall', 'Wall vorticity', 'omega_w', '(psi_2 - 8*psi_1)/(2*h_g^2) - 3*U_w/h_g', { kind: 'boundary', origin: 'Jensen’s second-order wall formula' }),
+  ],
+  derivation: a => [
+    { text: 'For incompressible flow in a plane, define a streamfunction whose derivatives give the velocity components; continuity is then automatically satisfied.', tex: 'u = \\frac{\\partial\\psi}{\\partial y},\\qquad v = -\\frac{\\partial\\psi}{\\partial x}' },
+    { text: 'The vorticity is the curl of the velocity, which gives a Poisson equation linking the two fields.', tex: '\\omega = \\frac{\\partial v}{\\partial x} - \\frac{\\partial u}{\\partial y} \;\\Rightarrow\; \\nabla^2\\psi = -\\omega' },
+    { text: 'Taking the curl of the momentum equation eliminates pressure and leaves an advection–diffusion equation for vorticity.', tex: '\\frac{\\partial\\omega}{\\partial t} + u\\frac{\\partial\\omega}{\\partial x} + v\\frac{\\partial\\omega}{\\partial y} = \\nu\\,\\nabla^2\\omega' },
+    { text: 'On a wall ψ is constant and its normal derivative equals the wall speed. Expanding ψ to second order one grid spacing into the fluid gives the wall vorticity.', tex: '\\omega_w = -\\frac{2\\,\\psi_1}{h^2} - \\frac{2\\,U_w}{h}' },
+    { text: 'Scaling lengths by L and velocities by U leaves the Reynolds number as the only parameter.', tex: '\\mathrm{Re} = \\frac{U L}{\\nu}' },
+  ],
+  solve(v, a) {
+    const n = Math.max(11, Math.round(v.n_g)) | 1, c = cavitySolve(v.Re, n, { ...a, tStop: 2 });
+    const nu = v.U_l * v.L / v.Re, cellRe = v.Re * c.h;
+    const near100 = Math.abs(v.Re - 100) < 0.5 && a.steady && a.uniform;
+    const vmax = N.maxOf(c.vc), vmin = N.minOf(c.vc), xs = N.linspace(0, 1, n);
+    const warnings = [];
+    if (!c.finite) warnings.push('The iteration diverged. Use upwind differencing or a finer grid at this Reynolds number.');
+    if (a.steady && !c.converged) warnings.push(`The solution had not reached a steady state after ${c.steps} time steps (residual rate ${lab(c.change)}); treat it as approximate or refine the grid.`);
+    if (a.central && cellRe > 4) warnings.push(`The cell Reynolds number is ${lab(cellRe)}; central differencing can produce grid-scale oscillations above about 2–4. Refine the grid or switch to upwind differencing.`);
+    if (!a.central) warnings.push('First-order upwind differencing adds numerical viscosity of order U h/2; the vortex is weaker than in the central-difference solution.');
+    const safe = q => (Number.isFinite(q) ? q : 0);
+    return {
+      scalars: [
+        scalar('nu', 'Kinematic viscosity implied by the Reynolds number', nu, 'm^2/s'), scalar('psi_min', 'Streamfunction at the primary vortex centre, ψ/(U L)', safe(c.pmin), '1'),
+        scalar('psi_dim', 'Circulating flow per unit depth in the primary vortex', safe(-c.pmin) * v.U_l * v.L, 'm^2/s'),
+        scalar('x_v', 'Vortex centre x/L', c.xv, '1'), scalar('y_v', 'Vortex centre y/L', c.yv, '1'),
+        scalar('u_min', 'Minimum u/U on the vertical centre-line', safe(c.umin), '1'), scalar('y_umin', 'Height y/L of that minimum', safe(c.ymin), '1'),
+        scalar('v_max', 'Maximum v/U on the horizontal centre-line', safe(vmax), '1'), scalar('v_min', 'Minimum v/U on the horizontal centre-line', safe(vmin), '1'),
+        scalar('u_ret', 'Peak return-flow speed', safe(-c.umin) * v.U_l, 'm/s'), scalar('t_visc', 'Viscous time L²/ν', v.L ** 2 / nu, 's'),
+        scalar('Re_cell', 'Cell Reynolds number', cellRe, '1'), scalar('steps', 'Time steps taken', c.steps, '1'), scalar('res', 'Residual of the streamfunction equation over peak vorticity', safe(c.res), '1'),
+      ],
+      series: [
+        line('u-centre', 'Horizontal velocity on the vertical centre-line', 'u/U', '–', c.uc.map(safe), [{ label: 'This solution', data: c.y }], 'y/L', '–', { overlay: near100 ? [{ label: 'Ghia, Ghia & Shin (1982), Re = 100', x: GHIA_U100, y: GHIA_Y, kind: 'scatter' }] : [] }),
+        line('v-centre', 'Vertical velocity on the horizontal centre-line', 'x/L', '–', xs, [{ label: 'v/U', data: c.vc.map(safe) }], 'v/U', '–'),
+      ],
+      fields: [
+        field('psi', 'Streamfunction ψ/(U L)', c.P, [0, 1, 0, 1], 'x/L', 'y/L', '–', { vectors: { u: c.U, v: c.V } }),
+        field('speed', 'Speed |u|/U', c.Sp, [0, 1, 0, 1], 'x/L', 'y/L', '–', { vectors: { u: c.U, v: c.V } }),
+      ],
+      checks: [
+        check('Mass conservation across the vertical centre-line', safe(c.flux), 2e-3, '∫u dy = 0: no net flow across any section of a closed cavity'),
+        check('Circulation theorem', a.steady ? safe(c.circ + c.lidInt) / c.lidInt : 0, 0.08, '∬ω dA = −∫U dx along the lid; first-order wall vorticity limits the accuracy'),
+        check('Streamfunction equation residual', a.steady ? safe(c.res) : 0, 1e-2, '∇²ψ + ω = 0 at the reported state'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const base = { steady: true, central: true, thom: true, uniform: true };
+    const c = cavitySolve(100, 41, base), st = cavitySolve(0.01, 21, base);
+    return [
+      bench('Minimum centre-line velocity at Re = 100 vs published benchmark', c.umin, -0.2109, 'Ghia, Ghia & Shin (1982), 129 × 129 multigrid solution', 0.03),
+      bench('Primary-vortex streamfunction at Re = 100 vs published benchmark', c.pmin, -0.1034, 'Ghia, Ghia & Shin (1982)', 0.03),
+      bench('Left–right symmetry of creeping flow', st.xv, 0.5, 'Stokes flow is reversible, so the vortex lies on the vertical centre-line', 1e-9),
+      bench('Net flow across the centre-line', c.flux + 1, 1, 'Continuity in a closed cavity', 2e-3),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(200, 70, 240, 240, 'd-liquid', 0)} ${S.path('M200 70 L200 310 L440 310 L440 70', 'd-ground')}
+      ${S.line(190, 70, 450, 70, 'd-pipe')} ${S.arrow(250, 52, 390, 52)} ${S.text(320, 40, `lid, U = ${lab(v.U_l, 'm/s')}`)}
+      ${S.path('M320 120 Q410 130 400 200 Q390 270 320 265 Q250 260 245 195 Q240 125 320 120', 'd-line')} ${S.arrow(330, 120, 350, 122)}
+      ${S.path('M410 290 Q425 285 428 270', 'd-line')} ${S.path('M228 292 Q215 286 212 274', 'd-line')}
+      ${S.text(320, 198, 'primary vortex')} ${S.dim(200, 335, 440, 335, `L = ${lab(v.L, 'm')}`)}
+      ${S.text(540, 190, `Re = ${lab(v.Re)}`)} ${S.text(540, 212, `${Math.round(v.n_g)} × ${Math.round(v.n_g)} grid`, 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the velocity field in a lid-driven cavity at a known Reynolds number and compare centre-line profiles with the computation.',
+    apparatus: ['Transparent square cavity with a large spanwise aspect ratio (at least 3:1) to approximate two-dimensional flow at mid-span', 'Lid formed by a belt or rotating cylinder of large radius driven at constant speed', 'Working fluid of known viscosity (water–glycerol mixture) seeded with tracer particles', 'Temperature control to hold viscosity constant'],
+    instruments: [{ name: 'Planar particle-image velocimetry system', measures: 'Two-component velocity field in the mid-plane', range: '0–0.5 m/s', resolution: '±1 % of lid speed' }, { name: 'Belt-speed encoder', measures: 'Lid velocity', range: '0–1 m/s', resolution: '±0.2 %' }, { name: 'Viscometer and thermometer', measures: 'Fluid viscosity', range: '1–1000 mPa·s', resolution: '±1 %' }],
+    procedure: ['Set the belt speed for the target Reynolds number and wait at least one viscous time L²/ν.', 'Acquire several hundred image pairs in the mid-plane and average.', 'Extract u along the vertical centre-line and v along the horizontal centre-line.', 'Locate the vortex centre and compare with the computed position.', 'Repeat at several Reynolds numbers.'],
+    controls: ['Measurements at two spanwise planes to quantify end-wall effects', 'Reversal of belt direction to check symmetry of the apparatus'],
+    signatures: ['A single primary vortex displaced toward the downstream upper corner as Reynolds number rises', 'Corner eddies at the bottom', 'Centre-line minimum of u near −0.21 U at Re = 100'],
+    safety: ['Guard moving belts and pulleys', 'Laser safety controls for particle-image velocimetry', 'Glycerol spills are slippery'],
+  },
+  falsify: ['Measured mid-plane centre-line velocities in a cavity of large span that differ from the converged two-dimensional solution by more than the measurement uncertainty at Reynolds numbers below a few hundred.', 'A net flow across the cavity centre-line.'],
+  alternatives: [{ name: 'Primitive-variable (pressure–velocity) solvers', text: 'Projection or SIMPLE-type methods extend to three dimensions, where the streamfunction formulation does not.' }, { name: 'Lattice-Boltzmann methods', text: 'Recover the same solution from a kinetic model and parallelise readily.' }, { name: 'Three-dimensional cavity', text: 'End walls generate spanwise flow and Taylor–Görtler-like vortices; the two-dimensional solution becomes unstable near Re ≈ 800–1000 in practice.' }],
+  hazards: [{ hazard: 'Misuse of an under-resolved solution', cause: 'Coarse grid or high cell Reynolds number', mitigation: 'Grid-refinement study; compare with benchmark data' }],
+  standards: ['ASME V&V 20 (verification and validation in computational fluid dynamics and heat transfer)', 'AIAA G-077 (guide for the verification and validation of computational fluid dynamics simulations)', 'ERCOFTAC Best Practice Guidelines for industrial CFD'],
+  limits: 'Two-dimensional, laminar, incompressible, Newtonian flow in a square cavity at Reynolds numbers from 10 to 400 on grids up to 81 × 81. Higher Reynolds numbers need finer grids and longer integration than is practical here.',
+  numerics: { method: 'Explicit pseudo-time marching of the vorticity equation with successive over-relaxation of the streamfunction equation', order: 2, stability: 'Time step limited by the diffusive and advective limits of the forward-time central-space scheme', resolution: 'n_g' },
+  inverse: { series: 'u-centre', curve: 0, fit: ['Re'] },
+  extensions: ['Higher Reynolds numbers with a multigrid Poisson solver', 'Rectangular and deep cavities with a sequence of counter-rotating eddies', 'Heat transfer with a heated lid (mixed convection)', 'Grid-convergence study with Richardson extrapolation'],
+};
+
+// ------------------------------------------------------------------ viscous Burgers equation
+function burgersRun({ n, L, nu, tEnd, u0, periodic, uL, uR, flux, conservative, frames = 60, maxSteps = 20000 }) {
+  const m = periodic ? n - 1 : n, dx = L / (n - 1), x = N.linspace(0, L, n);
+  let u = new Float64Array(m); for (let i = 0; i < m; i++) u[i] = u0(x[i]);
+  const snaps = [], times = [], out = () => { const r = Array.from(u); if (periodic) r.push(u[0]); return r; };
+  let t = 0, steps = 0, umax = 0; for (let i = 0; i < m; i++) umax = Math.max(umax, Math.abs(u[i]));
+  const dt0 = 0.4 * Math.min(dx / Math.max(umax, 1e-30), nu > 0 ? dx * dx / (2 * nu) : Infinity), nt = Math.min(Math.max(1, Math.ceil(tEnd / dt0)), maxSteps), dt = Math.min(tEnd / nt, dt0);
+  const every = Math.max(1, Math.floor(nt / frames)), gmax = [], tg = [];
+  const F = (a, b) => (flux === 'godunov' ? Math.max(0.5 * Math.max(a, 0) ** 2, 0.5 * Math.min(b, 0) ** 2) : 0.25 * (a * a + b * b) - 0.5 * dx / dt * (b - a) * 0.5);
+  const grad = () => { let gm = 0; for (let i = 0; i < m - 1; i++) gm = Math.max(gm, Math.abs(u[i + 1] - u[i]) / dx); return gm; };
+  for (let k = 0; k <= nt; k++) {
+    if (k % every === 0 || k === nt) { snaps.push(out()); times.push(t); gmax.push(grad()); tg.push(t); }
+    if (k === nt) break;
+    const un = new Float64Array(m);
+    for (let i = 0; i < m; i++) {
+      if (!periodic && (i === 0 || i === m - 1)) { un[i] = i === 0 ? uL : uR; continue; }
+      const im = periodic ? (i - 1 + m) % m : i - 1, ip = periodic ? (i + 1) % m : i + 1;
+      const adv = conservative ? (F(u[i], u[ip]) - F(u[im], u[i])) / dx : (u[i] > 0 ? u[i] * (u[i] - u[im]) : u[i] * (u[ip] - u[i])) / dx;
+      un[i] = u[i] - dt * adv + dt * nu * (u[ip] - 2 * u[i] + u[im]) / (dx * dx);
+    }
+    u = un; t += dt; steps++;
+  }
+  return { x, snaps, times, final: out(), dx, dt, steps, gmax, tg, truncated: nt * dt < tEnd * (1 - 1e-9) };
+}
+const burgersWave = (x, t, uL, uR, x0, nu) => 0.5 * (uL + uR) - 0.5 * (uL - uR) * Math.tanh((uL - uR) * (x - x0 - 0.5 * (uL + uR) * t) / (4 * nu));
+
+const burgers = {
+  id: 'burgers-shock',
+  title: 'Viscous Burgers equation: steepening and shock formation',
+  module: [1, 2], klass: 'I', domains: ['cfd'],
+  keywords: ['burgers equation', 'burgers', 'shock formation', 'wave steepening', 'shock wave', 'nonlinear advection', 'travelling wave', 'traveling wave', 'viscous shock', 'lax-friedrichs', 'godunov', 'upwind', 'conservation law', 'shock'],
+  summary: 'Nonlinear steepening of a wave into a shock under the viscous Burgers equation, solved with a conservative finite-volume scheme and compared with the exact travelling-wave solution.',
+  background: [
+    'The Burgers equation is the simplest model that combines nonlinear advection with diffusion. Each part of a wave travels at its own local speed, so faster fluid overtakes slower fluid and compressive parts of the profile steepen. Without viscosity the profile would become multivalued at a finite breaking time; with viscosity the steepening is arrested when the gradient is large enough for diffusion to balance advection, leaving a thin shock layer.',
+    'The steady shock structure is an exact hyperbolic-tangent profile whose thickness is proportional to viscosity divided by the velocity jump, and which moves at the mean of the velocities on either side — the Rankine–Hugoniot speed. A numerical scheme reproduces that speed only if it is written in conservation form, which is why the equation is used to test shock-capturing methods.',
+  ],
+  phenomena: ['Nonlinear wave steepening', 'Shock formation', 'Balance of advection and diffusion in a shock layer', 'Viscous decay of energy'],
+  laws: ['momentum', 'mass'],
+  refs: ['Burgers, J. M. (1948). A mathematical model illustrating the theory of turbulence. Advances in Applied Mechanics 1, 171–199.', 'Hopf, E. (1950). The partial differential equation u_t + u u_x = μ u_xx. Communications on Pure and Applied Mathematics 3, 201–230.', 'Cole, J. D. (1951). On a quasi-linear parabolic equation occurring in aerodynamics. Quarterly of Applied Mathematics 9, 225–236.', 'Whitham, G. B. (1974). Linear and Nonlinear Waves. Wiley.', 'LeVeque, R. J. (2002). Finite Volume Methods for Hyperbolic Problems. Cambridge University Press.', 'Lax, P. D. (1954). Weak solutions of nonlinear hyperbolic equations and their numerical computation. Communications on Pure and Applied Mathematics 7, 159–193.'],
+  inputs: [
+    inp('L', 'Domain length', 'm', 1, { min: 0.01, max: 1000, kind: 'geometry', aliases: ['domain length', 'length', 'wavelength'] }),
+    inp('U_0', 'Velocity amplitude', 'm/s', 1, { min: 0.001, max: 1000, aliases: ['amplitude', 'velocity amplitude', 'velocity'] }),
+    inp('Re', 'Reynolds number U₀L/ν', '1', 400, { min: 20, max: 5000, aliases: ['reynolds number', 'reynolds'] }),
+    inp('t_s', 'End time in units of L/U₀', '1', 0.6, { min: 0.05, max: 2, aliases: ['end time', 'duration'] }),
+    inp('n_x', 'Number of grid points', '1', 401, { min: 51, max: 1601, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('sine', 'The initial condition is one period of a sine wave on a periodic domain.', { why: 'Shows steepening and shock formation from smooth data', alt: 'The initial condition is the exact travelling-wave shock between U₀ and zero, to test propagation speed and thickness.' }),
+    asm('viscous', 'Physical viscosity is present.', { why: 'Sets the shock thickness', alt: 'The inviscid equation is solved; only the numerical dissipation of the scheme smooths the shock.' }),
+    asm('godunov', 'The interface flux is the Godunov (exact Riemann) flux.', { why: 'Least dissipative first-order monotone flux', alt: 'The Lax–Friedrichs flux is used: simpler, but considerably more diffusive.' }),
+    asm('conservative', 'The scheme is written in conservation form.', { why: 'Required for the correct shock speed (Lax–Wendroff theorem)', alt: 'The non-conservative form u ∂u/∂x is differenced directly; shocks then travel at the wrong speed when under-resolved.' }),
+  ],
+  symbols: { u: ['Velocity', 'm/s'], x: ['Position', 'm'], t: ['Time', 's'], nu: ['Kinematic viscosity', 'm^2/s'], t_b: ['Breaking time', 's'], delta: ['Shock thickness', 'm'], u_L: ['Velocity ahead of... left state', 'm/s'], u_R: ['Right state', 'm/s'], s_w: ['Shock speed', 'm/s'], x_s: ['Initial shock position', 'm'] },
+  equations: a => [
+    a.conservative
+      ? eq('pde', 'Burgers equation, conservation form', 'pd(u,t) + pd(u^2/2,x)', a.viscous ? 'nu*pd2(u,x)' : '0*nu*pd2(u,x)', { kind: 'law', origin: 'One-dimensional momentum balance without pressure', needs: ['conservative'] })
+      : eq('pde', 'Burgers equation, advective form', 'pd(u,t) + u*pd(u,x)', a.viscous ? 'nu*pd2(u,x)' : '0*nu*pd2(u,x)', { kind: 'law', origin: 'One-dimensional momentum balance without pressure' }),
+    eq('re', 'Reynolds number', 'Re', 'U_0*L/nu', { kind: 'definition' }),
+    ...(a.sine ? [eq('tb', 'Breaking time of a sine wave', 't_b', 'L/(2*pi*U_0)', { kind: 'derived', origin: 'Method of characteristics: first crossing where −∂u₀/∂x is largest', needs: ['sine'] })] : [eq('tw', 'Travelling-wave solution', 'u', '(u_L + u_R)/2 - (u_L - u_R)/2*tanh((u_L - u_R)*(x - x_s - s_w*t)/(4*nu))', { kind: 'derived', origin: 'Exact steady solution in the frame of the shock' })]),
+    eq('rh', 'Shock speed', 's_w', '(u_L + u_R)/2', { kind: 'law', origin: 'Rankine–Hugoniot jump condition for the flux u²/2' }),
+    eq('thick', 'Shock thickness', 'delta', '4*nu/(u_L - u_R)', { kind: 'derived', origin: 'Width scale of the hyperbolic-tangent profile' }),
+  ],
+  derivation: a => [
+    { text: 'Without viscosity each value of u is carried unchanged along a characteristic moving at speed u, so the profile at time t is the initial profile sheared in x.', tex: 'u(x,t) = u_0(\\xi),\\qquad x = \\xi + u_0(\\xi)\\,t' },
+    { text: 'Characteristics first cross, and the gradient becomes infinite, at the breaking time set by the steepest negative initial slope.', tex: 't_b = \\frac{-1}{\\min_\\xi u_0\'(\\xi)} = \\frac{L}{2\\pi U_0}\\ \\text{for a sine wave}' },
+    { text: 'Seek a steady profile in a frame moving at speed s between states u_L > u_R. Integrating the equation once gives a first-order equation whose solution is a hyperbolic tangent.', tex: 'u = \\frac{u_L+u_R}{2} - \\frac{u_L-u_R}{2}\\tanh\\!\\left[\\frac{(u_L-u_R)(x-st)}{4\\nu}\\right]' },
+    { text: 'The integration constant fixes the speed: it is the mean of the two states, as also follows from conservation across a discontinuity.', tex: 's = \\frac{[u^2/2]}{[u]} = \\frac{u_L+u_R}{2}' },
+    { text: 'The finite-volume update changes each cell average by the difference of fluxes through its faces, so the total of u is conserved exactly.', tex: 'u_i^{n+1} = u_i^n - \\frac{\\Delta t}{\\Delta x}\\big(F_{i+1/2}-F_{i-1/2}\\big) + \\frac{\\nu\\,\\Delta t}{\\Delta x^2}\\big(u_{i+1}-2u_i+u_{i-1}\\big)' },
+  ],
+  solve(v, a) {
+    const n = Math.max(21, Math.round(v.n_x)), nu = a.viscous ? v.U_0 * v.L / v.Re : 0, nuPhys = v.U_0 * v.L / v.Re, tEnd = v.t_s * v.L / v.U_0;
+    const x0 = 0.25 * v.L, nuIC = nuPhys;
+    const run = burgersRun({ n, L: v.L, nu, tEnd, periodic: a.sine, uL: v.U_0, uR: 0, flux: a.godunov ? 'godunov' : 'lf', conservative: a.conservative,
+      u0: a.sine ? x => v.U_0 * Math.sin(2 * Math.PI * x / v.L) : x => burgersWave(x, 0, v.U_0, 0, x0, nuIC) });
+    const tReal = run.times.at(-1), uf = run.final, x = run.x, dx = run.dx;
+    const tb = v.L / (2 * Math.PI * v.U_0), delta = a.viscous ? 4 * nuPhys / (a.sine ? 2 * v.U_0 : v.U_0) : 0;
+    const integral = arr => N.trapz(x, arr), I0 = integral(run.snaps[0]), I1 = integral(uf);
+    const en = arr => 0.5 * N.trapz(x, arr.map(q => q * q)), E0 = en(run.snaps[0]), E1 = en(uf);
+    // front position: where the profile crosses the mean of the two states (travelling wave) or zero in mid-domain (sine)
+    const level = a.sine ? 0 : 0.5 * v.U_0;
+    let xf = NaN;
+    for (let i = a.sine ? Math.floor(n / 4) : 1; i < (a.sine ? Math.ceil(3 * n / 4) : n); i++) if ((uf[i - 1] - level) * (uf[i] - level) <= 0 && uf[i - 1] > uf[i]) { xf = x[i - 1] + (level - uf[i - 1]) / (uf[i] - uf[i - 1]) * dx; break; }
+    const xExact = a.sine ? 0.5 * v.L : x0 + 0.5 * v.U_0 * tReal;
+    const exact = a.sine ? null : x.map(q => burgersWave(q, tReal, v.U_0, 0, x0, Math.max(nu, 1e-12 * v.U_0 * v.L)));
+    const gEnd = run.gmax.at(-1), thickNum = (a.sine ? 2 * v.U_0 : v.U_0) / Math.max(gEnd, 1e-300) * 2;
+    const warnings = [];
+    if (run.truncated) warnings.push(`The run was truncated at ${lab(tReal, 's')} after ${run.steps} time steps; use fewer grid points or a higher Reynolds number to reach the requested time.`);
+    if (a.viscous && delta < 3 * dx) warnings.push(`The physical shock thickness (${lab(delta, 'm')}) is less than three grid cells (${lab(dx, 'm')}): the computed thickness is set by numerical, not physical, viscosity.`);
+    if (!a.conservative) warnings.push('The non-conservative form does not conserve ∫u dx across an under-resolved shock; compare the reported front position with the exact value.');
+    if (!a.sine && xExact > 0.9 * v.L) warnings.push('The shock has reached the outflow boundary; reduce the end time.');
+    return {
+      scalars: [
+        scalar('nu', 'Kinematic viscosity', nuPhys, 'm^2/s', { note: a.viscous ? '' : 'not applied: inviscid run' }), scalar('t_b', 'Breaking time of the sine wave', tb, 's'),
+        scalar('t_end', 'Simulated time', tReal, 's'), scalar('delta', 'Physical shock thickness 4ν/Δu', delta, 'm'), scalar('delta_num', 'Computed shock thickness 2Δu/|∂u/∂x|max', thickNum, 'm'),
+        scalar('g_max', 'Steepest gradient at the end time', gEnd, '1/s'), scalar('x_f', 'Front position', Number.isFinite(xf) ? xf : xExact, 'm', { text: Number.isFinite(xf) ? undefined : 'No front detected' }),
+        scalar('x_f_exact', 'Exact front position', xExact, 'm'), scalar('s_w', 'Shock speed (Rankine–Hugoniot)', a.sine ? 0 : 0.5 * v.U_0, 'm/s'),
+        scalar('E_ratio', 'Kinetic energy remaining', E1 / E0, '1', { show: '%' }), scalar('dx', 'Grid spacing', dx, 'm'), scalar('steps', 'Time steps', run.steps, '1'),
+      ],
+      series: [
+        line('profiles', 'Velocity profiles', 'Position', 'm', x, [...[0, 0.25, 0.5, 1].map(f => { const k = Math.round(f * (run.snaps.length - 1)); return { label: `t = ${lab(run.times[k], 's')}`, data: run.snaps[k] }; }), ...(exact ? [{ label: 'Exact travelling wave at the end time', data: exact, dash: true }] : [])], 'Velocity', 'm/s'),
+        line('gradient', 'Steepest gradient against time', 'Time', 's', run.tg, [{ label: 'max |∂u/∂x|', data: run.gmax }, ...(a.sine ? [{ label: 'Inviscid theory before breaking', data: run.tg.map(t => (t < 0.98 * tb ? 2 * Math.PI * v.U_0 / v.L / (1 - t / tb) : NaN)), dash: true }] : [])], 'Gradient', '1/s', { logy: true }),
+      ],
+      anims: [anim('u-anim', 'Velocity profile', 'Position', 'm', x, run.snaps, run.times, 'Velocity', 'm/s')],
+      checks: [
+        check('Conservation of ∫u dx', a.conservative && a.sine ? (I1 - I0) / (v.U_0 * v.L) : 0, 1e-10, 'Exact for a conservative scheme on a periodic domain'),
+        check('Kinetic energy does not increase', Math.max(E1 / E0 - 1, 0), a.sine ? 1e-9 : 1, 'Viscosity and upwinding only dissipate energy on a periodic domain'),
+        check('Maximum principle', Math.max(N.maxOf(uf) - v.U_0, -v.U_0 - N.minOf(uf), 0) / v.U_0, 1e-9, 'A monotone scheme creates no new extrema'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const U = v.U_0, L = v.L, nu = U * L / 100, x0 = 0.25 * L, tEnd = 0.6 * L / U;
+    const fine = burgersRun({ n: 401, L, nu, tEnd, periodic: false, uL: U, uR: 0, flux: 'godunov', conservative: true, u0: x => burgersWave(x, 0, U, 0, x0, nu), maxSteps: 40000 });
+    const i = fine.x.findIndex(q => q >= x0 + 0.5 * U * tEnd + 2 * nu / U), tr = fine.times.at(-1);
+    let xf = NaN; for (let k = 1; k < 401; k++) if ((fine.final[k - 1] - 0.5 * U) * (fine.final[k] - 0.5 * U) <= 0) { xf = fine.x[k - 1] + (0.5 * U - fine.final[k - 1]) / (fine.final[k] - fine.final[k - 1]) * fine.dx; break; }
+    const inv = burgersRun({ n: 201, L, nu: 0, tEnd: 0.5 * L / U, periodic: false, uL: U, uR: 0, flux: 'godunov', conservative: true, u0: x => (x < x0 ? U : 0) });
+    let xi = NaN; for (let k = 1; k < 201; k++) if ((inv.final[k - 1] - 0.5 * U) * (inv.final[k] - 0.5 * U) <= 0) { xi = inv.x[k - 1] + (0.5 * U - inv.final[k - 1]) / (inv.final[k] - inv.final[k - 1]) * inv.dx; break; }
+    return [
+      bench('Viscous shock position vs exact travelling wave', xf / L, (x0 + 0.5 * U * tr) / L, 'x_s = x₀ + ½(u_L + u_R) t', 5e-3),
+      bench('Velocity in the shock layer vs exact tanh profile', fine.final[i] / U, burgersWave(fine.x[i], tr, U, 0, x0, nu) / U, 'Exact travelling-wave solution, Re = 100; first-order scheme, so numerical diffusion widens the layer by several per cent', 0.1),
+      bench('Inviscid shock speed vs Rankine–Hugoniot', (xi - x0) / (0.5 * L / U) / U, 0.5, 's = ½(u_L + u_R)', 2e-2),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.line(60, 250, 600, 250, 'd-line')} ${S.line(60, 60, 60, 300, 'd-line')} ${S.text(46, 70, 'u')} ${S.text(600, 270, 'x')}
+      ${a.sine ? S.path('M60 180 Q195 20 330 180 Q465 340 600 180', 'd-dim') + S.path('M60 180 Q260 60 322 110 L338 250 Q400 300 600 180', 'd-line d-hazard') + S.text(330, 96, 'shock forms at mid-domain') : S.path('M60 110 L200 110 Q230 110 240 180 Q250 250 280 250 L600 250', 'd-dim') + S.path('M60 110 L380 110 Q410 110 420 180 Q430 250 460 250 L600 250', 'd-line d-hazard') + S.arrow(260, 150, 400, 150) + S.text(330, 140, 's = U₀/2')}
+      ${S.text(330, 330, a.sine ? `breaking time L/(2πU₀) = ${lab(v.L / (2 * Math.PI * v.U_0), 's')}` : `thickness 4ν/U₀ = ${lab(4 * v.L / v.Re, 'm')}`)}
+      ${S.text(330, 36, `Re = ${lab(v.Re)},  ${a.godunov ? 'Godunov' : 'Lax–Friedrichs'} flux`)}
+    `);
+  },
+  experiment: {
+    objective: 'Observe nonlinear steepening and shock formation in a system governed to good approximation by the Burgers equation, and measure the shock speed and thickness.',
+    apparatus: ['Long tube filled with air and driven at one end by a loudspeaker or piston at high amplitude (finite-amplitude acoustics obey a Burgers equation in the retarded frame)', 'Alternatively, a shallow-water channel with a wave-maker for an analogous steepening bore', 'Anechoic termination to suppress reflections'],
+    instruments: [{ name: 'Flush-mounted microphones or dynamic pressure transducers at several stations', measures: 'Waveform against distance', range: '100–170 dB re 20 µPa', resolution: '≥ 100 kHz bandwidth' }, { name: 'Digital oscilloscope', measures: 'Rise time of the pressure front', range: '—', resolution: '≥ 1 MS/s' }, { name: 'Thermometer and barometer', measures: 'Ambient state for sound speed and diffusivity', range: '—', resolution: '±0.2 K, ±50 Pa' }],
+    procedure: ['Drive the tube with a sinusoidal source at a fixed frequency and several amplitudes.', 'Record the waveform at each station.', 'Measure the harmonic content and the steepest slope of each waveform; identify the shock-formation distance.', 'Compare the formation distance with the inviscid prediction and the rise time with the viscous thickness.'],
+    controls: ['Low-amplitude run to confirm linear propagation without distortion', 'Check wall-boundary-layer attenuation separately'],
+    signatures: ['Progressive distortion of a sine wave into a sawtooth', 'Shock-formation distance inversely proportional to source amplitude', 'Growth of harmonics followed by amplitude-independent decay (acoustic saturation)'],
+    safety: ['Hearing protection: levels above 140 dB', 'Secure the driver and tube against vibration'],
+  },
+  falsify: ['A conservative scheme converging, under grid refinement, to a shock speed different from the mean of the two states.', 'Finite-amplitude plane waves in a thermoviscous gas failing to steepen at the predicted rate over distances short compared with the absorption length.'],
+  alternatives: [{ name: 'Cole–Hopf transformation', text: 'Maps the viscous Burgers equation to the linear heat equation, giving the exact solution for any initial condition as a quadrature.' }, { name: 'High-resolution schemes (MUSCL, WENO)', text: 'Second- or higher-order reconstruction with limiters gives thinner numerical shocks than the first-order fluxes used here.' }, { name: 'Full Euler or Navier–Stokes equations', text: 'Burgers’ equation has no pressure or energy equation; real shocks also involve density and temperature jumps.' }],
+  hazards: [{ hazard: 'Misinterpreting numerical viscosity as physical', cause: 'Under-resolved shock layer', mitigation: 'Check that the physical thickness spans several cells or report the numerical thickness' }],
+  standards: ['ASME V&V 20 (verification and validation in computational fluid dynamics and heat transfer)', 'AIAA G-077 (guide for the verification and validation of computational fluid dynamics simulations)'],
+  limits: 'One space dimension, constant viscosity, first-order accurate fluxes. The equation is a model: it omits pressure, density variation and energy.',
+  numerics: { method: 'Explicit finite-volume scheme with Godunov or Lax–Friedrichs flux and central diffusion', order: 1, stability: 'Time step 0.4 of the smaller of the advective and diffusive limits', resolution: 'n_x' },
+  inverse: { series: 'profiles', curve: 3, fit: ['Re'] },
+  extensions: ['Exact Cole–Hopf solution for arbitrary initial data', 'Second-order MUSCL reconstruction with a limiter', 'Random initial data and Burgers turbulence', 'Two-dimensional Burgers equation'],
+};
+
+// ------------------------------------------------------------------ plane Poiseuille–Couette flow
+/** Exact start-up from rest between y = 0 (fixed) and y = h (moving at U) with constant pressure gradient G = −dp/dx. */
+function channelExact(y, t, h, U, G, mu, nuK) {
+  let u = U * y / h + G / (2 * mu) * y * (h - y);
+  for (let n = 1; n <= 200; n++) {
+    const e = Math.exp(-n * n * Math.PI * Math.PI * nuK * t / (h * h)); if (e < 1e-16) break;
+    const sn = Math.sin(n * Math.PI * y / h);
+    u += 2 * U / (n * Math.PI) * (n % 2 ? -1 : 1) * sn * e;
+    if (n % 2) u -= 4 * G * h * h / (mu * Math.pow(n * Math.PI, 3)) * sn * e;
+  }
+  return u;
+}
+
+const channel = {
+  id: 'channel-poiseuille-couette',
+  title: 'Plane Poiseuille–Couette flow and its start-up',
+  module: 2, klass: 'I', domains: ['cfd'],
+  keywords: ['poiseuille', 'couette', 'channel flow', 'plane channel', 'parallel plates', 'pressure-driven flow', 'shear-driven flow', 'start-up flow', 'laminar flow', 'velocity profile', 'lubrication', 'wall shear'],
+  summary: 'Laminar flow between parallel plates driven by a pressure gradient and a moving wall: the exact steady profile and a numerical solution of the transient start-up.',
+  background: [
+    'Fully developed laminar flow between two parallel plates is one of the few exact solutions of the Navier–Stokes equations. A pressure gradient alone gives the parabolic Poiseuille profile; a moving wall alone gives the linear Couette profile; because the governing equation is linear the two superpose. The combination describes lubricating films, coating flows and the leakage through narrow clearances.',
+    'When the driving is applied suddenly, momentum diffuses in from the walls and the profile approaches its steady form on the viscous time scale h²/ν. The transient is governed by the one-dimensional diffusion equation with a uniform source and has an exact Fourier-series solution, which makes the problem a convenient verification case for diffusion solvers.',
+  ],
+  phenomena: ['Viscous diffusion of momentum', 'Pressure-driven and shear-driven flow', 'Approach to fully developed flow', 'Oscillatory (Womersley-type) response'],
+  laws: ['momentum', 'mass'],
+  refs: ['Batchelor, G. K. (1967). An Introduction to Fluid Dynamics. Cambridge University Press.', 'White, F. M. (2006). Viscous Fluid Flow, 3rd ed., McGraw-Hill.', 'Schlichting, H. & Gersten, K. (2017). Boundary-Layer Theory, 9th ed., Springer.', 'Couette, M. (1890). Études sur le frottement des liquides. Annales de Chimie et de Physique 21, 433–510.'],
+  inputs: [
+    inp('h', 'Gap between the plates', 'mm', 2, { min: 0.05, max: 100, kind: 'geometry', aliases: ['gap', 'channel height', 'plate spacing', 'clearance'] }),
+    inp('U_w', 'Speed of the upper wall', 'm/s', 0.5, { min: 0, max: 10, aliases: ['wall speed', 'wall velocity', 'plate speed'] }),
+    inp('G', 'Pressure gradient −dp/dx (positive drives flow in +x)', 'Pa/m', 2000, { min: -1e5, max: 1e5, aliases: ['pressure gradient'] }),
+    inp('mu', 'Dynamic viscosity', 'cP', 1, { min: 0.01, max: 1e4, kind: 'fluid', aliases: ['viscosity'] }),
+    inp('rho', 'Density', 'kg/m^3', 1000, { min: 1, max: 2000, kind: 'fluid', aliases: ['density'] }),
+    inp('t_end', 'Elapsed time since start-up', 's', 1, { min: 1e-3, max: 1e3, aliases: ['time', 'elapsed time', 'after'] }),
+    inp('f_o', 'Forcing frequency (used when the pressure gradient oscillates)', 'Hz', 1, { min: 0.01, max: 100, aliases: ['frequency'] }),
+    inp('n_y', 'Number of grid points across the gap', '1', 81, { min: 21, max: 401, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('pressure', 'A pressure gradient drives the flow.', { why: 'Poiseuille component', alt: 'There is no pressure gradient: pure Couette flow.' }),
+    asm('moving', 'The upper wall moves in its own plane.', { why: 'Couette component', alt: 'Both walls are stationary: pure Poiseuille flow.' }),
+    asm('from_rest', 'The fluid starts from rest.', { why: 'Impulsive start of both wall and pressure gradient', alt: 'The fluid starts from the steady Couette profile and only the pressure gradient is switched on.' }),
+    asm('steady_forcing', 'The pressure gradient is constant in time.', { why: 'Leads to a steady state', alt: 'The pressure gradient oscillates as G cos(2π f t).' }),
+  ],
+  symbols: { u: ['Velocity', 'm/s'], y: ['Distance from the lower wall', 'm'], t: ['Time', 's'], nu: ['Kinematic viscosity', 'm^2/s'], u_s: ['Steady velocity profile', 'm/s'], q: ['Flow rate per unit width', 'm^2/s'], tau_w: ['Wall shear stress', 'Pa'], t_v: ['Viscous time', 's'], Re: ['Reynolds number', '1'], u_m: ['Mean velocity', 'm/s'] },
+  equations: a => {
+    const src = a.pressure ? (a.steady_forcing ? ' + G' : ' + G*cos(2*pi*f_o*t)') : '';
+    const couette = a.moving ? 'U_w*y/h' : '', pois = a.pressure ? 'G*y*(h - y)/(2*mu)' : '';
+    return [
+      eq('mom', 'Momentum equation', 'rho*pd(u,t)', 'mu*pd2(u,y)' + src, { kind: 'law', origin: 'Navier–Stokes equations for unidirectional flow', needs: ['pressure', 'steady_forcing'].filter(q => a[q]) }),
+      eq('bc', 'Upper-wall condition', 'u', a.moving ? 'U_w' : '0*U_w', { kind: 'boundary', origin: 'No slip at y = h' }),
+      ...(a.steady_forcing ? [eq('steady', 'Steady profile', 'u_s', [couette, pois].filter(Boolean).join(' + ') || '0*U_w', { kind: 'derived', origin: 'Exact solution of the steady momentum equation' }),
+        eq('q', 'Flow rate per unit width', 'q', [a.moving ? 'U_w*h/2' : '', a.pressure ? 'G*h^3/(12*mu)' : ''].filter(Boolean).join(' + ') || '0*U_w*h', { kind: 'derived', origin: 'Integral of the steady profile' })] : []),
+      eq('tw', 'Wall shear stress', 'tau_w', 'mu*pd(u,y)', { kind: 'law', origin: 'Newton’s law of viscosity' }),
+      eq('tv', 'Viscous time', 't_v', 'h^2/nu', { kind: 'definition' }),
+      eq('nu', 'Kinematic viscosity', 'nu', 'mu/rho', { kind: 'definition' }),
+    ];
+  },
+  derivation: a => [
+    { text: 'For fully developed flow in x between infinite plates, the velocity depends only on y and t, continuity is satisfied identically and the nonlinear terms vanish. The x-momentum equation reduces to a diffusion equation with a source.', tex: '\\rho\\,\\frac{\\partial u}{\\partial t} = \\mu\\,\\frac{\\partial^2 u}{\\partial y^2} - \\frac{\\mathrm{d}p}{\\mathrm{d}x}' },
+    { text: 'In steady state, integrating twice with no slip at both walls gives the superposition of a linear and a parabolic profile.', tex: 'u_s(y) = U\\,\\frac{y}{h} + \\frac{G}{2\\mu}\\,y\\,(h-y),\\qquad G = -\\frac{\\mathrm{d}p}{\\mathrm{d}x}' },
+    { text: 'Integrating the profile gives the flow rate per unit width; the pressure-driven part varies as the cube of the gap.', tex: 'q = \\frac{U h}{2} + \\frac{G h^3}{12\\mu}' },
+    { text: 'Starting from rest, the deviation from the steady profile satisfies the homogeneous diffusion equation and decays as a sine series.', tex: 'u = u_s + \\sum_{n=1}^{\\infty}\\left[\\frac{2U(-1)^n}{n\\pi} - \\frac{4Gh^2\\,[n\\ \\mathrm{odd}]}{\\mu\\,n^3\\pi^3}\\right]\\sin\\frac{n\\pi y}{h}\;e^{-n^2\\pi^2\\nu t/h^2}' },
+    { text: 'The slowest mode decays on the viscous time scale.', tex: 't_v = \\frac{h^2}{\\nu},\\qquad \\text{slowest mode} \\propto e^{-\\pi^2 t/t_v}' },
+  ],
+  solve(v, a) {
+    const ny = Math.max(11, Math.round(v.n_y)), nuK = v.mu / v.rho, U = a.moving ? v.U_w : 0, G = a.pressure ? v.G : 0, h = v.h, tv = h * h / nuK;
+    const om = 2 * Math.PI * v.f_o, nt = a.steady_forcing ? 400 : Math.round(N.clamp(40 * v.f_o * v.t_end, 400, 4000));
+    const sol = N.diffusion1D({ D: nuK, L: h, nx: ny, tEnd: v.t_end, nt, frames: 50, u0: a.from_rest ? 0 : y => U * y / h,
+      left: { type: 'dirichlet', value: 0 }, right: { type: 'dirichlet', value: U },
+      source: G ? (a.steady_forcing ? () => G / v.rho : (_, t) => G / v.rho * Math.cos(om * (t + 0.5 * v.t_end / nt))) : undefined });
+    const y = sol.x, uf = sol.final, steady = y.map(q => U * q / h + G / (2 * v.mu) * q * (h - q));
+    const scale = Math.max(Math.abs(U), Math.abs(G) * h * h / (8 * v.mu), 1e-30);
+    const dy = h / (ny - 1), q = N.trapz(y, uf), qS = U * h / 2 + G * h ** 3 / (12 * v.mu), um = q / h;
+    const tauB = v.mu * (-3 * uf[0] + 4 * uf[1] - uf[2]) / (2 * dy), tauT = v.mu * (3 * uf[ny - 1] - 4 * uf[ny - 2] + uf[ny - 3]) / (2 * dy);
+    const exactOK = a.from_rest && a.steady_forcing, exact = exactOK ? y.map(s => channelExact(s, v.t_end, h, U, G, v.mu, nuK)) : null;
+    const errEx = exact ? N.maxOf(exact.map((e, i) => Math.abs(e - uf[i]))) / scale : 0, dev = N.maxOf(steady.map((s, i) => Math.abs(s - uf[i]))) / scale;
+    const Re = v.rho * Math.abs(um) * 2 * h / v.mu, mid = (ny - 1) >> 1;
+    const warnings = [];
+    if (Re > 2000) warnings.push(`The Reynolds number based on twice the gap is ${lab(Re)}: plane channel flow is unlikely to remain laminar, and the laminar solution then under-predicts wall shear.`);
+    if (!a.steady_forcing) warnings.push(`With oscillating forcing the Womersley number h√(ω/ν)/2 is ${lab(h / 2 * Math.sqrt(om / nuK))}; above about 3 the core moves as a plug out of phase with the pressure gradient.`);
+    if (a.steady_forcing && dev > 0.01) warnings.push(`The flow has not yet reached steady state: the profile differs from the steady one by ${lab(dev * 100, '%')} of the velocity scale after ${lab(v.t_end / tv)} viscous times.`);
+    if (!a.pressure && !a.moving) warnings.push('Neither a pressure gradient nor a moving wall is present: the fluid remains at rest.');
+    return {
+      scalars: [
+        scalar('nu', 'Kinematic viscosity', nuK, 'm^2/s'), scalar('t_v', 'Viscous time h²/ν', tv, 's'), scalar('Fo', 'Elapsed time over viscous time', v.t_end / tv, '1'),
+        scalar('u_c', 'Velocity at mid-gap', uf[mid], 'm/s'), scalar('u_max', 'Largest velocity magnitude', N.maxOf(uf.map(Math.abs)), 'm/s'), scalar('u_m', 'Mean velocity', um, 'm/s'),
+        scalar('q', 'Flow rate per unit width', q, 'm^2/s'), scalar('q_s', 'Steady flow rate per unit width (exact)', qS, 'm^2/s'),
+        scalar('tau_b', 'Shear stress on the lower wall', tauB, 'Pa'), scalar('tau_t', 'Shear stress exerted by the fluid on the upper wall', -tauT, 'Pa'),
+        scalar('tau_s', 'Steady lower-wall shear stress (exact)', v.mu * U / h + G * h / 2, 'Pa'), scalar('Re', 'Reynolds number on twice the gap', Re, '1'),
+        scalar('dev', 'Departure from the steady profile', dev, '1', { show: '%' }), scalar('P_w', 'Power to drive the upper wall per unit area', -tauT * -U, 'W/m^2'),
+      ],
+      series: [
+        line('profiles', 'Velocity profiles during start-up', 'Velocity', 'm/s', uf, [{ label: `t = ${lab(v.t_end, 's')}`, data: y.map(s => s * 1000) }], 'Distance from lower wall', 'mm', { overlay: [...[0.1, 0.3].map(f => { const k = Math.max(1, Math.round(f * (sol.snaps.length - 1))); return { label: `t = ${lab(sol.times[k], 's')}`, x: sol.snaps[k], y: y.map(s => s * 1000) }; }), ...(a.steady_forcing ? [{ label: 'Exact steady profile', x: steady, y: y.map(s => s * 1000), dash: true }] : [])] }),
+        line('history', 'Mid-gap and mean velocity against time', 'Time', 's', sol.times, [{ label: 'Mid-gap', data: sol.snaps.map(s => s[mid]) }, { label: 'Mean', data: sol.snaps.map(s => N.trapz(y, s) / h), dash: true }], 'Velocity', 'm/s'),
+      ],
+      anims: [anim('u-anim', 'Velocity profile across the gap', 'Distance from lower wall', 'mm', y.map(s => s * 1000), sol.snaps, sol.times, 'Velocity', 'm/s')],
+      checks: [
+        check('Numerical profile against the exact transient series', errEx, 5e-3, 'Evaluated for a start from rest with constant forcing'),
+        check('No slip at both walls', (Math.abs(uf[0]) + Math.abs(uf[ny - 1] - U)) / scale, 1e-12, 'u(0) = 0 and u(h) = U'),
+        check('Force balance at steady state', a.steady_forcing && dev < 1e-4 ? (G * h + tauT - tauB) / Math.max(Math.abs(G * h), Math.abs(tauB), 1e-30) : 0, 5e-3, 'Pressure force per unit area equals the difference of the wall shear stresses'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const b = { pressure: true, moving: true, from_rest: true, steady_forcing: true }, nuK = v.mu / v.rho, tv = v.h ** 2 / nuK;
+    const long = this.solve({ ...v, t_end: 5 * tv }, b), early = this.solve({ ...v, t_end: 0.05 * tv }, b);
+    const uS = v.U_w / 2 + v.G * v.h ** 2 / (8 * v.mu), sc = Math.max(Math.abs(v.U_w), Math.abs(v.G) * v.h ** 2 / (8 * v.mu));
+    return [
+      bench('Steady mid-gap velocity', val(long, 'u_c') / sc + 2, uS / sc + 2, 'u(h/2) = U/2 + G h²/(8 μ)', 1e-4),
+      bench('Steady flow rate', val(long, 'q') / (sc * v.h) + 2, val(long, 'q_s') / (sc * v.h) + 2, 'q = U h/2 + G h³/(12 μ)', 2e-4),
+      bench('Mid-gap velocity at 0.05 viscous times vs exact series', val(early, 'u_c') / sc + 2, channelExact(v.h / 2, 0.05 * tv, v.h, v.U_w, v.G, v.mu, nuK) / sc + 2, 'Fourier-series solution of the start-up problem', 2e-3),
+      bench('Poiseuille mean-to-maximum velocity ratio', (v.h ** 3 / 12) / v.h / (v.h ** 2 / 8), 2 / 3, 'u_mean/u_max = 2/3 for a parabolic profile', 1e-12),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    const pts = N.linspace(0, 1, 9);
+    return svg(`
+      ${S.line(80, 90, 560, 90, 'd-pipe')} ${S.line(80, 270, 560, 270, 'd-pipe')} ${S.path('M80 274 L560 274', 'd-ground')}
+      ${a.moving ? S.arrow(260, 70, 400, 70) + S.text(330, 58, `U = ${lab(v.U_w, 'm/s')}`) : S.text(330, 70, 'stationary wall')}
+      ${S.line(200, 90, 200, 270, 'd-dim')}
+      ${pts.map(s => { const u = (a.moving ? s : 0) + (a.pressure ? 4 * s * (1 - s) * 0.8 : 0); return Math.abs(u) > 0.02 ? S.arrow(200, 270 - s * 180, 200 + u * 130, 270 - s * 180) : ''; }).join('')}
+      ${a.pressure ? S.arrow(90, 180, 150, 180, 'd-arrow d-hazard') + S.text(120, 168, '−dp/dx', 'd-text d-small') : ''}
+      ${S.dim(590, 90, 590, 270, `h = ${lab(v.h * 1000, 'mm')}`)}
+      ${S.text(330, 320, `μ = ${lab(v.mu * 1000, 'mPa·s')},  viscous time ${lab(v.h ** 2 * v.rho / v.mu, 's')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the velocity profile and flow rate between parallel plates with a moving wall and an imposed pressure gradient, and time the start-up transient.',
+    apparatus: ['Channel of large width-to-gap ratio (at least 20:1) with one wall formed by a moving belt', 'Constant-head tanks to impose a pressure gradient', 'Viscous Newtonian liquid (silicone oil or glycerol solution) to lengthen the viscous time'],
+    instruments: [{ name: 'Laser-Doppler or particle-image velocimeter', measures: 'Velocity profile across the gap', range: '0–2 m/s', resolution: '±1 %' }, { name: 'Differential pressure transducer between two taps', measures: 'Pressure gradient', range: '0–10 kPa', resolution: '±0.1 %' }, { name: 'Weigh tank and timer', measures: 'Flow rate', range: '—', resolution: '±0.5 %' }, { name: 'Belt encoder', measures: 'Wall speed', range: '0–2 m/s', resolution: '±0.2 %' }],
+    procedure: ['With the belt stopped, set a pressure gradient and record the profile and flow rate (Poiseuille).', 'With no pressure gradient, run the belt and record the profile (Couette).', 'Apply both and verify superposition.', 'Start the belt impulsively and record the mid-gap velocity against time.'],
+    controls: ['Measure at two streamwise stations to confirm the flow is fully developed', 'Vary the gap to verify the cubic dependence of the pressure-driven flow rate'],
+    signatures: ['Parabolic, linear and combined profiles', 'Flow rate proportional to h³ at fixed pressure gradient', 'Start-up governed by a single exponential at late time with rate π²ν/h²'],
+    safety: ['Guard the moving belt', 'Contain and clean oil spills'],
+  },
+  falsify: ['A steady laminar profile between wide parallel plates that is not the sum of a linear and a parabolic part.', 'A pressure-driven flow rate that does not scale with the cube of the gap at low Reynolds number.'],
+  alternatives: [{ name: 'Turbulent channel flow', text: 'Above a Reynolds number of roughly 1000–2000 (on half-gap and centre-line velocity) the profile flattens and wall shear follows a logarithmic law.' }, { name: 'Non-Newtonian fluids', text: 'Power-law and Bingham fluids give blunted or plug-like profiles and a different flow-rate law.' }, { name: 'Slip boundary condition', text: 'In gases at low pressure or liquids on hydrophobic surfaces a Navier slip length modifies the profile.' }, { name: 'Reynolds lubrication theory', text: 'Extends this solution to slowly varying gaps, giving the pressure distribution in bearings.' }],
+  hazards: [{ hazard: 'Viscous heating', cause: 'High shear rate in a thin film of viscous liquid', mitigation: 'Check the Brinkman number; provide cooling' }],
+  standards: ['ISO 3104 (kinematic viscosity of petroleum products)', 'ISO 7902 (hydrodynamic plain journal bearings under steady-state conditions)', 'ASME V&V 20 (verification and validation in computational fluid dynamics and heat transfer)'],
+  limits: 'Fully developed, laminar, incompressible, Newtonian flow between infinite parallel plates with constant properties. Entrance effects, side walls and viscous heating are neglected.',
+  numerics: { method: 'Crank–Nicolson finite differences for the one-dimensional momentum equation', order: 2, stability: 'Unconditionally stable', resolution: 'n_y' },
+  optimise: { objective: 'q', sense: 'max', vars: ['h'], note: 'The pressure-driven flow rate rises as h³; leakage paths are therefore very sensitive to clearance.' },
+  inverse: { series: 'history', curve: 0, fit: ['mu'] },
+  extensions: ['Oscillating wall (Stokes second problem) and exact Womersley solution', 'Power-law and Bingham fluids', 'Viscous heating with temperature-dependent viscosity', 'Slowly varying gap (Reynolds equation)'],
+};
+
+export default [conduction, exchanger, rankine, refrigeration, airCar, freeEnergy, reverseOsmosis, brinePlume, scaling, reactors, flash, producedWater, waterHammer, cavity, burgers, channel];

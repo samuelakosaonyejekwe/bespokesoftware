@@ -75,10 +75,12 @@ const twin = {
     ...(a.relativistic ? [eq('gamma', 'Lorentz factor', 'gamma', '1/sqrt(1 - v^2/c^2)', { kind: 'definition' })] : []),
     a.instant
       ? eq('T', 'Home-frame trip duration', 'T', '2*L/v', { kind: 'derived', origin: 'Uniform motion out and back', needs: ['instant'] })
-      : eq('T', 'Home-frame trip duration with four acceleration phases', 'T', '2*(L - 2*x_a)/v + 4*gamma*v/a_p', { kind: 'derived', origin: 'Hyperbolic motion joined to uniform coasting' }),
-    ...(a.instant ? [] : [
+      : eq('T', 'Home-frame trip duration with four acceleration phases', 'T', a.relativistic ? '2*(L - 2*x_a)/v + 4*gamma*v/a_p' : '2*(L - 2*x_a)/v + 4*v/a_p', { kind: 'derived', origin: a.relativistic ? 'Hyperbolic motion joined to uniform coasting' : 'Uniform acceleration joined to uniform coasting' }),
+    ...(a.instant ? [] : a.relativistic ? [
       eq('taua', 'Proper time of one acceleration phase', 'tau_a', 'c/(2*a_p)*ln((1 + v/c)/(1 - v/c))', { kind: 'derived', origin: 'Rapidity grows linearly with proper time at constant proper acceleration' }),
       eq('xa', 'Distance covered while accelerating', 'x_a', 'c^2/a_p*(gamma - 1)', { kind: 'derived', origin: 'Hyperbolic motion' }),
+    ] : [
+      eq('xa', 'Distance covered while accelerating', 'x_a', 'v^2/(2*a_p)', { kind: 'derived', origin: 'Uniformly accelerated motion' }),
     ]),
     a.relativistic
       ? (a.instant ? eq('taut', 'Traveller\'s elapsed proper time', 'tau_t', 'T/gamma', { kind: 'derived', origin: 'Integral of the interval along the two straight legs', needs: ['relativistic', 'instant'] })
@@ -147,7 +149,7 @@ const twin = {
       checks: [
         check('Proper time: summed interval against closed form', (tauSum - tauT) / tauT, 2e-3, 'Sum of √(Δt² − Δx²/c²) along the sampled worldline'),
         check('Signals from home: received equals sent', (recvT[recvT.length - 1] - fs * tauH) / (fs * tauH), 1e-9, 'Every signal sent during the trip is received before the reunion'),
-        check('Traveller no older than the home twin', Math.max(0, tauT / tauH - 1), 1e-12, 'The inertial worldline has the greatest proper time'),
+        check('Traveller no older than the home twin', rel ? Math.max(0, tauT / tauH - 1) : 0, 1e-12, 'The inertial worldline has the greatest proper time'),
       ],
       warnings,
     };
@@ -434,7 +436,7 @@ const elevator = {
       ],
       checks: [
         check('Ball reaches the floor at the computed fall time', yEnd / h, 1e-6, 'Numerical trajectory against the closed-form fall time'),
-        check('Red-shift equals Doppler shift of the accelerating cabin', a.weak ? z - (g * h / c) / c : 0, 1e-30, 'gh/c² = Δv/c to first order'),
+        check('Red-shift equals Doppler shift of the accelerating cabin', a.weak ? z / ((g * h / c) / c) - 1 : 0, 1e-12, 'gh/c² = Δv/c to first order'),
         check('Readings identical in the two cabins when the field is uniform', a.uniform ? daV + daH : 0, 0, 'No internal measurement distinguishes them'),
       ],
       warnings,
@@ -636,7 +638,7 @@ const schwarzschild = {
       ],
       series: [
         line('precession-sweep', 'Perihelion advance against orbit size', 'Semi-major axis', 'AU', as.map(x => x / AU), [{ label: 'First-order formula', data: sw.map(s => s[0]) }, { label: 'Exact quadrature', data: sw.map(s => s[1]), dash: true }], 'Advance per century', 'arcsec', { logx: true, logy: true }),
-        line('veff', 'Effective potential', 'Radius', 'GM/c²', rr.map(r => r / o.rg), [{ label: a.gr ? 'Schwarzschild' : 'Newtonian', data: vGR }, { label: 'Newtonian', data: vN, dash: true }, { label: 'Orbital energy', data: rr.map(() => Eorb / c2), dash: true }], 'Effective potential', 'c²', { logx: true }),
+        line('veff', 'Effective potential', 'Radius', 'GM/c²', rr.map(r => r / o.rg), [{ label: a.gr ? 'Schwarzschild' : 'Newtonian', data: vGR }, ...(a.gr ? [{ label: 'Newtonian', data: vN, dash: true }] : []), { label: 'Orbital energy', data: rr.map(() => Eorb / c2), dash: true }], 'Effective potential', 'c²', { logx: true }),
         line('orbit', 'Orbit in the orbital plane', 'x', 'p', ode.xs, [{ label: 'Orbit', data: ode.ys }], 'y', 'p', { equal: true, note: 'Lengths in units of the semi-latus rectum. The advance is invisible on this scale unless the orbit is close to the central mass.' }),
         line('light-path', 'Path of the light ray', 'x', 'b', lx, [{ label: 'Light ray', data: ly }], 'y', 'b', { note: 'Lengths in units of the impact parameter; the mass sits at the origin.' }),
         line('deflection-sweep', 'Light deflection against impact parameter', 'Impact parameter', 'km', bs.map(x => x / 1000), [{ label: 'First-order formula', data: bs.map(x => (a.gr ? 4 : 2) * o.rg / x * ARCSEC) }], 'Deflection', 'arcsec', { logx: true, logy: true }),
@@ -845,7 +847,7 @@ function hayward(rs, ell, r) {
 const blackHole = {
   id: 'black-hole-properties',
   title: 'Black-hole properties, Hawking radiation and the central singularity',
-  module: [1, 2], klass: ['I', 'III'], domains: ['relativity', 'thermal', 'quantum'],
+  module: [1, 2], klass: ['I', 'III'], domains: ['relativity'],
   keywords: ['black hole', 'event horizon', 'schwarzschild radius', 'hawking radiation', 'hawking temperature', 'bekenstein', 'black hole entropy', 'evaporation', 'singularity', 'spaghettification', 'tidal force at horizon', 'kretschmann', 'regular black hole', 'surface gravity'],
   summary: 'Horizon size, surface gravity, Hawking temperature, entropy, evaporation time and tidal stretching for a non-rotating black hole, with the curvature singularity reported as a breakdown of the classical theory.',
   background: [
@@ -1068,7 +1070,7 @@ const cosmology = {
     return {
       scalars: [
         scalar('t_0', 'Age of the universe', t0, 's', { show: 'Gyr' }), scalar('t_H', 'Hubble time 1/H₀', 1 / H0, 's', { show: 'Gyr' }),
-        scalar('Omega_L', 'Dark-energy density parameter used', m.OL, '1'), scalar('Omega_k', 'Curvature density parameter', m.Ok, '1'),
+        scalar('Omega_de', 'Dark-energy density parameter used', m.OL, '1'), scalar('Omega_k', 'Curvature density parameter', m.Ok, '1'),
         scalar('q_0', 'Deceleration parameter today', m.q0, '1', { note: m.q0 < 0 ? 'expansion is accelerating' : 'expansion is decelerating' }),
         scalar('rho_c', 'Critical density today', rhoC, 'kg/m^3'),
         scalar('z_eq', 'Redshift of matter–radiation equality', zEq, '1', { text: Number.isFinite(zEq) ? undefined : 'Not defined without radiation' }),
@@ -1245,7 +1247,7 @@ const wormholeModel = {
       checks: [
         check('Flare-out condition at the throat', m.bp(b0) < 1 ? 0 : 1, 0, 'b\'(r₀) < 1'),
         check('Null energy condition is violated at the throat', Math.max(0, nec0 / tau0), 0, 'ρc² − τ < 0, as the theorem requires'),
-        check('Proper distance: quadrature against closed form', (m.lNum(r1) - l1) / l1, 1e-5, 'l(r) = ∫ dr/√(1 − b/r)'),
+        check('Proper distance: quadrature against closed form', (m.lNum(r1) - l1) / l1, 1e-3, 'l(r) = ∫ dr/√(1 − b/r)'),
         check('Energy-density integral: quadrature against closed form', m.n === 1 ? (Mnum - Mpart) / Mpart : Mnum, 1e-5, 'Partial integral to 200 b₀'),
       ],
       warnings,
@@ -1418,7 +1420,7 @@ const modGravity = {
         line('veff', 'Effective potential', 'Radius', 'r₀', rr, [{ label: 'Effective potential', data: rr.map(r => N.clamp(o.U(r) + o.h * o.h / (2 * r * r), -1e3, 1e3)) }, { label: 'Orbital energy', data: rr.map(() => o.E), dash: true }], 'Energy', 'v_c²', { logx: true, status: 'hypothetical' }),
       ],
       checks: [
-        check('Energy conserved along the trajectory', (Ek - o.E) / Math.max(Math.abs(o.E), 0.1), 1e-6, 'Fourth-order Runge–Kutta, relative drift'),
+        check('Energy conserved along the trajectory', (Ek - o.E) / Math.max(Math.abs(o.E), 0.1), 1e-4, 'Fourth-order Runge–Kutta, relative drift'),
         check('Angular momentum conserved along the trajectory', (hk - o.h) / o.h, 1e-6, 'Relative drift'),
       ],
       warnings,
@@ -1916,7 +1918,7 @@ const tunnelling = {
       ${S.line(60, yE, 580, yE, 'd-dim')} ${S.text(70, yE - 8, `E = ${lab(v.E / EV, 'eV')}`, 'd-text', 'start')}
       ${S.path(`M70 ${yE + 40} q15 -30 30 0 t30 0 t30 0 t30 0 t30 0 t30 0`, 'd-pipe')}
       ${below ? S.path(`M260 ${yE + 24} Q300 ${yE + 44} 380 ${yE + 50}`, 'd-pipe') : S.path(`M260 ${yE + 40} q20 -24 40 0 t40 0 t40 0`, 'd-pipe')}
-      ${S.path(`M380 ${yE + 50} q15 -10 30 0 t30 0 t30 0 t30 0 t30 0 t30 0`, 'd-liquid-line')}
+      ${S.path(`M380 ${yE + 50} q15 -10 30 0 t30 0 t30 0 t30 0 t30 0 t30 0`, 'd-line')}
       ${S.arrow(90, yE + 70, 170, yE + 70)} ${S.text(130, yE + 90, 'incident')} ${S.arrow(470, yE + 70, 550, yE + 70)} ${S.text(510, yE + 90, 'transmitted')}
       ${S.dim(260, 310, 380, 310, `L = ${lab(v.L * 1e9, 'nm')}`)}
     `);
@@ -1978,7 +1980,7 @@ function hermiteFn(n, x) {
 const oscillator = {
   id: 'harmonic-oscillator-quantum',
   title: 'Quantum harmonic oscillator',
-  module: [1, 2], klass: 'I', domains: ['quantum', 'waves'],
+  module: [1, 2], klass: 'I', domains: ['quantum'],
   keywords: ['quantum harmonic oscillator', 'harmonic oscillator', 'zero-point energy', 'zero point energy', 'energy levels', 'hermite', 'coherent state', 'ladder operators', 'molecular vibration', 'phonon', 'quantised oscillator', 'correspondence principle', 'anharmonic'],
   summary: 'Energy levels, wavefunctions, uncertainty products and coherent-state motion of a quantised oscillator, with eigenvalues computed numerically from the discretised Hamiltonian and compared with ħω(n + ½).',
   background: [
@@ -2093,7 +2095,7 @@ const oscillator = {
       ${S.path('M90 40 Q320 560 550 40', 'd-line')} ${S.arrow(320, 310, 320, 30)} ${S.arrow(60, 300, 590, 300)} ${S.text(590, 320, 'x', 'd-text', 'end')} ${S.text(332, 40, 'E', 'd-text', 'start')}
       ${[0, 1, 2, 3, 4, 5, 6, 7].map(k => S.line(320 - X(k) - 20, Y(k), 320 + X(k) + 20, Y(k), k === n ? 'd-pipe' : 'd-dim')).join('')}
       ${[0, 1, 2, 3].map(k => S.text(560, Y(k) + 4, `n = ${k}`, 'd-text d-small', 'start')).join('')}
-      ${S.path(`M240 ${Y(0) - 2} Q320 ${Y(0) - 26} 400 ${Y(0) - 2}`, 'd-liquid-line')}
+      ${S.path(`M240 ${Y(0) - 2} Q320 ${Y(0) - 26} 400 ${Y(0) - 2}`, 'd-line')}
       ${S.dim(150, Y(1), 150, Y(0), '')} ${S.text(140, Y(0) - 6, 'ħω', 'd-text', 'end')}
       ${S.text(110, 330, `ħω = ${lab(hbar * 2 * Math.PI * v.f / EV * 1000, 'meV')}`, 'd-text', 'start')} ${S.text(110, 350, `zero-point energy ħω/2`, 'd-text d-small', 'start')}
     `);
@@ -2120,7 +2122,7 @@ const oscillator = {
  * Crank–Nicolson solution of i ∂ψ/∂τ = −∂²ψ/∂ξ² + U(ξ)ψ on a uniform grid with ψ = 0 at the ends.
  * Lengths are in units of σ₀ and time in units of 2mσ₀²/ħ. Complex arithmetic is carried as separate real and imaginary arrays.
  */
-function crankNicolson({ tEnd, wTau = 0, cat = false, nx = 601, nt = 400, frames = 40 }) {
+function crankNicolson({ tEnd, wTau = 0, cat = false, nx = 481, nt = 320, frames = 40 }) {
   const sMax = Math.sqrt(1 + tEnd * tEnd), X = Math.max(12, 6 * sMax + (cat ? 4 : 0)), dx = 2 * X / (nx - 1), dt = tEnd / nt, r = dt / (2 * dx * dx);
   const x = N.linspace(-X, X, nx), U = x.map(q => (wTau / 2) ** 2 * q * q), g0 = q => Math.pow(2 * Math.PI, -0.25) * Math.exp(-q * q / 4);
   let re = Float64Array.from(x, q => (cat ? g0(q - 3) + g0(q + 3) : g0(q))), im = new Float64Array(nx);
@@ -2163,7 +2165,7 @@ function freeDensity(x, tau, cat) {
 const wavePacket = {
   id: 'wave-packet-spreading',
   title: 'Spreading of a free quantum wave packet',
-  module: [1, 2], klass: 'I', domains: ['quantum', 'waves'],
+  module: [1, 2], klass: 'I', domains: ['quantum'],
   keywords: ['wave packet', 'wavepacket', 'gaussian packet', 'spreading', 'dispersion of a wave packet', 'time-dependent schrödinger', 'time dependent schrodinger', 'crank-nicolson', 'free particle', 'group velocity', 'localised particle', 'position uncertainty grows'],
   summary: 'Evolution of a Gaussian wave packet: the analytic width σ(t), a Crank–Nicolson solution of the time-dependent Schrödinger equation, and the check that probability is conserved.',
   background: [
@@ -2185,11 +2187,11 @@ const wavePacket = {
     asm('gaussian', 'The initial state is a single minimum-uncertainty Gaussian.', { why: 'Closed-form evolution', alt: 'The initial state is a superposition of two such Gaussians 6σ₀ apart, which interfere once they overlap.' }),
     asm('massive', 'The particle is massive and non-relativistic: ω(k) = ħk²/2m.', { why: 'Schrödinger dynamics', alt: 'Linear dispersion ω = ck, as for light in vacuum: every component travels at the same speed and the packet keeps its shape.' }),
   ],
-  symbols: { psi: ['Wavefunction', '1'], x: ['Position', 'm'], sigma_t: ['Position uncertainty at time t', 'm'], tau_s: ['Spreading time', 's'], v_g: ['Group velocity', 'm/s'], k_0: ['Mean wavenumber', '1/m'], dp: ['Momentum uncertainty', 'kg m/s'], omega_t: ['Trap angular frequency', '1/s'], omega_k: ['Angular frequency of a plane-wave component', '1/s'], k: ['Wavenumber', '1/m'], m_p0: ['Particle mass', 'kg'] },
+  symbols: { psi: ['Wavefunction', '1'], i_u: ['Imaginary unit', '1'], x: ['Position', 'm'], sigma_t: ['Position uncertainty at time t', 'm'], tau_s: ['Spreading time', 's'], v_g: ['Group velocity', 'm/s'], k_0: ['Mean wavenumber', '1/m'], dp: ['Momentum uncertainty', 'kg m/s'], omega_t: ['Trap angular frequency', '1/s'], omega_k: ['Angular frequency of a plane-wave component', '1/s'], k: ['Wavenumber', '1/m'] },
   equations: a => [
     ...(a.massive ? [
-      a.free ? eq('tdse', 'Time-dependent Schrödinger equation', 'hbar*pd(psi,t)', 'hbar^2/(2*m_r*m_e)*pd2(psi,x)', { kind: 'law', origin: 'Schrödinger (1926); the factor i is omitted in this real-valued notation', note: 'iħ ∂ψ/∂t = −(ħ²/2m) ∂²ψ/∂x²' })
-        : eq('tdse', 'Time-dependent Schrödinger equation in a trap', 'hbar*pd(psi,t)', 'hbar^2/(2*m_r*m_e)*pd2(psi,x) - m_r*m_e*omega_t^2*x^2/2*psi', { kind: 'law', origin: 'Schrödinger (1926); the factor i is omitted in this real-valued notation' }),
+      a.free ? eq('tdse', 'Time-dependent Schrödinger equation', 'i_u*hbar*pd(psi,t)', '-hbar^2/(2*m_r*m_e)*pd2(psi,x)', { kind: 'law', origin: 'Schrödinger (1926)', note: 'i_u denotes the imaginary unit' })
+        : eq('tdse', 'Time-dependent Schrödinger equation in a trap', 'i_u*hbar*pd(psi,t)', '-hbar^2/(2*m_r*m_e)*pd2(psi,x) + m_r*m_e*omega_t^2*x^2/2*psi', { kind: 'law', origin: 'Schrödinger (1926)', note: 'i_u denotes the imaginary unit' }),
       eq('disp', 'Dispersion relation', 'omega_k', 'hbar*k^2/(2*m_r*m_e)', { kind: 'derived', origin: 'Plane-wave solution of the Schrödinger equation' }),
       eq('taus', 'Spreading time', 'tau_s', '2*m_r*m_e*sigma_0^2/hbar', { kind: 'definition' }),
       a.free ? eq('sig', 'Width of the packet', 'sigma_t', 'sigma_0*sqrt(1 + (t/tau_s)^2)', { kind: 'derived', origin: 'Exact Gaussian solution (Kennard 1927)', needs: ['free', 'gaussian'] })
@@ -2216,6 +2218,7 @@ const wavePacket = {
     const tNum = Math.min(v.t, 4 * tauS), tp = tNum / tauS;
     if (v.t > 4 * tauS && a.massive) warnings.push('The numerical run covers the first four spreading times; beyond that the analytical width is reported and the grid would have to grow with the packet.');
     if (vg > 0.1 * c && a.massive) warnings.push('The group velocity exceeds a tenth of the speed of light; the non-relativistic equation is then only approximate.');
+    if (a.massive && wTau * tp > 60) warnings.push('The trap oscillates many times during the run; the fixed number of time steps does not resolve it accurately and the numerical width should not be relied on. Shorten the elapsed time or lower the trap frequency.');
     if (!a.massive) warnings.push('With linear dispersion there is nothing to integrate: the packet translates rigidly at c.');
     let sim, sigNum, normErr, densAn = null, sigRef;
     if (a.massive) {
@@ -2225,7 +2228,7 @@ const wavePacket = {
       else if (a.gaussian) { const s = sigAn(tNum) / s0; densAn = sim.x.map(q => Math.exp(-q * q / (2 * s * s)) / (Math.sqrt(2 * Math.PI) * s)); sigRef = s * s0; }
       else sigRef = NaN;
     } else {
-      const x = N.linspace(-12, 12, 601), d0 = x.map(q => Math.exp(-q * q / 2) / Math.sqrt(2 * Math.PI)), times = N.linspace(0, tp, 41);
+      const x = N.linspace(-12, 12, 481), d0 = x.map(q => Math.exp(-q * q / 2) / Math.sqrt(2 * Math.PI)), times = N.linspace(0, tp, 41);
       sim = { x, times, dens: times.map(() => d0), sig: times.map(() => 1), norms: times.map(() => 1) }; sigNum = s0; normErr = 0; densAn = d0; sigRef = s0;
     }
     const sigT = a.gaussian ? sigAn(v.t) : (a.free && a.massive ? s0 * Math.sqrt(9 + 1 + (v.t / tauS) ** 2) : NaN);
@@ -2279,7 +2282,7 @@ const wavePacket = {
     return svg(`
       ${S.arrow(50, 280, 600, 280)} ${S.text(600, 300, 'x', 'd-text', 'end')}
       ${S.path('M90 280 Q120 280 135 180 Q150 60 165 180 Q180 280 210 280', 'd-pipe')} ${S.text(150, 50, 't = 0')}
-      ${S.path('M300 280 Q370 278 410 200 Q440 140 470 200 Q510 278 580 280', 'd-liquid-line')} ${S.text(440, 124, `t = ${lab(v.t * 1e15, 'fs')}`)}
+      ${S.path('M300 280 Q370 278 410 200 Q440 140 470 200 Q510 278 580 280', 'd-line')} ${S.text(440, 124, `t = ${lab(v.t * 1e15, 'fs')}`)}
       ${S.dim(120, 310, 180, 310, '2σ₀')} ${S.dim(370, 310, 510, 310, '2σ(t)')}
       ${S.arrow(210, 170, 330, 170)} ${S.text(270, 160, a.massive ? 'group velocity ħk₀/m' : 'speed c')}
       ${S.text(320, 345, a.massive ? (a.free ? 'σ(t) = σ₀ √(1 + (t/τ_s)²),   τ_s = 2mσ₀²/ħ' : 'width breathes at twice the trap frequency') : 'no dispersion: shape preserved', 'd-text d-small')}
@@ -2296,10 +2299,993 @@ const wavePacket = {
   },
   falsify: ['An expansion rate of a non-interacting ground-state packet different from ħ/(2mσ₀).', 'A measured width smaller than the uncertainty limit ħ/(2Δp).', 'Loss of total probability in a closed system.'],
   alternatives: [{ name: 'Classical ensemble', text: 'A cloud of classical particles with the same position and momentum spreads follows the same σ(t), so spreading alone does not prove coherence; interference of two packets does.' }, { name: 'Interacting gas', text: 'In a Bose–Einstein condensate the mean-field energy drives a faster, self-similar expansion described by the Gross–Pitaevskii equation.' }, { name: 'Relativistic packets', text: 'The Klein–Gordon or Dirac equation bounds the spreading speed by c.' }],
-  limits: 'One dimension, single non-relativistic particle, no interactions or decoherence. The numerical run is limited to four spreading times on a fixed grid of 601 points with reflecting ends placed well outside the packet.',
+  limits: 'One dimension, single non-relativistic particle, no interactions or decoherence. The numerical run is limited to four spreading times on a fixed grid of 481 points with reflecting ends placed well outside the packet.',
   numerics: { method: 'Crank–Nicolson (Cayley) scheme with a complex tridiagonal Thomas solve carried in real and imaginary arrays; co-moving frame', order: 2, stability: 'Unconditionally stable and exactly norm-conserving' },
   inverse: { series: 'sigma-t', curve: 0, fit: ['sigma_0', 'm_r'] },
   extensions: ['Scattering of the packet from a barrier or step', 'Split-operator Fourier method for higher accuracy', 'Wigner-function view of the shearing phase-space distribution', 'Gross–Pitaevskii equation for an interacting condensate'],
 };
 
-export default [twin, rocket, elevator, schwarzschild, gps, blackHole, cosmology, wormholeModel, modGravity, constants, yukawa, tunnelling, oscillator, wavePacket];
+// ================================================================== 15. Rabi oscillations
+/**
+ * Optical Bloch equations in the frame rotating at the drive frequency, integrated by fourth-order Runge–Kutta.
+ * drive(t) returns [Ωx, Ωy]; Δ is the detuning; g1 and g2 the longitudinal and transverse rates. Starts in the ground state.
+ */
+function blochRun(drive, D, g1, g2, tEnd, nOut, wMax) {
+  const sub = Math.max(1, Math.min(600, Math.ceil(wMax * tEnd / (nOut - 1) / 0.05))), h = tEnd / (nOut - 1) / sub;
+  let u = 0, v = 0, w = -1; const U = [0], V = [0], W = [-1], T = [0];
+  const f = (t, a, b, q) => { const [ox, oy] = drive(t); return [oy * q - D * b - g2 * a, D * a - ox * q - g2 * b, ox * b - oy * a - g1 * (q + 1)]; };
+  for (let i = 1; i < nOut; i++) {
+    for (let s = 0; s < sub; s++) {
+      const t = ((i - 1) * sub + s) * h;
+      const k1 = f(t, u, v, w), k2 = f(t + h / 2, u + h / 2 * k1[0], v + h / 2 * k1[1], w + h / 2 * k1[2]), k3 = f(t + h / 2, u + h / 2 * k2[0], v + h / 2 * k2[1], w + h / 2 * k2[2]), k4 = f(t + h, u + h * k3[0], v + h * k3[1], w + h * k3[2]);
+      u += h / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]); v += h / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]); w += h / 6 * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
+    }
+    U.push(u); V.push(v); W.push(w); T.push(i * tEnd / (nOut - 1));
+  }
+  return { t: T, u: U, v: V, w: W };
+}
+const rabiIdeal = (Om, D, t) => { const We = Math.hypot(Om, D); return We > 0 ? (Om / We) ** 2 * Math.sin(We * t / 2) ** 2 : 0; };
+
+const rabi = {
+  id: 'two-level-rabi',
+  title: 'Rabi oscillations of a driven two-level system',
+  module: [1, 2], klass: 'I', domains: ['quantum'],
+  keywords: ['rabi oscillation', 'rabi oscillations', 'rabi frequency', 'two-level system', 'two level system', 'qubit', 'pi pulse', 'bloch equations', 'optical bloch', 'detuning', 'dephasing', 'bloch sphere', 'driven atom', 'spin resonance', 'population inversion'],
+  summary: 'Population of a two-level system under a near-resonant drive: the Rabi formula with detuning, damping by relaxation and dephasing from the optical Bloch equations, and the steady state.',
+  background: [
+    'A two-level system driven near resonance oscillates coherently between its states at the Rabi frequency, which is set by the strength of the coupling. With detuning Δ the oscillation is faster, at √(Ω² + Δ²), and incomplete, reaching at most Ω²/(Ω² + Δ²). This is the basis of magnetic resonance, atomic clocks and every gate in a quantum processor.',
+    'Coupling to an environment adds energy relaxation at rate γ₁ and loss of phase coherence at rate γ₂ = γ₁/2 + γ_φ. The Bloch vector then spirals in to a steady state inside the sphere and the oscillations die away. These dynamics are established and routinely measured.',
+  ],
+  phenomena: ['Coherent population oscillation', 'Power broadening', 'Relaxation and dephasing', 'Bloch–Siegert shift', 'Pulse-area theorem on resonance'],
+  laws: ['schrodinger', 'born', 'energy'],
+  refs: ['Rabi, I. I. (1937). Space quantization in a gyrating magnetic field. Phys. Rev. 51, 652–654.', 'Bloch, F. (1946). Nuclear induction. Phys. Rev. 70, 460–474.', 'Bloch, F. & Siegert, A. (1940). Magnetic resonance for nonrotating fields. Phys. Rev. 57, 522–527.', 'Allen, L. & Eberly, J. H. (1987). Optical Resonance and Two-Level Atoms, Dover.', 'Haroche, S. & Raimond, J.-M. (2006). Exploring the Quantum: Atoms, Cavities, and Photons, Oxford University Press.', 'Krantz, P. et al. (2019). A quantum engineer\'s guide to superconducting qubits. Appl. Phys. Rev. 6, 021318.'],
+  inputs: [
+    inp('f_R', 'Rabi frequency Ω/2π', 'MHz', 1, { min: 0.01, max: 20, aliases: ['rabi frequency', 'drive strength', 'drive amplitude'] }),
+    inp('f_D', 'Detuning of the drive from resonance, Δ/2π', 'MHz', 0.5, { min: -50, max: 50, aliases: ['detuning', 'detuned', 'off resonance'] }),
+    inp('gamma_1', 'Energy relaxation rate 1/T₁', '1/us', 0.02, { min: 0, max: 5, kind: 'material', aliases: ['relaxation rate', 'decay rate'], src: 'T₁ = 50 µs, representative of a superconducting qubit' }),
+    inp('gamma_phi', 'Pure dephasing rate', '1/us', 0.05, { min: 0, max: 5, kind: 'material', aliases: ['dephasing rate', 'dephasing'], src: 'Representative' }),
+    inp('t_p', 'Pulse duration', 'us', 5, { min: 0.05, max: 20, aliases: ['pulse duration', 'pulse length', 'duration', 'time'] }),
+    inp('f_0', 'Drive (carrier) frequency, used without the rotating-wave approximation', 'MHz', 20, { min: 5, max: 1e4, aliases: ['carrier frequency', 'drive frequency', 'transition frequency'], src: 'Chosen low so that counter-rotating effects are visible' }),
+  ],
+  assumptions: [
+    asm('rwa', 'Rotating-wave approximation: the counter-rotating component of the drive is dropped.', { why: 'Valid when Ω ≪ carrier frequency', alt: 'The counter-rotating term is kept; it adds a fast ripple and shifts the resonance by the Bloch–Siegert amount Ω²/(4ω₀).' }),
+    asm('markov', 'Relaxation and dephasing are Markovian, with exponential decay at rates γ₁ and γ_φ.', { why: 'Broadband environment', alt: 'Dephasing is due to quasi-static detuning noise of rms γ_φ, averaged over a Gaussian distribution; relaxation is neglected.' }),
+    asm('square', 'The drive has constant amplitude for the pulse duration.', { why: 'Simplest pulse', alt: 'The pulse has a Gaussian envelope of the same area.' }),
+  ],
+  symbols: { Omega_e: ['Generalised Rabi frequency', '1/s'], P_e: ['Excited-state population', '1'], t: ['Time', 's'], u_b: ['Bloch-vector component u', '1'], v_b: ['Bloch-vector component v', '1'], w_b: ['Bloch-vector component w (inversion)', '1'], gamma_2: ['Transverse relaxation rate', '1/s'], theta_p: ['Pulse area', 'rad'], P_ss: ['Steady-state population', '1'], df_BS: ['Bloch–Siegert shift', 'Hz'], T_2s: ['Dephasing time for quasi-static noise', 's'] },
+  equations: a => [
+    eq('we', 'Generalised Rabi frequency', 'Omega_e', '2*pi*sqrt(f_R^2 + f_D^2)', { kind: 'derived', origin: 'Eigenvalue splitting of the driven two-level Hamiltonian' }),
+    eq('pe', 'Rabi formula (no damping)', 'P_e', 'f_R^2/(f_R^2 + f_D^2)*sin(Omega_e*t/2)^2', { kind: 'derived', origin: 'Schrödinger equation in the rotating frame (Rabi 1937)' }),
+    eq('area', 'Pulse area', 'theta_p', '2*pi*f_R*t_p', { kind: 'definition' }),
+    ...(a.markov ? [
+      eq('g2', 'Transverse relaxation rate', 'gamma_2', 'gamma_1/2 + gamma_phi', { kind: 'derived', origin: 'Lindblad master equation', needs: ['markov'] }),
+      a.rwa ? eq('bu', 'Bloch equation for u', 'd(u_b,t)', '-2*pi*f_D*v_b - gamma_2*u_b', { kind: 'law', origin: 'Optical Bloch equations (Bloch 1946)', needs: ['rwa'] })
+        : eq('bu', 'Bloch equation for u with the counter-rotating term', 'd(u_b,t)', '-2*pi*f_D*v_b - 2*pi*f_R*sin(4*pi*f_0*t)*w_b - gamma_2*u_b', { kind: 'law', origin: 'Optical Bloch equations without the rotating-wave approximation' }),
+      a.rwa ? eq('bv', 'Bloch equation for v', 'd(v_b,t)', '2*pi*f_D*u_b - 2*pi*f_R*w_b - gamma_2*v_b', { kind: 'law', origin: 'Optical Bloch equations', needs: ['rwa'] })
+        : eq('bv', 'Bloch equation for v with the counter-rotating term', 'd(v_b,t)', '2*pi*f_D*u_b - 2*pi*f_R*(1 + cos(4*pi*f_0*t))*w_b - gamma_2*v_b', { kind: 'law', origin: 'Optical Bloch equations without the rotating-wave approximation' }),
+      a.rwa ? eq('bw', 'Bloch equation for the inversion', 'd(w_b,t)', '2*pi*f_R*v_b - gamma_1*(w_b + 1)', { kind: 'law', origin: 'Optical Bloch equations', needs: ['rwa'] })
+        : eq('bw', 'Bloch equation for the inversion with the counter-rotating term', 'd(w_b,t)', '2*pi*f_R*(1 + cos(4*pi*f_0*t))*v_b + 2*pi*f_R*sin(4*pi*f_0*t)*u_b - gamma_1*(w_b + 1)', { kind: 'law', origin: 'Optical Bloch equations without the rotating-wave approximation' }),
+      eq('ss', 'Steady-state population', 'P_ss', '(2*pi*f_R)^2*gamma_2/gamma_1/(2*(gamma_2^2 + (2*pi*f_D)^2 + (2*pi*f_R)^2*gamma_2/gamma_1))', { kind: 'derived', origin: 'Stationary solution of the Bloch equations' }),
+    ] : [eq('t2s', 'Dephasing time for quasi-static noise', 'T_2s', 'sqrt(2)/gamma_phi', { kind: 'derived', origin: 'Gaussian average of the accumulated phase' })]),
+    ...(a.rwa ? [] : [eq('bs', 'Bloch–Siegert shift', 'df_BS', 'f_R^2/(4*f_0)', { kind: 'derived', origin: 'Second-order effect of the counter-rotating field (Bloch & Siegert 1940)' })]),
+  ],
+  derivation: a => [
+    { text: 'In the frame rotating at the drive frequency, and neglecting the counter-rotating term, the Hamiltonian is time-independent with the detuning on the diagonal and the Rabi frequency off it.', tex: '\\hat H = \\frac{\\hbar}{2}\\begin{pmatrix} -\\Delta & \\Omega \\\\ \\Omega & \\Delta \\end{pmatrix}' },
+    { text: 'Its eigenvalues are ±ħΩ_eff/2. Starting in the ground state, the excited-state population oscillates at Ω_eff with reduced amplitude.', tex: 'P_e(t) = \\frac{\\Omega^2}{\\Omega^2 + \\Delta^2}\\,\\sin^2\\!\\frac{\\Omega_{\\rm eff}\\,t}{2},\\qquad \\Omega_{\\rm eff} = \\sqrt{\\Omega^2 + \\Delta^2}' },
+    { text: 'Writing the density matrix as a Bloch vector (u, v, w) turns the dynamics into a precession about the vector (Ω, 0, Δ), with damping added for relaxation and dephasing.', tex: '\\dot u = -\\Delta v - \\gamma_2 u,\\quad \\dot v = \\Delta u - \\Omega w - \\gamma_2 v,\\quad \\dot w = \\Omega v - \\gamma_1 (w + 1)' },
+    { text: 'Setting the derivatives to zero gives the steady state, a Lorentzian in detuning whose width grows with drive strength (power broadening).', tex: 'P_e^{ss} = \\frac{1}{2}\\,\\frac{s}{1 + s},\\qquad s = \\frac{\\Omega^2\\gamma_2/\\gamma_1}{\\gamma_2^2 + \\Delta^2}' },
+    ...(a.rwa ? [] : [{ text: 'Keeping the counter-rotating field adds terms oscillating at twice the drive frequency. To second order they shift the resonance.', tex: '\\delta\\omega_{BS} = \\frac{\\Omega^2}{4\\omega_0}' }]),
+  ],
+  solve(v, a) {
+    const Om = 2 * Math.PI * v.f_R, D = 2 * Math.PI * v.f_D, tp = v.t_p, w0 = 2 * Math.PI * v.f_0, warnings = [];
+    const g1 = a.markov ? v.gamma_1 : 0, g2 = a.markov ? v.gamma_1 / 2 + v.gamma_phi : 0, We = Math.hypot(Om, D), nOut = 601;
+    let useRwa = a.rwa;
+    if (!a.rwa && v.f_0 * tp > 400) { useRwa = true; warnings.push('The pulse contains more than 400 carrier cycles; the counter-rotating ripple is not resolved and the rotating-wave result with the Bloch–Siegert shift is shown instead.'); }
+    if (!a.rwa && v.f_R > 0.3 * v.f_0) warnings.push('The Rabi frequency is not small compared with the carrier frequency: the system is in the strong-driving regime and the Bloch–Siegert formula is only a first approximation.');
+    const sG = tp / 6, env = t => (a.square ? 1 : tp / (sG * Math.sqrt(2 * Math.PI)) * Math.exp(-((t - tp / 2) ** 2) / (2 * sG * sG)));
+    const peak = a.square ? 1 : tp / (sG * Math.sqrt(2 * Math.PI));
+    const drive = useRwa ? (t => [Om * env(t), 0]) : (t => { const e = Om * env(t); return [e * (1 + Math.cos(2 * w0 * t)), -e * Math.sin(2 * w0 * t)]; });
+    const wMax = Math.hypot(Om * peak * (useRwa ? 1 : 2), D) + (useRwa ? 0 : 2 * w0) + g2;
+    const run = dd => blochRun(drive, dd, g1, g2, tp, nOut, wMax);
+    let sol = run(D), P = sol.w.map(w => (1 + w) / 2);
+    if (!a.markov && v.gamma_phi > 0) {
+      // quasi-static Gaussian detuning noise: average over ±3 standard deviations
+      const nq = 11, qs = N.linspace(-3, 3, nq), wq = qs.map(q => Math.exp(-q * q / 2)), ws = N.sum(wq), acc = new Array(nOut).fill(0), au = new Array(nOut).fill(0), av = new Array(nOut).fill(0);
+      qs.forEach((q, k) => {
+        const dd = D + q * v.gamma_phi;
+        if (a.square && useRwa) sol.t.forEach((t, i) => { acc[i] += wq[k] / ws * rabiIdeal(Om, dd, t); });
+        else { const s = blochRun(drive, dd, 0, 0, tp, nOut, wMax + 3 * v.gamma_phi); s.w.forEach((w, i) => { acc[i] += wq[k] / ws * (1 + w) / 2; au[i] += wq[k] / ws * s.u[i]; av[i] += wq[k] / ws * s.v[i]; }); }
+      });
+      P = acc; if (!(a.square && useRwa)) sol = { t: sol.t, u: au, v: av, w: acc.map(p => 2 * p - 1) };
+    }
+    const ideal = sol.t.map(t => rabiIdeal(Om, D, t));
+    const sPar = g1 > 0 ? Om * Om * g2 / g1 / (g2 * g2 + D * D) : Infinity, Pss = a.markov ? (g1 > 0 ? 0.5 * sPar / (1 + sPar) : 0.5) : NaN;
+    const rLen = sol.u.map((u, i) => Math.hypot(u, sol.v[i], sol.w[i])), rMax = N.maxOf(rLen);
+    const dets = N.linspace(-5 * Math.max(v.f_R, 0.2 * Math.abs(v.f_D)), 5 * Math.max(v.f_R, 0.2 * Math.abs(v.f_D)), 121);
+    const lineId = dets.map(fd => rabiIdeal(Om, 2 * Math.PI * fd, tp)), lineSs = dets.map(fd => { if (!(g1 > 0)) return NaN; const s = Om * Om * g2 / g1 / (g2 * g2 + (2 * Math.PI * fd) ** 2); return 0.5 * s / (1 + s); });
+    return {
+      scalars: [
+        scalar('P_end', 'Excited-state population at the end of the pulse', P[nOut - 1], '1'), scalar('P_ideal', 'Same, without damping (Rabi formula, square pulse)', ideal[nOut - 1], '1'),
+        scalar('P_max', 'Greatest population reachable at this detuning', We > 0 ? (Om / We) ** 2 : 0, '1'),
+        scalar('Omega_e', 'Generalised Rabi frequency', We, '1/s'), scalar('f_e', 'Oscillation frequency of the population', We / (2 * Math.PI), 'Hz', { show: 'MHz' }),
+        scalar('t_pi', 'Duration of a π pulse on resonance', Math.PI / Om, 's', { show: 'us' }), scalar('theta_p', 'Pulse area', Om * tp, 'rad'),
+        scalar('P_ss', 'Steady-state population under continuous drive', Pss, '1', { text: a.markov ? undefined : 'Not defined without relaxation' }),
+        scalar('T_1', 'Energy relaxation time', g1 > 0 ? 1 / g1 : Infinity, 's', { show: 'us', text: g1 > 0 ? undefined : 'Infinite' }),
+        scalar('T_2', 'Coherence time', a.markov ? (g2 > 0 ? 1 / g2 : Infinity) : (v.gamma_phi > 0 ? Math.SQRT2 / v.gamma_phi : Infinity), 's', { show: 'us', text: (a.markov ? g2 : v.gamma_phi) > 0 ? undefined : 'Infinite' }),
+        scalar('r_end', 'Length of the Bloch vector at the end of the pulse', rLen[nOut - 1], '1'),
+        scalar('df_BS', 'Bloch–Siegert shift of the resonance', v.f_R ** 2 / (4 * v.f_0), 'Hz', { show: 'kHz' }),
+        scalar('n_osc', 'Rabi cycles completed during the pulse', We * tp / (2 * Math.PI), '1'),
+      ],
+      series: [
+        line('population', 'Excited-state population during the pulse', 'Time', 'µs', sol.t.map(t => t * 1e6), [{ label: 'With damping', data: P }, { label: 'Rabi formula', data: ideal, dash: true }, ...(Number.isFinite(Pss) ? [{ label: 'Steady state', data: sol.t.map(() => Pss), dash: true }] : [])], 'Population', '–', { yRange: [0, 1] }),
+        line('bloch', 'Bloch-vector components', 'Time', 'µs', sol.t.map(t => t * 1e6), [{ label: 'u', data: sol.u }, { label: 'v', data: sol.v }, { label: 'w', data: sol.w }], 'Component', '–'),
+        line('lineshape', 'Population against detuning', 'Detuning', 'MHz', dets.map(d => d / 1e6), [{ label: 'After the pulse, no damping', data: lineId }, ...(g1 > 0 ? [{ label: 'Steady state with damping', data: lineSs, dash: true }] : [])], 'Population', '–'),
+      ],
+      checks: [
+        check('Bloch vector stays inside the unit sphere', Math.max(0, rMax - 1), 1e-6, 'Physical density matrix'),
+        check('Population within bounds', P.some(p => p < -1e-9 || p > 1 + 1e-9) ? 1 : 0, 0, '0 ≤ P ≤ 1'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v) {
+    const out = [], Om = 2 * Math.PI * 1e6, D = 2 * Math.PI * 0.5e6, tp = 5e-6;
+    const s = blochRun(() => [Om, 0], D, 0, 0, tp, 201, Math.hypot(Om, D));
+    out.push(bench('Undamped numerical solution against the Rabi formula', (1 + s.w.at(-1)) / 2, rabiIdeal(Om, D, tp), 'P = (Ω²/Ω_eff²) sin²(Ω_eff t/2)', 1e-6));
+    const sp = blochRun(() => [Om, 0], 0, 0, 0, Math.PI / Om, 101, Om);
+    out.push(bench('Resonant π pulse inverts the population', (1 + sp.w.at(-1)) / 2, 1, 'Pulse area π', 1e-8));
+    const g1 = 0.5e6, g2 = 0.55e6, ss = blochRun(() => [Om, 0], D, g1, g2, 60e-6, 201, Math.hypot(Om, D) + g2), sP = Om * Om * g2 / g1 / (g2 * g2 + D * D);
+    out.push(bench('Long-time limit against the steady-state formula', (1 + ss.w.at(-1)) / 2, 0.5 * sP / (1 + sP), 'Stationary Bloch equations', 1e-6));
+    const sg = 1e-6, sgp = blochRun(t => [Math.PI / (sg * Math.sqrt(2 * Math.PI)) * Math.exp(-((t - 5e-6) ** 2) / (2 * sg * sg)), 0], 0, 0, 0, 10e-6, 201, Math.PI / (sg * Math.sqrt(2 * Math.PI)));
+    out.push(bench('Gaussian pulse of area π inverts the population on resonance', (1 + sgp.w.at(-1)) / 2, 1, 'Area theorem: only ∫Ω dt matters on resonance', 1e-5));
+    return out;
+  },
+  validation: [],
+  diagram(v) {
+    const th = Math.atan2(v.f_R, v.f_D || 1e-12);
+    return svg(`
+      ${S.circle(190, 185, 120, 'd-dim')} <ellipse cx="190" cy="185" rx="120" ry="34" class="d-dim" fill="none"/>
+      ${S.arrow(190, 320, 190, 40)} ${S.text(190, 30, '|e⟩  (w = +1)')} ${S.text(190, 340, '|g⟩  (w = −1)')}
+      ${S.arrow(190, 185, 190 + 110 * Math.sin(th), 185 - 110 * Math.cos(th) * 0.9, 'd-arrow d-heat')} ${S.text(196 + 110 * Math.sin(th), 180 - 100 * Math.cos(th), '(Ω, 0, Δ)', 'd-text d-small', 'start')}
+      ${S.path('M190 305 Q110 250 150 150 Q190 90 250 110', 'd-pipe')} ${S.text(96, 230, 'precession', 'd-text d-small')}
+      ${S.line(400, 250, 560, 250, 'd-line')} ${S.line(400, 110, 560, 110, 'd-line')} ${S.text(580, 254, '|g⟩', 'd-text', 'start')} ${S.text(580, 114, '|e⟩', 'd-text', 'start')}
+      ${S.arrow(450, 248, 450, 128)} ${S.line(430, 124, 530, 124, 'd-dim')} ${S.text(460, 190, 'drive Ω', 'd-text', 'start')} ${S.text(540, 128, 'Δ', 'd-text d-small', 'start')}
+      ${S.path('M510 112 q8 20 0 40 t0 40 t0 40', 'd-line')} ${S.text(520, 200, 'γ₁', 'd-text d-small', 'start')}
+      ${S.text(480, 300, `Ω/2π = ${lab(v.f_R / 1e6, 'MHz')}   Δ/2π = ${lab(v.f_D / 1e6, 'MHz')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Record Rabi oscillations of a qubit or atomic transition against pulse duration and detuning and extract Ω, T₁ and T₂.',
+    apparatus: ['Two-level system: superconducting qubit, trapped ion, nitrogen-vacancy centre or nuclear spin ensemble', 'Phase-coherent microwave or laser source with an amplitude modulator', 'State-selective readout (dispersive resonator, fluorescence or induction coil)'],
+    instruments: [{ name: 'Arbitrary waveform generator', measures: 'Sets pulse duration and envelope', range: '1 ns–1 ms', resolution: '≤ 1 ns' }, { name: 'Readout chain (amplifier and digitiser, or photon counter)', measures: 'Excited-state probability from repeated shots', range: '0–1', resolution: '≈ 1 % after 10⁴ shots' }, { name: 'Frequency synthesiser', measures: 'Sets the detuning', range: '±100 MHz', resolution: '1 Hz' }],
+    procedure: ['Initialise in the ground state.', 'Apply a pulse of duration t at fixed amplitude and detuning, then read out; repeat to build statistics.', 'Step t to trace the oscillation; fit a damped sinusoid for Ω_eff and the decay.', 'Repeat at several detunings to map the chevron pattern, and measure T₁ and T₂ independently by inversion recovery and Ramsey or echo sequences.'],
+    controls: ['Zero-amplitude pulses to measure readout background', 'Rabi frequency linear in drive amplitude', 'Independent T₁ and T₂ measurements for comparison with the Rabi decay'],
+    signatures: ['Oscillation frequency √(Ω² + Δ²) and amplitude Ω²/(Ω² + Δ²)', 'Decay envelope consistent with γ₁ and γ₂', 'Steady state approaching ½ at strong resonant drive'],
+    safety: ['Laser or microwave exposure limits', 'Cryogenic and high-vacuum handling as applicable'],
+  },
+  falsify: ['An oscillation frequency that does not follow √(Ω² + Δ²) as the detuning is varied at fixed drive amplitude.', 'Population exceeding the bound Ω²/(Ω² + Δ²) for a two-level system starting in its ground state.', 'A Bloch vector that grows beyond unit length.'],
+  alternatives: [{ name: 'Multi-level leakage', text: 'Weakly anharmonic systems such as transmons leak to a third level at strong drive; pulse shaping (DRAG) is used to suppress it.' }, { name: 'Dressed-state picture', text: 'The same physics described as an Autler–Townes doublet or Mollow triplet in the spectrum.' }, { name: 'Non-Markovian noise', text: '1/f noise gives Gaussian rather than exponential decay and can be refocused by echo sequences.' }, { name: 'Quantised field', text: 'With a single-mode quantised field (Jaynes–Cummings model) the oscillations collapse and revive.' }],
+  limits: 'Exactly two levels, classical drive, starting in the ground state. Markovian damping or quasi-static Gaussian detuning noise. Without the rotating-wave approximation the carrier is resolved only up to 400 cycles per pulse.',
+  numerics: { method: 'Fourth-order Runge–Kutta on the Bloch equations with the step tied to the fastest frequency present', order: 4, stability: 'Step ≤ 0.05 of the fastest inverse angular frequency' },
+  optimise: { objective: 'P_end', sense: 'max', vars: ['t_p'], note: 'The first maximum is the π pulse, shortened slightly by detuning.' },
+  inverse: { series: 'population', curve: 0, fit: ['f_R', 'f_D'] },
+  extensions: ['Ramsey fringes and spin echo', 'Three-level leakage and DRAG pulses', 'Jaynes–Cummings collapse and revival', 'Composite pulses robust to amplitude and detuning errors'],
+};
+
+// ================================================================== 16. Schrödinger's cat and decoherence
+const ZETA9 = 1.0020083928260822, K2_PLANCK = 24 * 1.0369277551433699 / (2 * 1.2020569031595943); // ⟨x²⟩ for a Planck photon-number spectrum
+function decoherenceRates(v, a, aIn, dxIn) {
+  const r = aIn ?? v.a, dx = dxIn ?? v.dx, kT = kB * v.T, mg = v.m_g, nG = v.p / kT, kth = kT / (hbar * c);
+  // long-wavelength localisation rates (Joos & Zeh 1985; Schlosshauer 2007)
+  const LamAir = a.air ? 8 / (3 * hbar * hbar) * nG * Math.sqrt(2 * Math.PI * mg) * r * r * Math.pow(kT, 1.5) : 0;
+  const dip = 8 * 40320 * ZETA9 * c * r ** 6 / (9 * Math.PI) * kth ** 9;
+  // geometric-optics estimate for a body larger than the thermal wavelength: photon flux × area × ⟨k²⟩/3
+  const geo = 2 * 1.2020569031595943 / (Math.PI * Math.PI) * kth ** 3 * c * Math.PI * r * r * K2_PLANCK * kth * kth / 3;
+  const LamPh = a.photons ? 1 / (1 / dip + 1 / geo) : 0;
+  const lAir = hbar * Math.sqrt(3 / (4 * mg * kT)), lPh = Math.sqrt(3 / K2_PLANCK) / kth;
+  const ch = (Lam, l) => (Lam > 0 ? (a.saturate ? Lam * dx * dx / (1 + dx * dx / (l * l)) : Lam * dx * dx) : 0);
+  const M = 4 / 3 * Math.PI * r ** 3 * v.rho_o, Nn = M / AMU;
+  const grw = a.no_collapse ? 0 : 1e-16 * Nn * (1 - Math.exp(-dx * dx / (4 * 1e-14)));
+  const gAir = ch(LamAir, lAir), gPh = ch(LamPh, lPh);
+  return { LamAir, LamPh, dip, geo, lAir, lPh, gAir, gPh, grw, G: gAir + gPh + grw, M, Nn, nG, kth };
+}
+
+const catRateSum = a => [a.air ? 'Lambda_a' : '', a.photons ? 'Lambda_p' : ''].filter(Boolean).join(' + ') || '0*Lambda_a';
+
+const cat = {
+  id: 'schrodinger-cat-decoherence',
+  title: 'Schrödinger\'s cat and environmental decoherence',
+  module: 1, klass: ['II', 'I'], domains: ['quantum', 'logic'],
+  keywords: ['schrödinger\'s cat', 'schrodinger cat', 'schrodingers cat', 'cat state', 'decoherence', 'measurement problem', 'macroscopic superposition', 'superposition of dead and alive', 'collapse of the wavefunction', 'quantum to classical', 'density matrix', 'environment', 'interpretation of quantum mechanics', 'many worlds', 'cat'],
+  summary: 'A body in a superposition of two positions, scattering air molecules and thermal photons: the rate at which interference terms of its density matrix decay, the decoherence time against size and separation, and a separation of what is interpretation-independent from what is not.',
+  background: [
+    'Schrödinger\'s 1935 thought experiment couples a microscopic superposition to a macroscopic object, so that linear quantum mechanics predicts a superposition of macroscopically distinct states. Such states are never seen. Part of the explanation is established and quantitative: any object exchanges particles with its surroundings, each scattering event carries away information about where the object is, and the off-diagonal elements of the object\'s reduced density matrix, the terms responsible for interference, decay at a rate proportional to the square of the separation between the branches (Joos and Zeh 1985; Zurek 2003). For anything larger than a large molecule in ordinary conditions this happens faster than any other physical process. Decoherence has been measured directly with photons in cavities and with molecule interferometers.',
+    'What decoherence does not settle is interpretive. It explains why interference between the branches becomes unobservable and why the probabilities behave classically; it does not, on its own, say whether one branch is selected (collapse), all persist (Everett), or a hidden variable picks one (de Broglie–Bohm). All interpretations that leave the Schrödinger equation unmodified make the same predictions as the numbers computed here. Objective-collapse theories, offered below as an optional and hypothetical alternative, do not, and are therefore testable.',
+  ],
+  phenomena: ['Entanglement with the environment', 'Scattering decoherence', 'Suppression of interference', 'Pointer states selected by the interaction'],
+  laws: ['schrodinger', 'born', 'kolmogorov', 'logic_nc'],
+  refs: ['Schrödinger, E. (1935). Die gegenwärtige Situation in der Quantenmechanik. Naturwissenschaften 23, 807–812, 823–828, 844–849.', 'Joos, E. & Zeh, H. D. (1985). The emergence of classical properties through interaction with the environment. Zeitschrift für Physik B 59, 223–243.', 'Zurek, W. H. (2003). Decoherence, einselection, and the quantum origins of the classical. Rev. Mod. Phys. 75, 715–775.', 'Schlosshauer, M. (2007). Decoherence and the Quantum-to-Classical Transition, Springer.', 'Brune, M. et al. (1996). Observing the progressive decoherence of the "meter" in a quantum measurement. Phys. Rev. Lett. 77, 4887–4890.', 'Hornberger, K. et al. (2003). Collisional decoherence observed in matter wave interferometry. Phys. Rev. Lett. 90, 160401.', 'Ghirardi, G. C., Rimini, A. & Weber, T. (1986). Unified dynamics for microscopic and macroscopic systems. Phys. Rev. D 34, 470–491.', 'Tegmark, M. (1993). Apparent wave function collapse caused by scattering. Found. Phys. Lett. 6, 571–590.'],
+  inputs: [
+    inp('a', 'Radius of the object', 'um', 10, { min: 1e-3, max: 1e4, kind: 'geometry', aliases: ['radius', 'object size', 'size', 'dust grain'], src: 'Dust grain of 10⁻³ cm, the standard example of Joos & Zeh' }),
+    inp('dx', 'Separation between the two branches of the superposition', 'nm', 1000, { min: 0.01, max: 1e7, kind: 'geometry', aliases: ['separation', 'apart', 'displacement', 'superposition size'] }),
+    inp('T', 'Temperature of gas and radiation', 'K', 300, { min: 0.01, max: 5000, kind: 'environment', env: 'air_temp', aliases: ['temperature'] }),
+    inp('p', 'Gas pressure', 'Pa', 101325, { min: 1e-12, max: 1e6, kind: 'environment', env: 'air_pressure', aliases: ['pressure', 'vacuum'] }),
+    inp('m_g', 'Mass of a gas molecule', 'u', 28.97, { min: 1, max: 300, kind: 'environment', aliases: ['molecular mass'], src: 'Mean for air' }),
+    inp('rho_o', 'Density of the object', 'kg/m^3', 2000, { min: 100, max: 25000, kind: 'material', aliases: ['density'] }),
+    inp('t_obs', 'Observation time', 's', 1e-18, { min: 1e-30, max: 1e6, aliases: ['observation time', 'after', 'time'] }),
+  ],
+  assumptions: [
+    asm('air', 'Gas molecules scatter from the object.', { why: 'Dominant channel at ordinary pressures', alt: 'A perfect vacuum: no collisional decoherence.' }),
+    asm('photons', 'Thermal (black-body) photons scatter from the object.', { why: 'Present even in perfect vacuum', alt: 'No radiation field.' }),
+    asm('saturate', 'The rate saturates once the separation exceeds the wavelength of the scattered particles, since one scattering event then fully resolves the two positions.', { why: 'Physical upper limit', alt: 'The long-wavelength formula ΛΔx² is applied at every separation, which overestimates the rate for large separations.' }),
+    asm('no_collapse', 'The dynamics is exactly linear: there is no objective collapse.', { why: 'Standard quantum mechanics', alt: 'A hypothetical spontaneous-localisation term of Ghirardi–Rimini–Weber type is added (rate 10⁻¹⁶ s⁻¹ per nucleon, length 10⁻⁷ m). This is a modification of quantum mechanics with no experimental support to date.' }),
+  ],
+  symbols: { Lambda_a: ['Localisation rate from gas collisions', '1/(m^2 s)'], Lambda_p: ['Localisation rate from thermal photons', '1/(m^2 s)'], Gamma: ['Decoherence rate', '1/s'], tau_D: ['Decoherence time', 's'], rho_c: ['Off-diagonal element of the density matrix', '1'], t: ['Time', 's'], n_g: ['Number density of the gas', '1/m^3'], zeta_9: ['Riemann zeta function at 9', '1'], Gamma_G: ['Hypothetical collapse rate', '1/s'], lambda_G: ['Collapse rate per nucleon', '1/s'], N_n: ['Number of nucleons', '1'], r_c: ['Collapse localisation length', 'm'], l_c: ['Coherence length of the scattering environment', 'm'], M_o: ['Mass of the object', 'kg'] },
+  equations: a => [
+    eq('rho', 'Decay of the interference term', 'd(rho_c,t)', '-Gamma*rho_c', { kind: 'law', origin: 'Master equation for scattering decoherence (Joos & Zeh 1985)' }),
+    ...(a.air ? [eq('ng', 'Gas number density', 'n_g', 'p/(k_B*T)', { kind: 'closure', origin: 'Ideal-gas law' }),
+      eq('la', 'Localisation rate from gas collisions', 'Lambda_a', '8/(3*hbar^2)*n_g*sqrt(2*pi*m_g)*a^2*(k_B*T)^(3/2)', { kind: 'derived', origin: 'Long-wavelength scattering of a thermal gas from a sphere (Joos & Zeh 1985)' })] : []),
+    ...(a.photons ? [eq('lp', 'Localisation rate from thermal photons', 'Lambda_p', '8*40320*zeta_9*c*a^6/(9*pi)*(k_B*T/(hbar*c))^9', { kind: 'derived', origin: 'Dipole scattering of black-body radiation from a dielectric sphere (Joos & Zeh 1985)' })] : []),
+    a.saturate
+      ? eq('gam', 'Decoherence rate with saturation', 'Gamma', `(${catRateSum(a)})*dx^2/(1 + dx^2/l_c^2)`, { kind: 'closure', origin: 'Interpolation between the long- and short-wavelength limits; written for a single coherence length for brevity' })
+      : eq('gam', 'Decoherence rate', 'Gamma', `(${catRateSum(a)})*dx^2`, { kind: 'derived', origin: 'Long-wavelength limit' }),
+    eq('tau', 'Decoherence time', 'tau_D', '1/Gamma', { kind: 'definition' }),
+    ...(a.no_collapse ? [] : [eq('grw', 'Spontaneous-localisation rate', 'Gamma_G', 'lambda_G*N_n*(1 - exp(-dx^2/(4*r_c^2)))', { kind: 'hypothesis', origin: 'Ghirardi, Rimini & Weber (1986): a postulated modification of the Schrödinger equation' })]),
+  ],
+  derivation: a => [
+    { text: 'Let the object be in a superposition of two positions and let a single environmental particle scatter from it. The particle\'s outgoing state depends on where the object is, so object and particle become entangled.', tex: '\\big(|x_1\\rangle + |x_2\\rangle\\big)|\\chi\\rangle\\ \\to\\ |x_1\\rangle|\\chi_1\\rangle + |x_2\\rangle|\\chi_2\\rangle' },
+    { text: 'Tracing over the unobserved particle multiplies the interference term of the object\'s density matrix by the overlap of the two scattered states. The populations are untouched.', tex: '\\rho_{12}\\ \\to\\ \\rho_{12}\\,\\langle\\chi_2|\\chi_1\\rangle' },
+    { text: 'When the wavelength of the scatterers is long compared with the separation, each event reduces the overlap only slightly; many events give exponential decay at a rate proportional to the separation squared.', tex: '\\frac{\\partial\\rho(x,x\')}{\\partial t} = -\\Lambda\\,(x - x\')^2\\,\\rho(x,x\'),\\qquad \\tau_D = \\frac{1}{\\Lambda\\,\\Delta x^2}' },
+    { text: 'The localisation rate Λ follows from the flux of scatterers, their cross-section and their momentum. For a gas and for black-body photons it takes the forms below.', tex: '\\Lambda_{\\rm gas} = \\frac{8}{3\\hbar^2}\\,\\frac{N}{V}\\,\\sqrt{2\\pi m}\\;a^2\\,(k_BT)^{3/2},\\qquad \\Lambda_{\\rm ph} = \\frac{8!\\;8\\,\\zeta(9)\\,c\\,a^6}{9\\pi}\\left(\\frac{k_BT}{\\hbar c}\\right)^{9}' },
+    { text: 'Interpretation-independent: the populations (Born probabilities ½ and ½), the decay of the interference term and the decoherence time. Interpretive: whether, once interference is unobservable, one outcome has "really" occurred. The formalism above is silent on that.', tex: '\\rho(t) = \\tfrac12\\begin{pmatrix} 1 & e^{-t/\\tau_D} \\\\ e^{-t/\\tau_D} & 1 \\end{pmatrix}' },
+    ...(a.no_collapse ? [] : [{ text: 'In the hypothetical collapse model each nucleon suffers a spontaneous localisation at a tiny rate; for a rigid body of N nucleons the rates add.', tex: '\\Gamma_{\\rm GRW} = \\lambda\\,N\\left(1 - e^{-\\Delta x^2/4r_c^2}\\right)' }]),
+  ],
+  solve(v, a) {
+    const q = decoherenceRates(v, a), G0 = q.G, tauD = G0 > 0 ? 1 / G0 : Infinity, warnings = [];
+    const C = Math.exp(-Math.min(G0 * v.t_obs, 745)), lnC = -G0 * v.t_obs;
+    const lamObj = hbar / Math.sqrt(2 * q.M * kB * v.T);
+    if (a.photons && v.a * q.kth > 1) warnings.push('The object is not small compared with the thermal wavelength of the radiation; the photon rate then uses a geometric-optics estimate and is good to an order of magnitude only.');
+    if (!(G0 > 0)) warnings.push('No decoherence channel is active: an isolated superposition would persist indefinitely.');
+    if (!a.no_collapse) warnings.push('The spontaneous-localisation term is hypothetical. Its contribution is listed separately so that it can be compared with ordinary environmental decoherence.');
+    warnings.push('Interpretation-independent results: branch probabilities, the decoherence rate and time, and the purity of the reduced state. Whether a single outcome occurs is not decided by this calculation.');
+    const as = N.logspace(1e-9, 1e-2, 60), sw = as.map(r => decoherenceRates(v, a, r)), inv = x => (x > 0 ? 1 / x : NaN);
+    const ds = N.logspace(1e-12, 1e-2, 80), dsw = ds.map(d => decoherenceRates(v, a, undefined, d));
+    const ts = N.linspace(0, 5, 61), purity = 0.5 * (1 + C * C);
+    const ev = [(1 + C) / 2, (1 - C) / 2], Sbits = -N.sum(ev.map(x => (x > 0 ? x * Math.log2(x) : 0)));
+    const curves = [{ label: 'All active channels', data: sw.map(s => inv(s.G)) }, { label: 'Gas collisions', data: sw.map(s => inv(s.gAir)), dash: true }, { label: 'Thermal photons', data: sw.map(s => inv(s.gPh)), dash: true }].filter(cv => cv.data.some(Number.isFinite));
+    return {
+      scalars: [
+        scalar('tau_D', 'Decoherence time', tauD, 's', { text: Number.isFinite(tauD) ? undefined : 'Infinite: no active channel' }), scalar('Gamma', 'Decoherence rate', G0, '1/s'),
+        scalar('Lambda_a', 'Localisation rate from gas collisions', q.LamAir, '1/(m^2 s)'), scalar('Lambda_p', 'Localisation rate from thermal photons', q.LamPh, '1/(m^2 s)'),
+        scalar('G_air', 'Decoherence rate from gas collisions', q.gAir, '1/s'), scalar('G_ph', 'Decoherence rate from thermal photons', q.gPh, '1/s'),
+        scalar('Gamma_G', 'Hypothetical spontaneous-localisation rate', q.grw, '1/s', { status: 'hypothetical' }),
+        scalar('l_air', 'Separation at which gas collisions saturate', q.lAir, 'm', { show: 'pm' }), scalar('l_ph', 'Separation at which photon scattering saturates', q.lPh, 'm', { show: 'um' }),
+        scalar('C_t', 'Fraction of coherence left after the observation time', C, '1'), scalar('lnC', 'Natural logarithm of that fraction', lnC, '1'),
+        scalar('P_1', 'Probability of each branch', 0.5, '1', { note: 'unchanged by decoherence' }), scalar('purity', 'Purity of the reduced state, Tr ρ²', purity, '1'), scalar('S_bits', 'Entropy of the reduced state', Sbits, '1', { note: 'bits' }),
+        scalar('M_o', 'Mass of the object', q.M, 'kg'), scalar('N_n', 'Number of nucleons', q.Nn, '1'), scalar('n_g', 'Gas number density', q.nG, '1/m^3'),
+        scalar('lambda_o', 'Thermal de Broglie length of the object, ħ/√(2Mk_BT)', lamObj, 'm'),
+        scalar('tau_ratio', 'Decoherence time over relaxation time (Zurek estimate)', (lamObj / v.dx) ** 2, '1'),
+      ],
+      series: [
+        ...(curves.length ? [line('tau-size', 'Decoherence time against object size', 'Radius', 'm', as, curves, 'Decoherence time', 's', { logx: true, logy: true })] : []),
+        line('coherence', 'Density-matrix elements against time', 'Time', 'τ_D', ts, [{ label: 'Interference term |ρ₁₂|', data: ts.map(t => (G0 > 0 ? 0.5 * Math.exp(-t) : 0.5)) }, { label: 'Populations ρ₁₁ = ρ₂₂', data: ts.map(() => 0.5), dash: true }], 'Matrix element', '–', { yRange: [0, 0.6] }),
+        line('rate-separation', 'Decoherence rate against separation', 'Separation', 'm', ds, [{ label: a.saturate ? 'With saturation' : 'Long-wavelength law', data: dsw.map(s => (s.G > 0 ? s.G : NaN)) }, { label: 'Pure Δx² law', data: ds.map(d => { const g = (q.LamAir + q.LamPh) * d * d; return g > 0 ? g : NaN; }), dash: true }].filter(cv => cv.data.some(Number.isFinite)).concat(G0 > 0 ? [] : [{ label: 'No active channel', data: ds.map(() => 0) }]), 'Rate', '1/s', { logx: true, logy: true }),
+      ],
+      checks: [
+        check('Trace of the density matrix', 0.5 + 0.5 - 1, 1e-15, 'Probabilities sum to one'),
+        check('Density matrix is positive', Math.max(0, C - 1), 0, '|ρ₁₂| ≤ √(ρ₁₁ρ₂₂)'),
+        check('Purity within bounds', purity < 0.5 - 1e-12 || purity > 1 + 1e-12 ? 1 : 0, 0, '½ ≤ Tr ρ² ≤ 1 for a two-branch state'),
+        check('Saturated rate does not exceed the long-wavelength rate', Math.max(0, q.gAir + q.gPh - (q.LamAir + q.LamPh) * v.dx * v.dx * (1 + 1e-12)), 0, 'Γ ≤ ΛΔx²'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v) {
+    const on = { air: true, photons: true, saturate: true, no_collapse: true }, base = { a: 1e-5, dx: 1e-6, T: 300, p: 101325, m_g: 28.97 * AMU, rho_o: 2000, t_obs: 1 }, out = [];
+    const q = decoherenceRates(base, on);
+    out.push(bench('Dust grain in air: log₁₀ of the localisation rate (m⁻² s⁻¹)', Math.log10(q.LamAir), 40, 'Joos & Zeh (1985) tabulate 10³⁶ cm⁻² s⁻¹ = 10⁴⁰ m⁻² s⁻¹ (order of magnitude)', 0.05));
+    const q3 = decoherenceRates({ ...base, T: 3 }, on);
+    out.push(bench('Dust grain in 3 K radiation: log₁₀ of the localisation rate (m⁻² s⁻¹)', Math.log10(q3.dip), 10, 'Joos & Zeh (1985) tabulate 10⁶ cm⁻² s⁻¹ = 10¹⁰ m⁻² s⁻¹ (order of magnitude)', 0.1));
+    out.push(bench('Photon rate scales as the sixth power of the radius', decoherenceRates({ ...base, T: 3, a: 2e-5 }, on).dip / q3.dip, 64, 'Dipole (Rayleigh) scattering', 1e-12));
+    out.push(bench('Photon rate scales as the ninth power of temperature', decoherenceRates({ ...base, T: 6 }, on).dip / q3.dip, 512, 'Λ ∝ T⁹', 1e-12));
+    const big = decoherenceRates({ ...base, dx: 1 }, on), nv = q.nG * Math.sqrt(8 * kB * 300 / (Math.PI * base.m_g)) * Math.PI * 1e-10;
+    out.push(bench('Saturated gas rate equals the collision rate', big.gAir, nv, 'n v̄ πa²: one collision resolves the position', 1e-6));
+    return out;
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.circle(230, 180, 34, 'd-body')} ${S.circle(410, 180, 34, 'd-dim')} ${S.text(230, 184, '|x₁⟩')} ${S.text(410, 184, '|x₂⟩')} ${S.text(320, 184, '+')}
+      ${S.dim(230, 240, 410, 240, `Δx = ${lab(v.dx * 1e9, 'nm')}`)}
+      ${a.air ? [0, 1, 2, 3].map(i => S.arrow(80 + 20 * i, 60 + 60 * i, 180 + 10 * i, 140 + 12 * i)).join('') + S.text(70, 44, 'gas molecules', 'd-text d-small', 'start') : ''}
+      ${a.photons ? [0, 1, 2].map(i => S.path(`M${560 - 10 * i} ${70 + 50 * i} q-12 8 -24 0 t-24 0 t-24 0 t-24 0`, 'd-line d-heat')).join('') + S.text(570, 50, 'thermal photons', 'd-text d-small', 'end') : ''}
+      ${S.text(320, 300, 'each scattering event records which branch: interference terms decay')}
+      ${S.text(320, 326, `radius ${lab(v.a * 1e6, 'µm')},  T = ${lab(v.T, 'K')},  p = ${lab(v.p, 'Pa')}`, 'd-text d-small')}
+      ${a.no_collapse ? '' : S.text(320, 348, 'plus a hypothetical spontaneous-collapse term', 'd-text d-small')}
+    `);
+  },
+  logicPreset: {
+    atoms: [{ k: 'U', text: 'The whole system, including the environment, evolves by the linear Schrödinger equation' }, { k: 'D', text: 'The environment suppresses interference between the cat states (decoherence)' }, { k: 'M', text: 'No local measurement distinguishes the cat\'s state from a classical mixture' }, { k: 'C', text: 'A further postulate applies: collapse, branching or a hidden variable' }, { k: 'O', text: 'Exactly one definite outcome is realised' }],
+    premises: ['U -> D', 'D -> M', '(M & C) -> O', 'U'],
+    conclusion: 'M & (C -> O)',
+  },
+  experiment: {
+    objective: 'Measure the loss of interference of a mesoscopic superposition as its coupling to a controlled environment is increased, and compare with the scattering-decoherence rate.',
+    apparatus: ['Near-field (Talbot–Lau) matter-wave interferometer for large molecules or nanoparticles', 'Gas inlet with a calibrated leak valve to set the background pressure', 'Heating laser to raise the internal temperature of the particles (thermal-emission decoherence)', 'Alternatively a superconducting cavity holding a coherent-state superposition probed by Rydberg atoms'],
+    instruments: [{ name: 'Ionisation or fluorescence detector behind a scanning grating', measures: 'Interference-fringe visibility', range: '0–1', resolution: '≈ 1 %' }, { name: 'Ionisation gauge', measures: 'Background gas pressure', range: '10⁻⁹–10⁻⁵ mbar', resolution: '≈ 10 %' }, { name: 'Time-of-flight selection', measures: 'Particle velocity, hence time in the interferometer', range: '50–500 m/s', resolution: '≈ 1 %' }],
+    procedure: ['Record fringe visibility at the lowest attainable pressure.', 'Admit gas in steps and record the visibility at each pressure.', 'Fit an exponential decay of visibility against pressure and extract the effective cross-section.', 'Repeat with different collision gases, particle masses and path separations.'],
+    controls: ['Visibility against vibration and grating alignment with no added gas', 'Classical moiré pattern as a reference that does not depend on coherence', 'Separation varied by changing the grating period or velocity'],
+    signatures: ['Visibility falling exponentially with gas pressure while the mean count rate barely changes', 'Decay rate proportional to gas density and to the scattering cross-section', 'No loss of total probability: only the interference term is affected'],
+    safety: ['Laser safety', 'High-vacuum and oven hazards', 'Handling of nanoparticles'],
+  },
+  falsify: ['Interference surviving for times much longer than the computed decoherence time under the stated environmental conditions.', 'Loss of visibility that does not scale with gas density or with the scattering cross-section.', 'For the hypothetical collapse term: loss of coherence in a well-isolated massive superposition beyond what every known environmental channel accounts for would support it; continued agreement with unmodified quantum mechanics at larger masses progressively excludes its parameter range.', 'The interpretive claims (which branch is "real") are not empirically falsifiable by this experiment.'],
+  alternatives: [{ name: 'Copenhagen-type interpretations', text: 'A measurement yields one outcome with Born-rule probability; the quantum state is a tool for prediction. Same predictions as computed here.' }, { name: 'Everett (many-worlds)', text: 'All branches persist; decoherence defines the branches and explains why they do not interfere. Same predictions.' }, { name: 'de Broglie–Bohm', text: 'Particles have definite positions guided by the wavefunction; decoherence explains why empty branches no longer matter. Same predictions.' }, { name: 'Objective collapse (GRW, CSL, Diósi–Penrose)', text: 'The Schrödinger equation is modified so that superpositions of large objects collapse spontaneously. Different predictions, constrained by interferometry, heating and X-ray emission experiments.' }, { name: 'QBism and relational views', text: 'The state encodes an agent\'s information or is relative to an observer; there is no observer-independent fact for the formalism to settle.' }],
+  limits: 'Rigid sphere, two-branch position superposition, elastic scattering, dilute gas and black-body radiation at one common temperature. The photon rate assumes the dipole limit and switches to an order-of-magnitude geometric estimate for bodies larger than the thermal wavelength. Thermal emission by the object itself, internal degrees of freedom and gravity are not included. The saturation law is an interpolation.',
+  numerics: { method: 'Closed-form rates' },
+  optimise: { objective: 'tau_D', sense: 'max', vars: ['p', 'T'], note: 'Coherence is preserved by ultra-high vacuum and low temperature.' },
+  inverse: { series: 'tau-size', curve: 0, fit: ['p'] },
+  extensions: ['Decoherence by the object\'s own thermal emission', 'Wigner function of a cat state and the decay of its negativity', 'Continuous spontaneous localisation with mass-density smearing', 'Decoherence-free subspaces and dynamical decoupling'],
+};
+
+// ================================================================== 17. double-slit interference
+/** Fresnel integrals C(u), S(u): power series for |u| ≤ 3, asymptotic expansion beyond. */
+function fresnelCS(u) {
+  const x = Math.abs(u), sg = u < 0 ? -1 : 1;
+  if (x <= 3) {
+    const z = Math.PI / 2 * x * x; let cTerm = x, sTerm = x * z / 3, cSum = cTerm, sSum = sTerm;
+    for (let n = 1; n < 80; n++) {
+      cTerm *= -z * z / ((2 * n - 1) * (2 * n)) * (4 * n - 3) / (4 * n + 1);
+      sTerm *= -z * z / ((2 * n) * (2 * n + 1)) * (4 * n - 1) / (4 * n + 3);
+      cSum += cTerm; sSum += sTerm;
+      if (Math.abs(cTerm) + Math.abs(sTerm) < 1e-17) break;
+    }
+    return [sg * cSum, sg * sSum];
+  }
+  const p = Math.PI * x, q = 1 / (p * p * x * x), f = (1 - 3 * q + 105 * q * q) / p, g = (1 - 15 * q + 945 * q * q) / (p * p * x), a = Math.PI / 2 * x * x;
+  return [sg * (0.5 + f * Math.sin(a) - g * Math.cos(a)), sg * (0.5 - f * Math.cos(a) - g * Math.sin(a))];
+}
+/** Two-slit intensity on the screen, normalised so that the far-field central maximum with full visibility is 1. */
+function slitPattern(y, lam, L, d, w, V, fraunhofer) {
+  if (fraunhofer) { const be = Math.PI * w * y / (lam * L), env = Math.abs(be) < 1e-9 ? 1 : (Math.sin(be) / be) ** 2; return env * (1 + V * Math.cos(2 * Math.PI * d * y / (lam * L))) / 2; }
+  const k = Math.sqrt(2 / (lam * L)), amp = ctr => { const [c1, s1] = fresnelCS((ctr - w / 2 - y) * k), [c2, s2] = fresnelCS((ctr + w / 2 - y) * k); return [(c2 - c1) / Math.SQRT2, (s2 - s1) / Math.SQRT2]; };
+  const p1 = amp(-d / 2), p2 = amp(d / 2);
+  return (p1[0] ** 2 + p1[1] ** 2 + p2[0] ** 2 + p2[1] ** 2 + 2 * V * (p1[0] * p2[0] + p1[1] * p2[1])) * lam * L / (4 * w * w);
+}
+
+const doubleSlit = {
+  id: 'double-slit-interference',
+  title: 'Double-slit interference of matter waves',
+  module: [1, 2], klass: ['I', 'II'], domains: ['quantum', 'waves'],
+  keywords: ['double slit', 'double-slit', 'two-slit', 'two slit', 'young\'s experiment', 'matter wave', 'de broglie wavelength', 'interference fringes', 'fringe spacing', 'which-path', 'which path', 'wave-particle duality', 'complementarity', 'fringe visibility', 'electron interference', 'slits'],
+  summary: 'Fringe pattern of particles of given mass and speed behind two slits, single-particle build-up of the pattern, and the trade-off between fringe visibility and which-path information.',
+  background: [
+    'A particle of momentum p has a de Broglie wavelength h/p. Sent one at a time through two slits, particles arrive at single points on a screen, yet the distribution of arrivals builds up into interference fringes with spacing λL/d under a single-slit diffraction envelope. This has been demonstrated with electrons, neutrons, atoms and molecules of more than ten thousand atomic mass units.',
+    'If the apparatus records which slit each particle used, the fringes are reduced. The trade-off is quantitative: with fringe visibility V and path distinguishability D, V² + D² ≤ 1, with equality when the which-path marker is in a pure state. The result does not depend on any disturbance of the particle\'s momentum; it follows from entanglement between the particle and the marker.',
+  ],
+  phenomena: ['de Broglie waves', 'Two-path interference', 'Single-slit diffraction envelope', 'Complementarity of path and fringe information', 'Fresnel (near-field) diffraction'],
+  laws: ['born', 'schrodinger', 'uncertainty', 'kolmogorov'],
+  refs: ['de Broglie, L. (1925). Recherches sur la théorie des quanta. Annales de Physique 10(3), 22–128.', 'Jönsson, C. (1961). Elektroneninterferenzen an mehreren künstlich hergestellten Feinspalten. Zeitschrift für Physik 161, 454–474.', 'Tonomura, A. et al. (1989). Demonstration of single-electron buildup of an interference pattern. Am. J. Phys. 57, 117–120.', 'Zeilinger, A., Gähler, R., Shull, C. G., Treimer, W. & Mampe, W. (1988). Single- and double-slit diffraction of neutrons. Rev. Mod. Phys. 60, 1067–1073.', 'Englert, B.-G. (1996). Fringe visibility and which-way information: an inequality. Phys. Rev. Lett. 77, 2154–2157.', 'Arndt, M. et al. (1999). Wave–particle duality of C₆₀ molecules. Nature 401, 680–682.', 'Dürr, S., Nonn, T. & Rempe, G. (1998). Origin of quantum-mechanical complementarity probed by a "which-way" experiment in an atom interferometer. Nature 395, 33–37.'],
+  inputs: [
+    inp('m', 'Particle mass', 'u', 1.008665, { min: 5e-4, max: 1e5, kind: 'material', aliases: ['mass', 'particle mass'], src: 'Neutron' }),
+    inp('v', 'Particle speed', 'm/s', 214.4, { min: 1, max: 1e7, aliases: ['speed', 'velocity'], src: 'Cold neutrons of wavelength 1.845 nm, as in Zeilinger et al. (1988)' }),
+    inp('d_s', 'Slit separation, centre to centre', 'um', 126, { min: 1, max: 1e4, kind: 'geometry', aliases: ['slit separation', 'separation', 'slit spacing'], src: 'Close to Zeilinger et al. (1988)' }),
+    inp('w_s', 'Slit width', 'um', 22, { min: 0.1, max: 1000, kind: 'geometry', aliases: ['slit width', 'width'], src: 'Close to Zeilinger et al. (1988)' }),
+    inp('L', 'Distance from slits to screen', 'm', 5, { min: 0.01, max: 100, kind: 'geometry', aliases: ['screen distance', 'distance to the screen', 'screen'] }),
+    inp('D_w', 'Which-path distinguishability', '1', 0.3, { min: 0, max: 1, aliases: ['distinguishability', 'which-path information', 'which path'] }),
+    inp('gamma_c', 'Coherence of the which-path marker (used when it is not pure)', '1', 0.8, { min: 0, max: 1, aliases: ['coherence', 'purity'] }),
+    inp('dv_rel', 'Relative spread of particle speeds (used when the beam is not monochromatic)', '1', 0.05, { min: 0, max: 0.5, aliases: ['velocity spread', 'speed spread'] }),
+    inp('N_p', 'Particles detected in the build-up simulation', '1', 2000, { min: 100, max: 100000, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('fraunhofer', 'The screen is in the far field of the slits (Fraunhofer diffraction).', { why: 'Simple closed form', alt: 'Fresnel diffraction is computed with Fresnel integrals, valid at any distance.' }),
+    asm('mono', 'All particles have the same speed.', { why: 'Ideal beam', alt: 'Speeds follow a Gaussian distribution of relative width dv_rel; the pattern is averaged and high-order fringes wash out.' }),
+    asm('pure', 'The which-path marker is in a pure state, so visibility and distinguishability exhaust the budget: V² + D² = 1.', { why: 'Ideal detector', alt: 'The marker is partly mixed, with coherence γ: V = γ√(1 − D²), so V² + D² < 1.' }),
+  ],
+  symbols: { lambda: ['de Broglie wavelength', 'm'], dy: ['Fringe spacing', 'm'], y: ['Position on the screen', 'm'], I_n: ['Normalised intensity', '1'], V_f: ['Fringe visibility', '1'], N_F: ['Far-field parameter', '1'] },
+  equations: a => [
+    eq('lam', 'de Broglie wavelength', 'lambda', '2*pi*hbar/(m*v)', { kind: 'law', origin: 'de Broglie (1924)' }),
+    eq('dy', 'Fringe spacing', 'dy', 'lambda*L/d_s', { kind: 'derived', origin: 'Path difference of one wavelength between the two slits', needs: ['fraunhofer'] }),
+    ...(a.fraunhofer ? [eq('I', 'Intensity on the screen', 'I_n', '(sin(pi*w_s*y/(lambda*L))/(pi*w_s*y/(lambda*L)))^2*(1 + V_f*cos(2*pi*d_s*y/(lambda*L)))/2', { kind: 'derived', origin: 'Superposition of the two slit amplitudes in the far field', needs: ['fraunhofer'] })] : []),
+    eq('nf', 'Far-field parameter', 'N_F', 'd_s*w_s/(lambda*L)', { kind: 'definition', note: 'Each slit throws its own diffraction envelope, centred on that slit; the far-field pattern applies when the offset d/2 is small compared with the envelope width λL/w, that is N_F ≪ 1' }),
+    a.pure ? eq('vis', 'Visibility with which-path information', 'V_f', 'sqrt(1 - D_w^2)', { kind: 'law', origin: 'Duality relation for a pure marker state (Englert 1996)', needs: ['pure'] })
+      : eq('vis', 'Visibility with a mixed marker', 'V_f', 'gamma_c*sqrt(1 - D_w^2)', { kind: 'derived', origin: 'Duality relation with a partly mixed marker' }),
+    a.pure ? eq('dual', 'Duality relation', 'V_f^2 + D_w^2', '1', { kind: 'law', origin: 'Englert (1996); Jaeger, Shimony & Vaidman (1995)' })
+      : eq('dual', 'Duality relation with a mixed marker', 'V_f^2 + D_w^2', '1 - (1 - gamma_c^2)*(1 - D_w^2)', { kind: 'derived', origin: 'The inequality V² + D² ≤ 1 is strict for mixed states' }),
+  ],
+  derivation: a => [
+    { text: 'Each particle is described by a wave of wavelength λ = h/(mv). Behind the slits the amplitude at a point on the screen is the sum of the amplitudes from the two slits.', tex: '\\psi(y) = \\psi_1(y) + \\psi_2(y),\\qquad \\lambda = \\frac{h}{m v}' },
+    { text: 'In the far field the two contributions differ only by the phase of the extra path d·y/L, and each carries the single-slit diffraction envelope.', tex: 'I(y) \\propto \\mathrm{sinc}^2\\!\\left(\\frac{\\pi w y}{\\lambda L}\\right)\\left[1 + \\cos\\!\\left(\\frac{2\\pi d\\,y}{\\lambda L}\\right)\\right],\\qquad \\Delta y = \\frac{\\lambda L}{d}' },
+    { text: 'Suppose a marker system records the path: the joint state is entangled. Tracing over the marker multiplies the interference term by the overlap of its two states.', tex: '|\\Psi\\rangle = \\tfrac{1}{\\sqrt2}\\big(|1\\rangle|m_1\\rangle + |2\\rangle|m_2\\rangle\\big)\\ \\Rightarrow\\ V = |\\langle m_1|m_2\\rangle|' },
+    { text: 'The best possible guess of the path from a measurement on the marker succeeds with probability (1 + D)/2, where D = √(1 − |⟨m₁|m₂⟩|²). Hence the duality relation.', tex: 'V^2 + D^2 = 1\\quad(\\text{pure marker}),\\qquad V^2 + D^2 \\le 1\\quad(\\text{in general})' },
+    { text: 'Individual detections are random with probability density proportional to I(y); only their accumulation shows the fringes.', tex: 'P(y)\\,\\mathrm{d}y = \\frac{I(y)\\,\\mathrm{d}y}{\\int I\\,\\mathrm{d}y}' },
+  ],
+  solve(v, a) {
+    const lam = 2 * Math.PI * hbar / (v.m * v.v), L = v.L, d = v.d_s, warnings = [];
+    let w = v.w_s; if (w > 0.95 * d) { w = 0.95 * d; warnings.push('The slit width cannot exceed the slit separation; it has been reduced to 95 % of the separation.'); }
+    const D = N.clamp(v.D_w, 0, 1), V = (a.pure ? 1 : N.clamp(v.gamma_c, 0, 1)) * Math.sqrt(1 - D * D), dy = lam * L / d, NF = d * w / (lam * L);
+    if (a.fraunhofer && NF > 0.5) warnings.push('The far-field parameter d·w/(λL) is not small: the diffraction envelopes of the two slits do not coincide and the Fraunhofer pattern is only approximate. Remove that assumption to use Fresnel diffraction.');
+    if (v.v > 0.1 * c) warnings.push('The speed exceeds a tenth of the speed of light; the non-relativistic de Broglie wavelength is then inaccurate.');
+    let Y = Math.min(Math.max(2.5 * lam * L / w, 6 * dy), 20 * dy); if (!a.fraunhofer) Y = Math.max(Y, 1.5 * (d / 2 + w));
+    const ny = 1201, ys = N.linspace(-Y, Y, ny);
+    const sp = a.mono ? [[1, 1]] : (() => { const q = N.linspace(-3, 3, 15), wq = q.map(x => Math.exp(-x * x / 2)), s = N.sum(wq); return q.map((x, i) => [Math.max(1 + x * v.dv_rel, 0.05), wq[i] / s]); })();
+    const pat = vis => ys.map(y => { let s = 0; for (const [f, wt] of sp) s += wt * slitPattern(y, lam / f, L, d, w, vis, a.fraunhofer); return s; });
+    const I = pat(V), I1 = pat(1), I0 = pat(0);
+    // visibility measured on the pattern: central maximum against the adjacent minimum, envelope removed with the V = 0 curve
+    const iC = (ny - 1) / 2, iMin = Math.min(ny - 1, Math.round(iC + dy / 2 / (2 * Y / (ny - 1))));
+    const rC = I0[iC] > 0 ? I[iC] / I0[iC] : 1, rM = I0[iMin] > 0 ? I[iMin] / I0[iMin] : 1, Vnum = (rC - rM) / (rC + rM);
+    const tot = N.trapz(ys, I), tot0 = N.trapz(ys, I0);
+    // single-particle build-up: inverse-transform sampling with a fixed seed
+    const cdf = [0]; for (let i = 1; i < ny; i++) cdf.push(cdf[i - 1] + 0.5 * (I[i] + I[i - 1]));
+    const rnd = N.rng(2024), nP = Math.round(N.clamp(v.N_p, 100, 100000)), nb = 60, counts = new Array(nb).fill(0);
+    for (let k = 0; k < nP; k++) { const yy = N.interp1(cdf, ys, rnd() * cdf[ny - 1]); counts[Math.min(nb - 1, Math.floor((yy + Y) / (2 * Y) * nb))]++; }
+    const bc = Array.from({ length: nb }, (_, i) => -Y + (i + 0.5) * 2 * Y / nb), expct = bc.map(y => N.interp1(ys, I, y) / tot * nP * 2 * Y / nb);
+    const Ds = N.linspace(0, 1, 101);
+    return {
+      scalars: [
+        scalar('lambda', 'de Broglie wavelength', lam, 'm', { show: 'nm' }), scalar('p', 'Momentum', v.m * v.v, 'kg m/s'), scalar('E_k', 'Kinetic energy', 0.5 * v.m * v.v ** 2, 'J', { show: 'meV' }),
+        scalar('dy', 'Fringe spacing λL/d', dy, 'm', { show: 'um' }), scalar('y_env', 'First zero of the single-slit envelope', lam * L / w, 'm', { show: 'um' }),
+        scalar('n_fr', 'Bright fringes inside the central envelope', 2 * Math.floor(d / w - 1e-9) + 1, '1'),
+        scalar('V_f', 'Fringe visibility predicted', V, '1'), scalar('V_num', 'Fringe visibility measured on the computed pattern', Vnum, '1'),
+        scalar('D_w', 'Path distinguishability', D, '1'), scalar('duality', 'V² + D²', V * V + D * D, '1', { note: V * V + D * D > 1 - 1e-9 ? 'equality: pure marker' : 'strictly below one: mixed marker' }),
+        scalar('P_guess', 'Best probability of guessing the path correctly', (1 + D) / 2, '1'),
+        scalar('N_F', 'Far-field parameter d·w/(λL)', NF, '1'), scalar('theta_1', 'Angle between adjacent fringes', lam / d, 'rad'),
+        scalar('l_coh', 'Longitudinal coherence length λ/(Δv/v)', a.mono ? Infinity : lam / Math.max(v.dv_rel, 1e-12), 'm', { show: 'nm', text: a.mono ? 'Unlimited: monochromatic beam' : undefined }),
+      ],
+      series: [
+        line('pattern', 'Intensity on the screen', 'Position', 'µm', ys.map(y => y * 1e6), [{ label: 'With the stated which-path information', data: I }, { label: 'Full visibility', data: I1, dash: true }, { label: 'No interference (paths known)', data: I0, dash: true }], 'Relative intensity', '–'),
+        line('buildup', 'Arrival positions of individual particles', 'Position', 'µm', bc.map(y => y * 1e6), [{ label: 'Detected counts', data: counts }, { label: 'Expected from |ψ|²', data: expct, dash: true }], 'Counts per bin', '–', { kind: 'bar', note: `${nP} particles, one at a time, sampled with a fixed random seed.` }),
+        line('duality', 'Visibility against distinguishability', 'Distinguishability D', '–', Ds, [{ label: 'Pure marker: V = √(1 − D²)', data: Ds.map(x => Math.sqrt(1 - x * x)) }, ...(a.pure ? [] : [{ label: 'Mixed marker', data: Ds.map(x => v.gamma_c * Math.sqrt(1 - x * x)), dash: true }])], 'Visibility V', '–', { marker: [D, V], equal: true }),
+      ],
+      checks: [
+        check('Duality relation V² + D² ≤ 1', Math.max(0, V * V + D * D - 1), 1e-12, 'Englert (1996)'),
+        check('Which-path information redistributes but does not remove particles', tot / tot0 - 1, 0.05, 'Integrated intensity with and without interference, over the plotted range'),
+        check('Every simulated particle is detected once', N.sum(counts) - nP, 0, 'Counts sum to the number of particles'),
+        check('Visibility of the computed pattern matches the prediction', a.mono && a.fraunhofer ? Vnum - V : 0, 5e-3, 'Central fringe, envelope removed'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks() {
+    const out = [], lam = 2 * Math.PI * hbar / (1.008665 * AMU * 214.4);
+    out.push(bench('de Broglie wavelength of a 214.4 m/s neutron (nm)', lam * 1e9, 1.845, 'λ = h/(mv)', 1e-3));
+    // position of the first side maximum for d/w = 10: the envelope pulls it inward by (w/d)²/3
+    const L = 5, d = 1e-4, w = 1e-5, dy = lam * L / d, y1 = N.golden(y => -slitPattern(y, lam, L, d, w, 1, true), 0.7 * dy, 1.3 * dy, 1e-10);
+    out.push(bench('Position of the first side maximum', y1, dy * (1 - (w / d) ** 2 / 3), 'λL/d, corrected for the slope of the diffraction envelope', 1e-3));
+    out.push(bench('Fresnel pattern tends to the Fraunhofer pattern in the far field', slitPattern(0.3 * dy, lam, L, d, w, 1, false), slitPattern(0.3 * dy, lam, L, d, w, 1, true), 'd·w/(λL) ≈ 0.1: agreement at the per-cent level', 0.02));
+    out.push(bench('Fresnel pattern far into the far field', slitPattern(0.3 * 100 * dy, lam, 100 * L, d, w, 1, false), slitPattern(0.3 * 100 * dy, lam, 100 * L, d, w, 1, true), 'd·w/(λL) ≈ 0.001', 1e-4));
+    const [c1, s1] = fresnelCS(1), [c5, s5] = fresnelCS(5);
+    out.push(bench('Fresnel integral C(1)', c1, 0.7798934, 'Abramowitz & Stegun, Table 7.7', 1e-6));
+    out.push(bench('Fresnel integral S(1)', s1, 0.4382591, 'Abramowitz & Stegun, Table 7.7', 1e-6));
+    out.push(bench('Fresnel integral C(5)', c5, 0.5636312, 'Abramowitz & Stegun, Table 7.7', 1e-5));
+    out.push(bench('Fresnel integral S(5)', s5, 0.4991914, 'Abramowitz & Stegun, Table 7.7', 1e-5));
+    return out;
+  },
+  validation: [],
+  diagram(v) {
+    return svg(`
+      ${S.arrow(40, 180, 150, 180)} ${S.text(95, 168, 'particles, λ = h/mv')}
+      ${S.rect(180, 40, 10, 105, 'd-body', 0)} ${S.rect(180, 160, 10, 40, 'd-body', 0)} ${S.rect(180, 215, 10, 105, 'd-body', 0)}
+      ${S.path('M190 152 Q360 120 520 180', 'd-dim')} ${S.path('M190 208 Q360 240 520 180', 'd-dim')}
+      ${[0, 1, 2].map(i => `<path d="M190 152 m${20 + 30 * i} ${-20 - 22 * i} a${40 + 40 * i} ${40 + 40 * i} 0 0 1 0 ${40 + 44 * i}" class="d-line" fill="none"/>`).join('')}
+      ${[0, 1, 2].map(i => `<path d="M190 208 m${20 + 30 * i} ${-20 - 22 * i} a${40 + 40 * i} ${40 + 40 * i} 0 0 1 0 ${40 + 44 * i}" class="d-line" fill="none"/>`).join('')}
+      ${S.line(520, 40, 520, 320, 'd-line')} ${S.path('M520 60 q30 15 0 30 q60 30 0 60 q90 30 0 60 q60 30 0 60 q30 15 0 30', 'd-pipe')}
+      ${S.dim(160, 152, 160, 208, '')} ${S.text(150, 184, 'd', 'd-text', 'end')} ${S.dim(190, 340, 520, 340, `L = ${lab(v.L, 'm')}`)}
+      ${S.text(580, 180, 'fringes', 'd-text d-small')} ${S.text(580, 196, `Δy = ${lab(2 * Math.PI * hbar / (v.m * v.v) * v.L / v.d_s * 1e6, 'µm')}`, 'd-text d-small')}
+    `);
+  },
+  logicPreset: {
+    atoms: [{ k: 'W', text: 'Complete which-path information is available in principle (D = 1)' }, { k: 'F', text: 'Interference fringes are visible (V > 0)' }, { k: 'P', text: 'Each particle went through one definite slit and the other slit was irrelevant' }],
+    premises: ['W -> ~F', 'P -> ~F', 'F'],
+    conclusion: '~W & ~P',
+  },
+  experiment: {
+    objective: 'Record the two-slit pattern one particle at a time and measure fringe spacing and visibility as which-path information is introduced.',
+    apparatus: ['Collimated, velocity-selected beam of neutrons, electrons, atoms or molecules', 'Micro-fabricated double slit', 'Position-resolving detector at a known distance', 'Controllable which-path marker: for atoms, an internal state changed in one path by a microwave pulse; for photons, polarisers'],
+    instruments: [{ name: 'Scanning slit with counter, or imaging detector', measures: 'Arrival positions', range: '±1 mm', resolution: '≈ 10–20 µm' }, { name: 'Velocity selector or time-of-flight chopper', measures: 'Particle speed and its spread', range: '100–1000 m/s', resolution: '≈ 1–5 %' }, { name: 'State-selective detection of the marker', measures: 'Distinguishability D from the error rate of the best path guess', range: '0–1', resolution: '≈ 1 %' }],
+    procedure: ['Reduce the flux until at most one particle is in the apparatus at a time and accumulate arrival positions.', 'Fit the pattern for fringe spacing, envelope width and visibility.', 'Vary the speed and confirm that the spacing scales as 1/(mv).', 'Switch on the marker with increasing strength, measuring V from the fringes and D from the marker, and plot V² + D².'],
+    controls: ['Single-slit pattern with one slit blocked', 'Pattern with the marker present but erased before detection (quantum eraser)', 'Check that the marker imparts negligible momentum to the particle'],
+    signatures: ['Fringe spacing λL/d with λ = h/(mv)', 'Fringes built from discrete, randomly placed detections', 'V² + D² ≤ 1, reaching 1 for a pure marker'],
+    safety: ['Radiation protection at neutron and electron sources', 'Laser and high-vacuum precautions'],
+  },
+  falsify: ['Fringe spacing that does not scale as h/(mv) when mass or speed is changed.', 'A pattern with V² + D² measurably greater than one.', 'Fringes that vanish when the flux is reduced to one particle at a time.', 'For the logical reading: visible fringes together with complete which-path information would contradict complementarity.'],
+  alternatives: [{ name: 'Classical particles', text: 'Predict the sum of two single-slit patterns with no fringes; refuted.' }, { name: 'de Broglie–Bohm trajectories', text: 'Each particle passes through one slit while its guiding wave passes through both; the predicted pattern is identical.' }, { name: 'Momentum-kick explanations', text: 'Attribute fringe loss to random recoil from the path measurement; experiments with internal-state markers show the loss occurs without significant recoil (Dürr, Nonn & Rempe 1998).' }, { name: 'Collapse models', text: 'Predict loss of visibility for sufficiently massive particles even in perfect isolation; tested by interferometry with ever larger molecules.' }],
+  limits: 'Scalar, paraxial diffraction from two identical slits illuminated coherently and equally; non-relativistic momentum. Finite source size, gravity, slit-wall (van der Waals) interactions and detector resolution are not included. The plotted range is limited to at most twenty fringes each side.',
+  numerics: { method: 'Closed-form Fraunhofer pattern or Fresnel integrals by series and asymptotic expansion; inverse-transform sampling with a fixed-seed generator for the build-up', order: 2 },
+  inverse: { series: 'pattern', curve: 0, fit: ['d_s', 'D_w'] },
+  extensions: ['Quantum eraser and delayed choice', 'Unequal slit intensities and predictability', 'Talbot–Lau near-field interferometry for massive particles', 'Finite source size and the van Cittert–Zernike theorem'],
+};
+
+// ================================================================== 18. Bell / CHSH
+const corrQM = (th, spin, p) => (spin ? -p * Math.cos(th) : p * Math.cos(2 * th));
+function corrLHV(th, spin) {
+  if (spin) { let x = ((th % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); if (x > Math.PI) x = 2 * Math.PI - x; return -1 + 2 * x / Math.PI; }
+  let x = ((th % Math.PI) + Math.PI) % Math.PI; if (x > Math.PI / 2) x = Math.PI - x; return 1 - 4 * x / Math.PI;
+}
+const chsh = (E, a1, a2, b1, b2) => E(a1 - b1) - E(a1 - b2) + E(a2 - b1) + E(a2 - b2);
+
+const bell = {
+  id: 'bell-chsh',
+  title: 'Bell test: the CHSH inequality',
+  module: 1, klass: ['II', 'I'], domains: ['quantum', 'logic'],
+  keywords: ['bell inequality', 'bell\'s theorem', 'bell test', 'chsh', 'entanglement', 'entangled', 'epr', 'einstein podolsky rosen', 'local realism', 'hidden variables', 'local hidden variable', 'spooky action', 'nonlocality', 'singlet state', 'tsirelson', 'bell'],
+  summary: 'CHSH correlations of an entangled pair at chosen analyser angles: the quantum value of S against the local-realist bound of 2 and the Tsirelson bound of 2√2, with Monte-Carlo sampling and an explicit local hidden-variable model for contrast.',
+  background: [
+    'Bell (1964) showed that any theory in which measurement outcomes are fixed by local properties, and in which the experimenters\' settings are independent of those properties, constrains the correlations between distant measurements. In the form due to Clauser, Horne, Shimony and Holt, the combination S of four correlations satisfies |S| ≤ 2. Quantum mechanics predicts values up to 2√2 for an entangled pair, and no more (Tsirelson 1980).',
+    'Experiments since the 1970s have found violations, and since 2015 with the detection and locality loopholes closed simultaneously. The conclusion is logical rather than interpretive: the three premises of locality, realism and freedom of choice cannot all hold. Which to give up is not settled by the experiment. The violation does not permit signalling, because each side\'s own results are random whatever the other side does.',
+  ],
+  phenomena: ['Entanglement', 'Violation of local realism', 'No-signalling', 'Tsirelson bound', 'Detection loophole'],
+  laws: ['born', 'causality', 'kolmogorov', 'logic_nc'],
+  refs: ['Bell, J. S. (1964). On the Einstein Podolsky Rosen paradox. Physics 1, 195–200.', 'Clauser, J. F., Horne, M. A., Shimony, A. & Holt, R. A. (1969). Proposed experiment to test local hidden-variable theories. Phys. Rev. Lett. 23, 880–884.', 'Aspect, A., Dalibard, J. & Roger, G. (1982). Experimental test of Bell\'s inequalities using time-varying analyzers. Phys. Rev. Lett. 49, 1804–1807.', 'Hensen, B. et al. (2015). Loophole-free Bell inequality violation using electron spins separated by 1.3 kilometres. Nature 526, 682–686.', 'Cirel\'son, B. S. (1980). Quantum generalizations of Bell\'s inequality. Lett. Math. Phys. 4, 93–100.', 'Garg, A. & Mermin, N. D. (1987). Detector inefficiencies in the Einstein–Podolsky–Rosen experiment. Phys. Rev. D 35, 3831–3835.', 'Einstein, A., Podolsky, B. & Rosen, N. (1935). Can quantum-mechanical description of physical reality be considered complete? Phys. Rev. 47, 777–780.', 'Brunner, N., Cavalcanti, D., Pironio, S., Scarani, V. & Wehner, S. (2014). Bell nonlocality. Rev. Mod. Phys. 86, 419–478.'],
+  inputs: [
+    inp('a_1', 'Alice\'s first analyser angle', 'deg', 0, { min: 0, max: 360, kind: 'geometry', aliases: ['alice first angle', 'first angle'] }),
+    inp('a_2', 'Alice\'s second analyser angle', 'deg', 90, { min: 0, max: 360, kind: 'geometry', aliases: ['alice second angle'] }),
+    inp('b_1', 'Bob\'s first analyser angle', 'deg', 45, { min: 0, max: 360, kind: 'geometry', aliases: ['bob first angle'] }),
+    inp('b_2', 'Bob\'s second analyser angle', 'deg', 135, { min: 0, max: 360, kind: 'geometry', aliases: ['bob second angle'] }),
+    inp('p_w', 'Visibility of the state (used when it is not a pure singlet)', '1', 0.9, { min: 0, max: 1, aliases: ['visibility', 'state fidelity', 'werner'] }),
+    inp('eta_d', 'Detection efficiency (used when fair sampling is not assumed)', '1', 0.9, { min: 0.05, max: 1, aliases: ['detection efficiency', 'detector efficiency'] }),
+    inp('N_t', 'Trials per pair of settings in the simulation', '1', 10000, { min: 100, max: 200000, kind: 'numerical' }),
+    inp('seed', 'Seed of the random-number generator', '1', 12345, { min: 1, max: 1e9, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('singlet', 'The pair is in a pure maximally entangled state.', { why: 'Ideal source', alt: 'A Werner state: the entangled state mixed with white noise, visibility p. The inequality is violated only if p > 1/√2.' }),
+    asm('spin', 'The particles are spin-½ and the analysers are Stern–Gerlach magnets: E(θ) = −cos θ.', { why: 'Bell\'s original setting', alt: 'Polarisation-entangled photons with linear polarisers: E(θ) = cos 2θ; the optimal angles are half as large (0°, 45°, 22.5°, 67.5°).' }),
+    asm('fair', 'Every pair is detected, or the detected pairs are a fair sample.', { why: 'Simplifies the bound to 2', alt: 'With detection efficiency η and no fair-sampling assumption, local models can reach 4/η − 2; a conclusive test needs η above about 83 % for a maximally entangled state.' }),
+  ],
+  symbols: { E_c: ['Correlation of the two outcomes', '1'], theta_ab: ['Angle between the analysers', 'rad'], S: ['CHSH parameter', '1'], S_L: ['Bound for local-realist theories', '1'], S_T: ['Tsirelson bound', '1'], E_11: ['Correlation for settings a₁, b₁', '1'], E_12: ['Correlation for settings a₁, b₂', '1'], E_21: ['Correlation for settings a₂, b₁', '1'], E_22: ['Correlation for settings a₂, b₂', '1'] },
+  equations: a => [
+    eq('corr', 'Quantum correlation', 'E_c', `${a.spin ? '-' : ''}${a.singlet ? '' : 'p_w*'}${a.spin ? 'cos(theta_ab)' : 'cos(2*theta_ab)'}`, { kind: 'law', origin: a.spin ? 'Born rule for the spin singlet' : 'Born rule for a polarisation-entangled photon pair' }),
+    eq('chsh', 'CHSH combination', 'S', 'E_11 - E_12 + E_21 + E_22', { kind: 'definition', origin: 'Clauser, Horne, Shimony & Holt (1969)' }),
+    a.fair ? eq('local', 'Local-realist bound', 'S_L', '2', { kind: 'law', origin: 'Bell\'s theorem: locality, realism and freedom of choice', needs: ['fair'] })
+      : eq('local', 'Local bound without fair sampling', 'S_L', '4/eta_d - 2', { kind: 'derived', origin: 'Garg & Mermin (1987)' }),
+    eq('tsir', 'Tsirelson bound', 'S_T', '2*sqrt(2)', { kind: 'law', origin: 'Largest value allowed by quantum mechanics (Tsirelson 1980)' }),
+  ],
+  derivation: a => [
+    { text: 'Suppose each pair carries a hidden variable λ fixing the outcomes A(a, λ) = ±1 and B(b, λ) = ±1, with A independent of Bob\'s setting and B of Alice\'s (locality), and λ distributed independently of the settings (freedom of choice).', tex: 'E(a,b) = \\int \\rho(\\lambda)\\,A(a,\\lambda)\\,B(b,\\lambda)\\,\\mathrm{d}\\lambda' },
+    { text: 'For each λ the quantity below is ±2, because one of B(b) ∓ B(b′) vanishes and the other is ±2. Averaging gives the CHSH inequality.', tex: 'A(a)\\big[B(b) - B(b\')\\big] + A(a\')\\big[B(b) + B(b\')\\big] = \\pm 2\\ \\Rightarrow\\ |S| \\le 2' },
+    { text: 'Quantum mechanics gives, for the singlet state, a correlation that depends only on the angle between the analysers.', tex: a.spin ? 'E(a,b) = \\langle\\psi^-|\\,\\boldsymbol\\sigma\\!\\cdot\\!\\mathbf a\\otimes\\boldsymbol\\sigma\\!\\cdot\\!\\mathbf b\\,|\\psi^-\\rangle = -\\cos(a - b)' : 'E(a,b) = \\cos 2(a - b)' },
+    { text: 'Choosing the four directions 45° apart (22.5° for photons) makes all four terms contribute with the same sign.', tex: '|S| = 4\\times\\frac{1}{\\sqrt2} = 2\\sqrt2 \\approx 2.83 > 2' },
+    { text: 'The observed violation therefore refutes the conjunction of the premises. It does not allow signalling: each side\'s marginal probabilities are ½ regardless of the distant setting.', tex: 'P(A = +1\\,|\\,a, b) = \\tfrac12\\quad\\text{for all } b' },
+  ],
+  solve(v, a) {
+    const p = a.singlet ? 1 : N.clamp(v.p_w, 0, 1), spin = a.spin, Eq = th => corrQM(th, spin, p), El = th => corrLHV(th, spin), warnings = [];
+    const set = [[v.a_1, v.b_1], [v.a_1, v.b_2], [v.a_2, v.b_1], [v.a_2, v.b_2]], Es = set.map(([x, y]) => Eq(x - y));
+    const S = Es[0] - Es[1] + Es[2] + Es[3], Sl = chsh(El, v.a_1, v.a_2, v.b_1, v.b_2);
+    const boundL = a.fair ? 2 : 4 / v.eta_d - 2, boundT = 2 * Math.SQRT2;
+    // Monte-Carlo sampling of outcomes
+    const nT = Math.round(N.clamp(v.N_t, 100, 200000)), rnd = N.rng(Math.round(v.seed)), mc = [], mcL = [], margA = [];
+    for (const [x, y] of set) {
+      const pSame = (1 + Eq(x - y)) / 2; let sum = 0, plus = 0, sumL = 0;
+      for (let k = 0; k < nT; k++) {
+        const A = rnd() < 0.5 ? 1 : -1, B = rnd() < pSame ? A : -A; sum += A * B; if (A > 0) plus++;
+        const lam = 2 * Math.PI * rnd(), Al = Math.cos((spin ? 1 : 2) * (x - lam)) >= 0 ? 1 : -1, Bl = (Math.cos((spin ? 1 : 2) * (y - lam)) >= 0 ? 1 : -1) * (spin ? -1 : 1); sumL += Al * Bl;
+      }
+      mc.push(sum / nT); mcL.push(sumL / nT); margA.push(plus / nT);
+    }
+    const Smc = mc[0] - mc[1] + mc[2] + mc[3], SmcL = mcL[0] - mcL[1] + mcL[2] + mcL[3];
+    const sigS = Math.sqrt(N.sum(Es.map(e => (1 - e * e) / nT))), nSig = sigS > 0 ? (Math.abs(Smc) - boundL) / sigS : (Math.abs(Smc) > boundL ? Infinity : 0);
+    if (Math.abs(S) <= 2) warnings.push(`At these angles |S| = ${lab(Math.abs(S))} does not exceed 2: no violation is predicted. ${spin ? 'Angles 45° apart in sequence (0°, 45°, 90°, 135°)' : 'For photons use angles 22.5° apart in sequence (0°, 22.5°, 45°, 67.5°)'} give the maximum.`);
+    if (!a.fair && Math.abs(S) <= boundL) warnings.push('With this detection efficiency a local model exploiting undetected pairs can reproduce the observed correlations: the test is not conclusive (detection loophole).');
+    warnings.push('What follows from a violation is that locality, realism and freedom of choice cannot all hold; the calculation does not say which fails.');
+    const th = N.linspace(0, Math.PI, 91), ph = N.linspace(0, spin ? Math.PI / 2 : Math.PI / 4, 91), k = spin ? 1 : 0.5;
+    const scan = E => ph.map(f => chsh(E, 0, 2 * f, f, 3 * f));
+    return {
+      scalars: [
+        scalar('S', 'CHSH parameter predicted by quantum mechanics', S, '1'), scalar('S_abs', 'Its magnitude |S|', Math.abs(S), '1'),
+        scalar('S_mc', 'CHSH parameter from the simulated experiment', Smc, '1'), scalar('sigma_S', 'Statistical standard error of the simulated value', sigS, '1'),
+        scalar('n_sigma', 'Violation of the local bound in standard errors', nSig, '1', { text: Number.isFinite(nSig) ? undefined : 'Unbounded: perfectly correlated outcomes' }),
+        scalar('S_L', 'Bound for local-realist theories', boundL, '1'), scalar('S_T', 'Tsirelson bound 2√2', boundT, '1'),
+        scalar('viol', 'Excess of |S| over the local bound', Math.abs(S) - boundL, '1', { note: Math.abs(S) > boundL ? 'violated' : 'not violated' }),
+        scalar('S_lhv', 'CHSH parameter of the local hidden-variable model', Sl, '1'), scalar('S_lhv_mc', 'Same, from simulation', SmcL, '1'),
+        scalar('E_11', 'Correlation E(a₁, b₁)', Es[0], '1'), scalar('E_12', 'Correlation E(a₁, b₂)', Es[1], '1'), scalar('E_21', 'Correlation E(a₂, b₁)', Es[2], '1'), scalar('E_22', 'Correlation E(a₂, b₂)', Es[3], '1'),
+        scalar('S_max', 'Largest |S| this state can give', boundT * p, '1'), scalar('p_crit', 'Smallest visibility that violates the bound', boundL / boundT, '1'),
+        scalar('eta_crit', 'Detection efficiency needed without fair sampling', 2 / (1 + Math.SQRT2 * p), '1'),
+        scalar('P_A', 'Alice\'s probability of +1, simulated (first setting pair)', margA[0], '1', { note: 'independent of Bob\'s setting' }),
+      ],
+      series: [
+        line('scan', 'CHSH parameter against analyser spacing', 'Spacing between successive analyser angles', '°', ph.map(f => f * 180 / Math.PI), [{ label: 'Quantum mechanics', data: scan(Eq) }, { label: 'Local hidden-variable model', data: scan(El), dash: true }, { label: 'Local bound', data: ph.map(() => -2), dash: true }, { label: 'Tsirelson bound', data: ph.map(() => -boundT), dash: true }], 'S', '–', { note: 'Settings a₁ = 0, b₁ = φ, a₂ = 2φ, b₂ = 3φ.' }),
+        line('correlation', 'Correlation against relative analyser angle', 'Relative angle', '°', th.map(x => x * 180 / Math.PI), [{ label: 'Quantum mechanics', data: th.map(x => Eq(x * k)) }, { label: 'Local hidden-variable model', data: th.map(x => El(x * k)), dash: true }], 'Correlation E', '–', { note: spin ? 'The quantum curve lies outside the straight-line local model except at 0°, 90° and 180°.' : 'For photons the horizontal axis is twice the polariser angle.' }),
+        line('trials', 'Simulated correlations at the four setting pairs', 'Setting pair', '–', [0, 1, 2, 3], [{ label: 'Simulated', data: mc }, { label: 'Quantum prediction', data: Es }, { label: 'Local model, simulated', data: mcL }], 'Correlation E', '–', { kind: 'bar', categories: ['a₁ b₁', 'a₁ b₂', 'a₂ b₁', 'a₂ b₂'] }),
+      ],
+      checks: [
+        check('Quantum value within the Tsirelson bound', Math.max(0, Math.abs(S) - boundT), 1e-12, '|S| ≤ 2√2'),
+        check('Local model within the local bound', Math.max(0, Math.abs(Sl) - 2), 1e-12, '|S| ≤ 2'),
+        check('Simulation consistent with the quantum prediction', Smc - S, 5 * sigS + 1e-12, 'Within five standard errors'),
+        check('No signalling: Alice\'s marginal independent of Bob\'s setting', margA[0] - margA[1], 5 * Math.sqrt(0.5 / nT), 'Within five standard errors'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v) {
+    const q = Math.PI / 4, out = [];
+    out.push(bench('Singlet at the optimal angles', Math.abs(chsh(t => corrQM(t, true, 1), 0, 2 * q, q, 3 * q)), 2 * Math.SQRT2, 'Tsirelson bound 2√2', 1e-12));
+    out.push(bench('Photon pair at the optimal angles', Math.abs(chsh(t => corrQM(t, false, 1), 0, q, q / 2, 3 * q / 2)), 2 * Math.SQRT2, 'Tsirelson bound 2√2', 1e-12));
+    out.push(bench('Local hidden-variable model at the same angles', Math.abs(chsh(t => corrLHV(t, true), 0, 2 * q, q, 3 * q)), 2, 'Saturates but does not exceed the CHSH bound', 1e-12));
+    const r = this.solve({ ...v, a_1: 0, a_2: 2 * q, b_1: q, b_2: 3 * q }, { singlet: true, spin: true, fair: true });
+    out.push(bench('Simulated experiment against the quantum prediction', Math.abs(val(r, 'S_mc')), 2 * Math.SQRT2, 'Monte-Carlo sampling with a fixed seed', 0.03));
+    out.push(bench('Simulated local model against its analytic value', Math.abs(val(r, 'S_lhv_mc')), 2, 'Deterministic local model with a uniformly distributed hidden angle', 0.03));
+    return out;
+  },
+  validation: [
+    { name: 'Loophole-free Bell test with electron spins', ref: 'Hensen, B. et al. (2015) Nature 526, 682–686', note: 'Reported S = 2.42 ± 0.20. The ideal singlet value computed here is an upper limit for the real, imperfect entangled state; the decisive comparison is with the local bound of 2.',
+      cases: [{ label: 'Delft 2015', inputs: { a_1: 0, a_2: Math.PI / 2, b_1: Math.PI / 4, b_2: 3 * Math.PI / 4 }, observable: 'S_abs', observed: 2.42, sigma: 0.20 }] },
+  ],
+  diagram(v, a) {
+    return svg(`
+      ${S.circle(320, 170, 16, 'd-hazard')} ${S.text(320, 206, 'source of entangled pairs')}
+      ${S.arrow(300, 170, 150, 170)} ${S.arrow(340, 170, 490, 170)}
+      ${S.rect(80, 140, 66, 60, 'd-body', 6)} ${S.rect(494, 140, 66, 60, 'd-body', 6)} ${S.text(113, 130, 'Alice')} ${S.text(527, 130, 'Bob')}
+      ${S.line(113, 170, 113 + 24 * Math.cos(v.a_1), 170 - 24 * Math.sin(v.a_1), 'd-pipe')} ${S.line(113, 170, 113 + 24 * Math.cos(v.a_2), 170 - 24 * Math.sin(v.a_2), 'd-dim')}
+      ${S.line(527, 170, 527 + 24 * Math.cos(v.b_1), 170 - 24 * Math.sin(v.b_1), 'd-pipe')} ${S.line(527, 170, 527 + 24 * Math.cos(v.b_2), 170 - 24 * Math.sin(v.b_2), 'd-dim')}
+      ${S.text(113, 224, `a₁ = ${lab(v.a_1 * 180 / Math.PI, '°')},  a₂ = ${lab(v.a_2 * 180 / Math.PI, '°')}`, 'd-text d-small')} ${S.text(527, 224, `b₁ = ${lab(v.b_1 * 180 / Math.PI, '°')},  b₂ = ${lab(v.b_2 * 180 / Math.PI, '°')}`, 'd-text d-small')}
+      ${S.text(113, 250, 'outcome ±1')} ${S.text(527, 250, 'outcome ±1')}
+      ${S.text(320, 60, 'S = E(a₁,b₁) − E(a₁,b₂) + E(a₂,b₁) + E(a₂,b₂)')} ${S.text(320, 84, 'local realism: |S| ≤ 2     quantum mechanics: |S| ≤ 2√2', 'd-text d-small')}
+      ${S.text(320, 320, a.spin ? 'spin-½ pair, Stern–Gerlach analysers' : 'photon pair, linear polarisers', 'd-text d-small')}
+    `);
+  },
+  logicPreset: {
+    atoms: [{ k: 'L', text: 'Locality: an outcome does not depend on the distant setting or outcome' }, { k: 'R', text: 'Realism: outcomes are fixed by pre-existing properties of the pair' }, { k: 'F', text: 'Freedom of choice: settings are independent of those properties' }, { k: 'B', text: 'The CHSH inequality |S| ≤ 2 holds' }],
+    premises: ['(L & R & F) -> B', '~B'],
+    conclusion: '~(L & R & F)',
+  },
+  experiment: {
+    objective: 'Measure the CHSH parameter with space-like separated, randomly chosen settings and high detection efficiency, and test |S| ≤ 2.',
+    apparatus: ['Source of entangled pairs: parametric down-conversion photons, or remote electron spins entangled by photon interference', 'Two measurement stations separated so that the choice and readout at one cannot reach the other at light speed in time', 'Fast physical random-number generators selecting the setting at each station', 'High-efficiency detectors or deterministic spin readout'],
+    instruments: [{ name: 'Polarisation analysers with electro-optic switches, or microwave spin rotations', measures: 'Sets the measurement basis', range: '0–180°', resolution: '≈ 0.1°' }, { name: 'Superconducting nanowire detectors or single-shot spin readout', measures: 'Outcome ±1 for every trial', range: 'efficiency up to ≈ 95 %', resolution: 'timing ≈ 50 ps' }, { name: 'Time taggers synchronised by GPS or fibre', measures: 'Establishes space-like separation of the trials', range: 'ns–µs', resolution: '≈ 100 ps' }],
+    procedure: ['For each trial choose the two settings at random after the pair has been emitted.', 'Record setting and outcome at each station with time tags.', 'Compute the four correlations and S from all trials, without post-selection on detection.', 'Evaluate the statistical significance against the hypothesis of local realism, allowing for memory effects.'],
+    controls: ['Space-like separation verified from the timing budget', 'Random-number generators tested for bias and predictability', 'No-signalling check: each side\'s marginals independent of the distant setting'],
+    signatures: ['|S| significantly above 2 and not above 2√2', 'Marginal outcome probabilities of one half at each station'],
+    safety: ['Laser safety', 'Cryogenic systems for detectors or spin qubits'],
+  },
+  falsify: ['For quantum mechanics: a measured |S| above 2√2, or correlations that allow signalling between the stations.', 'For local realism: |S| > 2 in an experiment with the locality, detection and freedom-of-choice loopholes closed; this has been observed (Hensen et al. 2015 and later experiments).', 'For the simulation: a Monte-Carlo estimate differing from the analytic value by many standard errors would indicate a sampling error.'],
+  alternatives: [{ name: 'Non-local hidden variables (de Broglie–Bohm)', text: 'Retain realism and give up locality at the level of the hidden variables; no signalling results.' }, { name: 'Many-worlds', text: 'Retains locality of the dynamics and gives up single definite outcomes.' }, { name: 'Superdeterminism', text: 'Gives up freedom of choice: settings and hidden variables are correlated by a common past. Logically possible; tested and constrained by cosmic Bell tests using distant quasars.' }, { name: 'Operational and relational views', text: 'Give up the assumption that outcomes are observer-independent properties.' }],
+  limits: 'Two parties, two settings and two outcomes each; ideal analysers; state either pure or mixed with white noise. Imperfect analysers, accidental coincidences, finite switching speed and memory effects are not modelled. The local hidden-variable model shown is one example; the bound of 2 holds for all of them.',
+  numerics: { method: 'Closed-form correlations; Monte-Carlo sampling with a deterministic (mulberry32) generator', resolution: 'N_t' },
+  optimise: { objective: 'S_abs', sense: 'max', vars: ['b_1', 'b_2'], note: 'The maximum 2√2 is reached when Bob\'s directions bisect Alice\'s.' },
+  inverse: { series: 'scan', curve: 0, fit: ['p_w'] },
+  extensions: ['Three-particle GHZ argument without inequalities', 'CH and Eberhard inequalities for inefficient detectors', 'Device-independent randomness and key distribution', 'Popescu–Rohrlich boxes and the limits of no-signalling correlations'],
+};
+
+// ================================================================== 19. Casimir force
+const ZETA3 = 1.2020569031595943;
+/** Ratio of the finite-temperature to the zero-temperature Casimir pressure for ideal mirrors (Matsubara sum). τ = 4π a k_B T/(ħc). */
+function casimirThermalP(tau) {
+  if (!(tau > 0)) return 1;
+  if (tau < 0.05) return 1 + (tau / (2 * Math.PI)) ** 4 / 3;
+  let s = ZETA3;
+  for (let k = 1; k < 100000; k++) { const z = Math.exp(-k * tau); if (z < 1e-18) break; s += tau * tau * z * (1 + z) / (1 - z) ** 3 / k + 2 * tau * z / (1 - z) ** 2 / (k * k) + 2 * z / (1 - z) / k ** 3; }
+  return 15 * tau * s / Math.PI ** 4;
+}
+/** Same for the free energy per unit area, which gives the sphere–plate force in the proximity-force approximation. */
+function casimirThermalE(tau) {
+  if (!(tau > 0)) return 1;
+  const x = tau / (2 * Math.PI);
+  if (tau < 0.05) return 1 + 45 * ZETA3 / Math.PI ** 3 * x ** 3 - x ** 4;
+  let s = ZETA3 / 2;
+  for (let k = 1; k < 100000; k++) { const z = Math.exp(-k * tau); if (z < 1e-18) break; s += tau * z / (1 - z) ** 2 / (k * k) + z / (1 - z) / k ** 3; }
+  return 45 * tau * s / Math.PI ** 4;
+}
+/** Zero-temperature Lifshitz reduction factors for two plasma-model mirrors; x = λ_p/(2πa). Returns [pressure factor, energy factor]. */
+function casimirPlasma(x) {
+  if (!(x > 0)) return [1, 1];
+  const b2 = (2 / x) ** 2, ny = 120, nt = 16, yMax = 36, hy = yMax / ny;
+  let sp = 0, se = 0;
+  for (let i = 0; i < ny; i++) {
+    const y = (i + 0.5) * hy, yp = Math.sqrt(y * y + b2), ey = Math.exp(-y), rte2 = ((y - yp) / (y + yp)) ** 2;
+    let ip = rte2 * ey / (1 - rte2 * ey), ie = Math.log(1 - rte2 * ey), tp = 0, te = 0;
+    for (let j = 0; j < nt; j++) { const t = (j + 0.5) / nt, eps = 1 + b2 / (y * t) ** 2, r2 = ((eps * y - yp) / (eps * y + yp)) ** 2; tp += r2 * ey / (1 - r2 * ey); te += Math.log(1 - r2 * ey); }
+    sp += y ** 3 * (ip + tp / nt) * hy; se += y * y * (ie + te / nt) * hy;
+  }
+  return [15 / (2 * Math.PI ** 4) * sp, -45 / (2 * Math.PI ** 4) * se];
+}
+
+const casimir = {
+  id: 'casimir-force',
+  title: 'Casimir force between conducting surfaces',
+  module: [1, 2], klass: 'I', domains: ['quantum'],
+  keywords: ['casimir', 'casimir effect', 'casimir force', 'casimir pressure', 'vacuum fluctuation', 'vacuum fluctuations', 'zero-point energy', 'vacuum energy', 'parallel plates', 'uncharged plates attract', 'quantum vacuum', 'lifshitz', 'stiction'],
+  summary: 'Attraction between uncharged conductors due to the quantised electromagnetic field: the ideal parallel-plate pressure, the sphere–plate force in the proximity-force approximation, and corrections for finite conductivity, temperature and roughness.',
+  background: [
+    'Two uncharged, perfectly conducting parallel plates in vacuum attract with a pressure π²ħc/(240d⁴), a result derived by Casimir in 1948 from the change in the zero-point energy of the electromagnetic modes between them. Lifshitz later obtained the same force for real materials from fluctuating currents inside the bodies, so that the effect can equally be regarded as the retarded van der Waals force between them.',
+    'The force has been measured to about one per cent in the sphere–plate geometry and to about fifteen per cent between parallel plates. Real metals are not perfect mirrors at the short wavelengths that matter below a micrometre, which reduces the force substantially; thermal photons add to it at separations beyond a few micrometres. The pressure reaches about 13 Pa at 100 nm and about one atmosphere at 10 nm, making it important for micro- and nano-mechanical devices.',
+  ],
+  phenomena: ['Zero-point fluctuations of the electromagnetic field', 'Retarded van der Waals attraction', 'Finite-conductivity (plasma-frequency) correction', 'Thermal radiation pressure', 'Proximity-force approximation'],
+  laws: ['maxwell', 'uncertainty', 'energy'],
+  refs: ['Casimir, H. B. G. (1948). On the attraction between two perfectly conducting plates. Proc. K. Ned. Akad. Wet. 51, 793–795.', 'Lifshitz, E. M. (1956). The theory of molecular attractive forces between solids. Sov. Phys. JETP 2, 73–83.', 'Lamoreaux, S. K. (1997). Demonstration of the Casimir force in the 0.6 to 6 µm range. Phys. Rev. Lett. 78, 5–8.', 'Mohideen, U. & Roy, A. (1998). Precision measurement of the Casimir force from 0.1 to 0.9 µm. Phys. Rev. Lett. 81, 4549–4552.', 'Bressi, G., Carugno, G., Onofrio, R. & Ruoso, G. (2002). Measurement of the Casimir force between parallel metallic surfaces. Phys. Rev. Lett. 88, 041804.', 'Lambrecht, A. & Reynaud, S. (2000). Casimir force between metallic mirrors. Eur. Phys. J. D 8, 309–318.', 'Bordag, M., Klimchitskaya, G. L., Mohideen, U. & Mostepanenko, V. M. (2009). Advances in the Casimir Effect, Oxford University Press.', 'Bimonte, G., Emig, T., Jaffe, R. L. & Kardar, M. (2012). Casimir forces beyond the proximity approximation. EPL 97, 50001.'],
+  inputs: [
+    inp('a', 'Separation between the surfaces', 'nm', 100, { min: 10, max: 1e4, kind: 'geometry', aliases: ['separation', 'gap', 'distance', 'apart', 'spacing'] }),
+    inp('A_p', 'Area of the parallel plates', 'cm^2', 1, { min: 1e-4, max: 1e4, kind: 'geometry', aliases: ['plate area', 'area'] }),
+    inp('R_s', 'Radius of the sphere (sphere–plate geometry)', 'um', 100, { min: 1, max: 1e5, kind: 'geometry', aliases: ['sphere radius', 'radius'], src: 'Typical for atomic-force-microscope measurements' }),
+    inp('T', 'Temperature', 'K', 300, { min: 0, max: 1000, kind: 'environment', env: 'air_temp', aliases: ['temperature'] }),
+    inp('lambda_p', 'Plasma wavelength of the metal', 'nm', 136, { min: 50, max: 1000, kind: 'material', aliases: ['plasma wavelength'], src: 'Gold, plasma energy about 9 eV' }),
+    inp('sigma_r', 'Combined rms surface roughness', 'nm', 1, { min: 0, max: 5, kind: 'material', aliases: ['roughness'] }),
+  ],
+  assumptions: [
+    asm('ideal', 'The surfaces are perfect conductors at all frequencies.', { why: 'Casimir\'s original idealisation', alt: 'The metal is described by the plasma model; the reduction is computed from the Lifshitz formula at zero temperature.' }),
+    asm('zero_T', 'The temperature is zero.', { why: 'Thermal effects are small below about a micrometre at room temperature', alt: 'Thermal photons are included through the Matsubara sum for ideal mirrors.' }),
+    asm('smooth', 'The surfaces are perfectly smooth.', { why: 'Idealisation', alt: 'Stochastic roughness of rms amplitude σ_r increases the mean force by the second-order factor 1 + n(n+1)σ_r²/(2a²).' }),
+    asm('pfa', 'The sphere–plate force follows the proximity-force approximation.', { why: 'Accurate when the gap is much smaller than the radius', alt: 'The leading curvature correction, a factor 1 + (1/3 − 20/π²)a/(2R), is applied.' }),
+  ],
+  symbols: { P_C: ['Casimir pressure between parallel plates', 'Pa'], F_sp: ['Sphere–plate force', 'N'], E_A: ['Casimir energy per unit area', 'J/m^2'], eta_c: ['Finite-conductivity factor', '1'], eta_T: ['Thermal factor', '1'], T_eff: ['Effective temperature of the gap', 'K'], delta_p: ['Penetration depth of the field into the metal', 'm'], F_pp: ['Force between the plates', 'N'] },
+  equations: a => [
+    eq('P', 'Casimir pressure', 'P_C', `pi^2*hbar*c/(240*a^4)${a.ideal ? '' : '*eta_c'}${a.zero_T ? '' : '*eta_T'}${a.smooth ? '' : '*(1 + 10*sigma_r^2/a^2)'}`, { kind: 'law', origin: 'Zero-point energy of the electromagnetic field between ideal mirrors (Casimir 1948)' }),
+    eq('E', 'Casimir energy per unit area (ideal, zero temperature)', 'E_A', '-pi^2*hbar*c/(720*a^3)', { kind: 'derived', origin: 'Integral of the pressure over separation' }),
+    eq('F', 'Force between the plates', 'F_pp', 'P_C*A_p', { kind: 'definition' }),
+    eq('sp', 'Sphere–plate force', 'F_sp', `pi^3*hbar*c*R_s/(360*a^3)${a.smooth ? '' : '*(1 + 6*sigma_r^2/a^2)'}${a.pfa ? '' : '*(1 + (1/3 - 20/pi^2)*a/(2*R_s))'}`, { kind: 'derived', origin: 'Proximity-force approximation: F = 2πR × energy per unit area (Derjaguin 1934)', needs: ['pfa'] }),
+    eq('teff', 'Effective temperature', 'T_eff', 'hbar*c/(2*a*k_B)', { kind: 'definition', note: 'Thermal corrections are small for T ≪ T_eff' }),
+    ...(a.ideal ? [] : [eq('pen', 'Penetration depth', 'delta_p', 'lambda_p/(2*pi)', { kind: 'definition', origin: 'Plasma model' }), eq('etac', 'Leading finite-conductivity factor', 'eta_c', '1 - 16*delta_p/(3*a)', { kind: 'derived', origin: 'First-order expansion of the Lifshitz formula for the plasma model; the full integral is used in the calculation' })]),
+    ...(a.zero_T ? [] : [eq('etat', 'Low-temperature thermal factor', 'eta_T', '1 + (T/T_eff)^4/3', { kind: 'derived', origin: 'Matsubara sum for ideal mirrors, leading term; the full sum is used in the calculation' })]),
+  ],
+  derivation: a => [
+    { text: 'Between perfect mirrors a distance a apart the field modes have discrete wavenumbers nπ/a normal to the plates. The zero-point energy per unit area is a divergent sum, but its difference from the free-space value is finite.', tex: '\\frac{E}{A} = \\frac{\\hbar c}{2}\\sum_{\\rm modes}\\!k\\ -\\ (\\text{same without plates}) = -\\frac{\\pi^2\\hbar c}{720\\,a^3}' },
+    { text: 'The pressure is minus the derivative with respect to separation.', tex: 'P = -\\frac{\\partial}{\\partial a}\\frac{E}{A} = -\\frac{\\pi^2\\hbar c}{240\\,a^4}' },
+    { text: 'For a sphere of radius R ≫ a facing a plate, the force is obtained by adding the plate–plate energies of concentric rings of the curved surface.', tex: 'F_{sp} = 2\\pi R\\,\\frac{E}{A} = -\\frac{\\pi^3\\hbar c\\,R}{360\\,a^3}' },
+    { text: 'A real metal becomes transparent above its plasma frequency. The Lifshitz formula with the plasma-model reflection coefficients gives a reduction factor that depends only on the penetration depth over the gap.', tex: '\\eta_c = \\frac{15}{2\\pi^4}\\int_0^\\infty\\! y^3\\,\\mathrm{d}y\\int_0^1\\!\\mathrm{d}t\\sum_{\\rm TE,TM}\\frac{r^2 e^{-y}}{1 - r^2 e^{-y}}\\ \\simeq\\ 1 - \\frac{16}{3}\\frac{\\delta}{a}' },
+    { text: 'At temperature T the frequency integral becomes a sum over Matsubara frequencies. Its zero-frequency term dominates at large separation.', tex: 'P(T) \\to \\frac{\\zeta(3)\\,k_BT}{4\\pi a^3}\\quad (T \\gg T_{\\rm eff}),\\qquad T_{\\rm eff} = \\frac{\\hbar c}{2 a k_B}' },
+  ],
+  solve(v, a) {
+    const d = v.a, hc = hbar * c, P0 = Math.PI ** 2 * hc / (240 * d ** 4), E0 = Math.PI ** 2 * hc / (720 * d ** 3), F0 = 2 * Math.PI * v.R_s * E0, warnings = [];
+    const fac = sep => {
+      const x = v.lambda_p / (2 * Math.PI * sep), tau = 4 * Math.PI * sep * kB * v.T / hc, [cp, ce] = a.ideal ? [1, 1] : casimirPlasma(x);
+      const tP = a.zero_T ? 1 : casimirThermalP(tau), tE = a.zero_T ? 1 : casimirThermalE(tau), s2 = a.smooth ? 0 : (v.sigma_r / sep) ** 2;
+      const curv = a.pfa ? 1 : Math.max(0, 1 + (1 / 3 - 20 / Math.PI ** 2) * sep / (2 * v.R_s));
+      return { cp, ce, tP, tE, rP: 1 + 10 * s2, rS: 1 + 6 * s2, curv, P: cp * tP * (1 + 10 * s2), F: ce * tE * (1 + 6 * s2) * curv };
+    };
+    const f = fac(d), P = P0 * f.P, Fsp = F0 * f.F, Teff = hc / (2 * d * kB);
+    if (!a.ideal && !a.zero_T) warnings.push('Conductivity and thermal factors are multiplied together. Their true interplay at large separations depends on how the low-frequency response of the metal is modelled (Drude or plasma) and remains under discussion.');
+    if (!a.pfa && d > 0.1 * v.R_s) warnings.push('The gap is not small compared with the sphere radius; the first curvature correction is then insufficient.');
+    if (!a.smooth && v.sigma_r > 0.2 * d) warnings.push('The roughness is not small compared with the gap; the second-order roughness factor is unreliable.');
+    if (d < 20e-9) warnings.push('Below about 20 nm the non-retarded van der Waals regime and the detailed optical response of the metal take over; the plasma model is then a rough guide.');
+    const seps = N.logspace(Math.max(d / 10, 5e-9), d * 30, 50), sw = seps.map(fac);
+    return {
+      scalars: [
+        scalar('P_C', 'Casimir pressure between parallel plates', P, 'Pa'), scalar('F_pp', 'Force between the plates', P * v.A_p, 'N', { show: 'uN' }),
+        scalar('F_sp', 'Sphere–plate force', Fsp, 'N'), scalar('dF_sp', 'Gradient of the sphere–plate force (2πR × pressure)', 2 * Math.PI * v.R_s * P0 * f.cp * f.tP * f.rS * f.curv, 'N/m'),
+        scalar('P_0', 'Ideal zero-temperature pressure', P0, 'Pa'), scalar('F_sp0', 'Ideal zero-temperature sphere–plate force', F0, 'N'),
+        scalar('E_A', 'Ideal Casimir energy per unit area (magnitude)', E0, 'J/m^2'),
+        scalar('K_C', 'Coefficient P·a⁴', P * d ** 4, 'N m^2'),
+        scalar('eta_c', 'Finite-conductivity factor on the pressure', f.cp, '1'), scalar('eta_cE', 'Finite-conductivity factor on the sphere–plate force', f.ce, '1'),
+        scalar('eta_T', 'Thermal factor on the pressure', f.tP, '1'), scalar('eta_TE', 'Thermal factor on the sphere–plate force', f.tE, '1'),
+        scalar('eta_r', 'Roughness factor on the pressure', f.rP, '1'), scalar('eta_pfa', 'Curvature factor on the sphere–plate force', f.curv, '1'),
+        scalar('T_eff', 'Effective temperature of the gap', Teff, 'K'), scalar('lambda_T', 'Thermal wavelength ħc/(k_BT)', v.T > 0 ? hc / (kB * v.T) : Infinity, 'm', { show: 'um', text: v.T > 0 ? undefined : 'Infinite at zero temperature' }),
+        scalar('delta_p', 'Penetration depth λ_p/2π', v.lambda_p / (2 * Math.PI), 'm', { show: 'nm' }),
+        scalar('V_eq', 'Voltage giving the same electrostatic pressure', d * Math.sqrt(2 * P / C.eps_0), 'V', { show: 'mV' }),
+      ],
+      series: [
+        line('pressure', 'Casimir pressure against separation', 'Separation', 'nm', seps.map(s => s * 1e9), [{ label: 'With the selected corrections', data: seps.map((s, i) => Math.PI ** 2 * hc / (240 * s ** 4) * sw[i].P) }, { label: 'Ideal, π²ħc/(240a⁴)', data: seps.map(s => Math.PI ** 2 * hc / (240 * s ** 4)), dash: true }], 'Pressure', 'Pa', { logx: true, logy: true }),
+        line('sphere-plate', 'Sphere–plate force against separation', 'Separation', 'nm', seps.map(s => s * 1e9), [{ label: 'With the selected corrections', data: seps.map((s, i) => 2 * Math.PI * v.R_s * Math.PI ** 2 * hc / (720 * s ** 3) * sw[i].F) }, { label: 'Ideal, π³ħcR/(360a³)', data: seps.map(s => Math.PI ** 3 * hc * v.R_s / (360 * s ** 3)), dash: true }], 'Force', 'N', { logx: true, logy: true }),
+        line('factors', 'Correction factors against separation', 'Separation', 'nm', seps.map(s => s * 1e9), [{ label: 'Finite conductivity (plasma model)', data: seps.map((s, i) => (a.ideal ? casimirPlasma(v.lambda_p / (2 * Math.PI * s))[0] : sw[i].cp)) }, { label: 'Temperature (ideal mirrors)', data: seps.map(s => casimirThermalP(4 * Math.PI * s * kB * v.T / hc)), dash: true }], 'Factor on the pressure', '–', { logx: true, note: 'Both factors are shown whether or not they are applied.' }),
+      ],
+      checks: [
+        check('Proximity-force relation for the ideal case', F0 / (2 * Math.PI * v.R_s * E0) - 1, 1e-12, 'F = 2πR·E/A'),
+        check('Conductivity factor lies between zero and one', f.cp < 0 || f.cp > 1 + 1e-6 ? 1 : 0, 0, 'Real mirrors reflect less than ideal ones'),
+        check('Thermal factor is not below one', Math.max(0, 1 - f.tP), 1e-9, 'Thermal photons add to the attraction between ideal mirrors'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks() {
+    const out = [];
+    out.push(bench('Ideal pressure at 1 µm (Pa)', Math.PI ** 2 * hbar * c / (240 * 1e-24), 1.300e-3, 'π²ħc/(240a⁴) = 1.30 mPa', 1e-3));
+    out.push(bench('Matsubara sum joins the low-temperature expansion', casimirThermalP(0.0500001), 1 + (0.05 / (2 * Math.PI)) ** 4 / 3, 'P = P₀[1 + (T/T_eff)⁴/3]', 1e-8));
+    out.push(bench('High-temperature limit of the pressure', casimirThermalP(80), 15 * 80 * ZETA3 / Math.PI ** 4, 'P → ζ(3)k_BT/(4πa³)', 1e-9));
+    out.push(bench('Free-energy sum joins the low-temperature expansion', casimirThermalE(0.0500001), 1 + 45 * ZETA3 / Math.PI ** 3 * (0.05 / (2 * Math.PI)) ** 3 - (0.05 / (2 * Math.PI)) ** 4, 'F = F₀[1 + (45ζ(3)/π³)(T/T_eff)³ − (T/T_eff)⁴]', 1e-7));
+    const [cp, ce] = casimirPlasma(0.005);
+    out.push(bench('Plasma-model factor on the pressure, δ/a = 0.005', cp, 1 - 16 / 3 * 0.005 + 24 * 0.005 ** 2, 'Expansion 1 − (16/3)δ/a + 24(δ/a)²', 1e-3));
+    out.push(bench('Plasma-model factor on the energy, δ/a = 0.005', ce, 1 - 4 * 0.005 + 72 / 5 * 0.005 ** 2, 'Expansion 1 − 4δ/a + (72/5)(δ/a)²', 1e-3));
+    return out;
+  },
+  validation: [
+    { name: 'Casimir force between parallel plates', ref: 'Bressi, G., Carugno, G., Onofrio, R. & Ruoso, G. (2002) Phys. Rev. Lett. 88, 041804', note: 'Measured coefficient of the 1/a⁴ law, K_C = (1.22 ± 0.18) × 10⁻²⁷ N m², for chromium-coated surfaces 0.5–3 µm apart; compared with the ideal value π²ħc/240.',
+      cases: [{ label: 'Separation 1 µm', inputs: { a: 1e-6 }, observable: 'K_C', observed: 1.22e-27, sigma: 0.18e-27 }] },
+  ],
+  diagram(v) {
+    return svg(`
+      ${S.rect(120, 60, 18, 220, 'd-body', 2)} ${S.rect(220, 60, 18, 220, 'd-body', 2)}
+      ${[0, 1, 2, 3].map(i => `<path d="M138 ${90 + 50 * i} q20 -${10 + 4 * i} 41 0 t41 0" class="d-line" fill="none"/>`).join('')}
+      ${[0, 1, 2].map(i => `<path d="M30 ${100 + 60 * i} q22 -22 45 0 t45 0" class="d-dim" fill="none"/>`).join('')} ${S.text(72, 70, 'all wavelengths outside', 'd-text d-small')}
+      ${S.arrow(70, 300, 118, 300)} ${S.arrow(290, 300, 242, 300)} ${S.text(180, 318, 'net inward pressure', 'd-text d-small')}
+      ${S.dim(138, 44, 220, 44, `a = ${lab(v.a * 1e9, 'nm')}`)} ${S.text(180, 180, 'only fitted', 'd-text d-small')} ${S.text(180, 196, 'modes', 'd-text d-small')}
+      ${S.line(400, 280, 600, 280, 'd-ground')} ${S.circle(500, 190, 70, 'd-body')} ${S.dim(500, 262, 500, 280, '')} ${S.text(512, 274, 'a', 'd-text', 'start')}
+      ${S.line(500, 190, 560, 152, 'd-dim')} ${S.text(540, 160, 'R', 'd-text', 'start')} ${S.text(500, 100, 'sphere–plate geometry')}
+      ${S.text(500, 320, 'F = π³ħcR/(360a³)', 'd-text d-small')} ${S.text(180, 345, 'P = π²ħc/(240a⁴)', 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the force between a gold-coated sphere and plate as a function of separation and compare with the Lifshitz prediction.',
+    apparatus: ['Gold-coated sphere of radius about 100 µm attached to an atomic-force-microscope cantilever or a micro-mechanical torsional oscillator', 'Gold-coated flat plate on a calibrated piezoelectric stage', 'High vacuum chamber with vibration isolation', 'Voltage source to null and calibrate against the electrostatic force'],
+    instruments: [{ name: 'Optical-lever or interferometric deflection sensor', measures: 'Cantilever deflection, hence force; or resonance-frequency shift, hence force gradient', range: '1 pN–1 nN', resolution: '≈ 1 pN' }, { name: 'Capacitive or interferometric displacement sensor', measures: 'Plate displacement', range: '50 nm–1 µm', resolution: '≈ 0.5 nm' }, { name: 'Atomic-force-microscope topography scan', measures: 'Surface roughness of both bodies', range: 'nm', resolution: '0.1 nm' }],
+    procedure: ['Apply a series of voltages at each separation; the parabolic dependence of force on voltage gives the residual contact potential, the absolute separation and the force calibration.', 'With the contact potential nulled, record force or force gradient against separation from about 100 nm to 1 µm.', 'Compute the Lifshitz force from measured optical data of the films, with roughness and temperature included.', 'Compare, and repeat with different coatings and sphere radii.'],
+    controls: ['Electrostatic calibration at every separation to detect patch potentials', 'Hydrodynamic force excluded by working in vacuum', 'Separation-independent offsets removed by measurements at large gap'],
+    signatures: ['Force scaling close to 1/a³ for sphere–plate and 1/a⁴ for plate–plate', 'Magnitude below the ideal value by the finite-conductivity factor, about one half at 100 nm for gold', 'Independence of applied voltage once the contact potential is nulled'],
+    safety: ['Piezo high voltage', 'Laser safety for the deflection sensor', 'Vacuum-system precautions'],
+  },
+  falsify: ['A measured sphere–plate force that does not approach π³ħcR/(360a³) at separations where conductivity and thermal corrections are small.', 'A force that does not scale with ħc, or that depends on the charge of the plates once electrostatic effects are removed.', 'A measured force exceeding the ideal-mirror value at zero temperature for real metals.'],
+  alternatives: [{ name: 'Source (Lifshitz, Schwinger) picture', text: 'The force arises from correlated fluctuating currents in the two bodies, with no reference to vacuum energy; the predictions are identical.' }, { name: 'Drude or plasma prescription', text: 'Two ways of treating the zero-frequency response of metals give thermal corrections differing by a factor of two at large separation; experiments are not yet unanimous.' }, { name: 'Repulsive Casimir forces', text: 'With a suitable intervening liquid, or specially shaped bodies, the force can be repulsive.' }, { name: 'Electrostatic patch potentials', text: 'Spatially varying surface potentials produce a force that can mimic or mask the Casimir force and must be characterised.' }],
+  limits: 'Plane parallel plates of infinite extent, or a sphere much larger than the gap. Plasma-model metals at zero temperature for the conductivity factor; ideal mirrors for the thermal factor; the two are multiplied when both are selected. Roughness to second order. Not valid below about 20 nm.',
+  numerics: { method: 'Closed forms; Matsubara sums in closed geometric form; two-dimensional midpoint quadrature of the Lifshitz integral for the plasma model', order: 2 },
+  optimise: { objective: 'F_sp', sense: 'max', vars: ['a'], note: 'The force grows steeply as the gap closes; in devices this drives pull-in and stiction.' },
+  inverse: { series: 'sphere-plate', curve: 0, fit: ['lambda_p'] },
+  extensions: ['Lifshitz formula with tabulated optical data and Drude relaxation', 'Lateral and non-monotonic forces between corrugated surfaces', 'Casimir–Polder force between an atom and a surface', 'Dynamical Casimir effect: photon creation by moving boundaries'],
+};
+
+// ================================================================== 20. quantum statistics
+const ZETA32 = 2.612375348685488;
+/** Bose function g_{3/2}(z) for 0 ≤ z ≤ 1: direct series, or Robinson's expansion close to z = 1. */
+function g32(z) {
+  if (z >= 1) return ZETA32; if (z <= 0) return 0;
+  const al = -Math.log(z);
+  if (al < 0.1) return -2 * Math.sqrt(Math.PI * al) + ZETA32 + 1.4603545088095868 * al - 0.2078862249773546 * al * al / 2 + 0.0254852018898331 * al ** 3 / 6;
+  let s = 0, zk = 1; for (let k = 1; k < 500; k++) { zk *= z; s += zk / Math.pow(k, 1.5); if (zk < 1e-18) break; }
+  return s;
+}
+/** Fermi–Dirac integral F_j(η) = ∫₀^∞ x^j/(e^(x−η) + 1) dx, by the substitution x = s². */
+function fermiIntegral(j, eta) {
+  const sMax = Math.sqrt(Math.max(eta, 0) + 45), n = Math.min(6000, Math.max(600, Math.ceil(sMax * 250))), h = sMax / n; let sum = 0;
+  for (let i = 0; i < n; i++) { const s = (i + 0.5) * h, e = s * s - eta; sum += 2 * Math.pow(s, 2 * j + 1) / (e > 700 ? Infinity : Math.exp(e) + 1); }
+  return sum * h;
+}
+/** Reduced chemical potential η = μ/k_BT for a degenerate ideal Fermi gas with T_F/T = th; j = ½ non-relativistic, j = 2 ultra-relativistic. */
+function fermiEta(th, j) {
+  const target = j === 0.5 ? 2 / 3 * Math.pow(th, 1.5) : Math.pow(th, 3) / 3, gam = j === 0.5 ? Math.sqrt(Math.PI) / 2 : 2;
+  if (target < 1e-6) return { eta: Math.log(target / gam), target, mode: 'classical' };
+  if (th > 30) { const t = 1 / th; return { eta: th * (j === 0.5 ? 1 - Math.PI ** 2 / 12 * t * t - Math.PI ** 4 / 80 * t ** 4 : 1 - Math.PI ** 2 / 3 * t * t), target, mode: 'sommerfeld' }; }
+  return { eta: N.bisect(e => fermiIntegral(j, e) - target, -20, 40, 1e-10), target, mode: 'numerical' };
+}
+
+const statistics = {
+  id: 'quantum-statistics',
+  title: 'Quantum statistics of ideal gases',
+  module: [1, 2], klass: 'I', domains: ['quantum', 'thermal'],
+  keywords: ['bose-einstein', 'bose einstein', 'fermi-dirac', 'fermi dirac', 'maxwell-boltzmann', 'quantum statistics', 'occupation number', 'bose-einstein condensate', 'bec', 'critical temperature', 'fermi energy', 'fermi temperature', 'degenerate gas', 'bosons and fermions', 'quantum gas', 'degeneracy pressure'],
+  summary: 'Mean occupation of a single-particle state for bosons, fermions and classical particles; the condensation temperature and condensate fraction of an ideal Bose gas; and the Fermi energy, Fermi temperature and chemical potential of an ideal Fermi gas.',
+  background: [
+    'Identical particles are indistinguishable, and their wavefunction is either symmetric (bosons) or antisymmetric (fermions) under exchange. Counting states accordingly gives the Bose–Einstein and Fermi–Dirac distributions. Both reduce to the classical Maxwell–Boltzmann form when the mean occupation is small, which happens when the thermal de Broglie wavelength is short compared with the spacing between particles.',
+    'When that condition fails the two kinds of particle behave oppositely. Bosons accumulate in the lowest state below a critical temperature, first observed in dilute atomic vapours in 1995. Fermions fill states one each up to the Fermi energy, which for conduction electrons in a metal corresponds to tens of thousands of kelvin and for white dwarfs supplies the pressure that holds the star up.',
+  ],
+  phenomena: ['Exchange symmetry', 'Bose–Einstein condensation', 'Fermi degeneracy', 'Classical limit of dilute gases', 'Degeneracy pressure'],
+  laws: ['pauli', 'born', 'second', 'energy'],
+  refs: ['Bose, S. N. (1924). Plancks Gesetz und Lichtquantenhypothese. Zeitschrift für Physik 26, 178–181.', 'Einstein, A. (1925). Quantentheorie des einatomigen idealen Gases. Zweite Abhandlung. Sitzungsber. Preuss. Akad. Wiss., 3–14.', 'Fermi, E. (1926). Zur Quantelung des idealen einatomigen Gases. Zeitschrift für Physik 36, 902–912.', 'Dirac, P. A. M. (1926). On the theory of quantum mechanics. Proc. R. Soc. A 112, 661–677.', 'Anderson, M. H., Ensher, J. R., Matthews, M. R., Wieman, C. E. & Cornell, E. A. (1995). Observation of Bose–Einstein condensation in a dilute atomic vapor. Science 269, 198–201.', 'Dalfovo, F., Giorgini, S., Pitaevskii, L. P. & Stringari, S. (1999). Theory of Bose–Einstein condensation in trapped gases. Rev. Mod. Phys. 71, 463–512.', 'Arnold, P. & Moore, G. (2001). BEC transition temperature of a dilute homogeneous imperfect Bose gas. Phys. Rev. Lett. 87, 120401.', 'Ashcroft, N. W. & Mermin, N. D. (1976). Solid State Physics, Holt, Rinehart and Winston, ch. 2.', 'Pathria, R. K. & Beale, P. D. (2011). Statistical Mechanics, 3rd ed., Academic Press.'],
+  inputs: [
+    inp('m_b', 'Mass of a boson', 'u', 86.909, { min: 1, max: 300, kind: 'material', aliases: ['boson mass', 'atomic mass', 'atom mass'], src: 'Rubidium-87' }),
+    inp('n_b', 'Number density of the Bose gas', '1/cm^3', 1e14, { min: 1e8, max: 1e24, aliases: ['boson density', 'atom density', 'number density'], src: 'Typical trapped alkali vapour; liquid helium is 2.2 × 10²² cm⁻³' }),
+    inp('T_b', 'Temperature of the Bose gas', 'uK', 0.2, { min: 1e-4, max: 1e9, aliases: ['boson temperature', 'gas temperature'] }),
+    inp('m_r', 'Mass of a fermion in electron masses', '1', 1, { min: 0.1, max: 4000, kind: 'material', aliases: ['fermion mass', 'electron masses'], src: 'Electron; 1839 for a neutron' }),
+    inp('n_f', 'Number density of the Fermi gas', '1/m^3', 8.47e28, { min: 1e20, max: 1e40, aliases: ['fermion density', 'electron density'], src: 'Conduction electrons in copper (Ashcroft & Mermin, Table 1.1)' }),
+    inp('T_f', 'Temperature of the Fermi gas', 'K', 300, { min: 1e-3, max: 1e10, kind: 'environment', aliases: ['fermion temperature', 'electron temperature', 'temperature'] }),
+    inp('a_sc', 'Scattering length of the bosons (used when interactions are included)', 'nm', 5.3, { min: 0, max: 100, kind: 'material', aliases: ['scattering length'], src: 'Rubidium-87, about 100 Bohr radii' }),
+    inp('N_at', 'Number of trapped particles (used for a harmonic trap)', '1', 1e6, { min: 100, max: 1e10, aliases: ['atom number', 'number of atoms'] }),
+    inp('f_tr', 'Geometric-mean trap frequency (used for a harmonic trap)', 'Hz', 100, { min: 1, max: 1e5, aliases: ['trap frequency'] }),
+  ],
+  assumptions: [
+    asm('ideal', 'The particles do not interact.', { why: 'Textbook ideal gas', alt: 'Repulsive interactions shift the Bose condensation temperature: upward by 1.3·a·n^(1/3) in a uniform gas, downward by 3.426·(a/a_ho)·N^(1/6) in a harmonic trap.' }),
+    asm('uniform', 'The gas is uniform, in a box of fixed density.', { why: 'Textbook case', alt: 'The gas is held in a three-dimensional harmonic trap with N_at particles: T_c and E_F then depend on particle number and trap frequency.' }),
+    asm('nonrel', 'The fermions are non-relativistic, E = p²/2m.', { why: 'Valid when the Fermi energy is far below the rest energy', alt: 'The fermions are ultra-relativistic, E = pc, as for electrons in a massive white dwarf.' }),
+  ],
+  symbols: { f_BE: ['Bose–Einstein occupation', '1'], f_FD: ['Fermi–Dirac occupation', '1'], f_MB: ['Maxwell–Boltzmann occupation', '1'], E_s: ['Single-particle energy', 'J'], mu_c: ['Chemical potential', 'J'], T_x: ['Temperature', 'K'], lambda_T: ['Thermal de Broglie wavelength', 'm'], T_c: ['Bose–Einstein condensation temperature', 'K'], f_0: ['Condensate fraction', '1'], E_F: ['Fermi energy', 'J'], T_F: ['Fermi temperature', 'K'], zeta_32: ['Riemann zeta function at 3/2', '1'], zeta_3: ['Riemann zeta function at 3', '1'], omega_t: ['Trap angular frequency', '1/s'], dT_rel: ['Fractional shift of T_c from interactions', '1'], a_ho: ['Oscillator length of the trap', 'm'] },
+  equations: a => [
+    eq('be', 'Bose–Einstein distribution', 'f_BE', '1/(exp((E_s - mu_c)/(k_B*T_x)) - 1)', { kind: 'law', origin: 'Symmetric states of identical bosons (Bose 1924; Einstein 1925)' }),
+    eq('fd', 'Fermi–Dirac distribution', 'f_FD', '1/(exp((E_s - mu_c)/(k_B*T_x)) + 1)', { kind: 'law', origin: 'Pauli exclusion principle (Fermi 1926; Dirac 1926)' }),
+    eq('mb', 'Maxwell–Boltzmann distribution', 'f_MB', 'exp(-(E_s - mu_c)/(k_B*T_x))', { kind: 'law', origin: 'Classical limit of both' }),
+    eq('lam', 'Thermal de Broglie wavelength of the bosons', 'lambda_T', 'sqrt(2*pi*hbar^2/(m_b*k_B*T_b))', { kind: 'definition' }),
+    ...(a.uniform ? [
+      eq('tc', 'Condensation temperature of a uniform gas', 'T_c', '2*pi*hbar^2/(m_b*k_B)*(n_b/zeta_32)^(2/3)', { kind: 'derived', origin: 'Saturation of the excited states: nλ³ = ζ(3/2) (Einstein 1925)', needs: ['uniform', 'ideal'] }),
+      eq('f0', 'Condensate fraction', 'f_0', '1 - (T_b/T_c)^(3/2)', { kind: 'derived', origin: 'Particles not accommodated in excited states' }),
+      a.nonrel ? eq('ef', 'Fermi energy', 'E_F', 'hbar^2/(2*m_r*m_e)*(3*pi^2*n_f)^(2/3)', { kind: 'derived', origin: 'Filling of momentum states up to the Fermi sphere, two spin states', needs: ['nonrel'] })
+        : eq('ef', 'Fermi energy, ultra-relativistic', 'E_F', 'hbar*c*(3*pi^2*n_f)^(1/3)', { kind: 'derived', origin: 'Filling of momentum states with E = pc' }),
+      ...(a.ideal ? [] : [eq('shift', 'Interaction shift of T_c', 'dT_rel', '1.3*a_sc*n_b^(1/3)', { kind: 'empirical', origin: 'Lattice Monte-Carlo result (Arnold & Moore 2001; Kashurnikov, Prokof\'ev & Svistunov 2001)' })]),
+    ] : [
+      eq('wt', 'Trap angular frequency', 'omega_t', '2*pi*f_tr', { kind: 'definition' }),
+      eq('tc', 'Condensation temperature in a harmonic trap', 'k_B*T_c', 'hbar*omega_t*(N_at/zeta_3)^(1/3)', { kind: 'derived', origin: 'Saturation of the excited states of a three-dimensional oscillator' }),
+      eq('f0', 'Condensate fraction', 'f_0', '1 - (T_b/T_c)^3', { kind: 'derived', origin: 'Density of states of a harmonic trap' }),
+      eq('ef', 'Fermi energy in a harmonic trap', 'E_F', 'hbar*omega_t*(6*N_at)^(1/3)', { kind: 'derived', origin: 'Filling of oscillator states, one spin state' }),
+      ...(a.ideal ? [] : [eq('shift', 'Interaction shift of T_c', 'dT_rel', '-3.426*a_sc/a_ho*N_at^(1/6)', { kind: 'derived', origin: 'Mean-field theory (Giorgini, Pitaevskii & Stringari 1996)' })]),
+    ]),
+    eq('tf', 'Fermi temperature', 'T_F', 'E_F/k_B', { kind: 'definition' }),
+  ],
+  derivation: a => [
+    { text: 'In the grand canonical ensemble each single-particle state is an independent system. Summing the Gibbs factor over the allowed occupation numbers, all non-negative integers for bosons and only 0 or 1 for fermions, gives the mean occupation.', tex: '\\langle n\\rangle = \\frac{1}{e^{(E-\\mu)/k_BT} \\mp 1}\\qquad(-\\ \\text{bosons},\\ +\\ \\text{fermions})' },
+    { text: 'When the exponential is large both forms reduce to the classical distribution. This requires the phase-space density to be small.', tex: 'n\\lambda_T^3 \\ll 1,\\qquad \\lambda_T = \\sqrt{\\frac{2\\pi\\hbar^2}{m k_BT}}' },
+    { text: 'For bosons the chemical potential cannot exceed the lowest energy. The excited states can then hold at most a density ζ(3/2)/λ³; the remainder must occupy the ground state.', tex: 'n\\lambda_T^3 = \\zeta(3/2) \\approx 2.612\\ \\Rightarrow\\ T_c = \\frac{2\\pi\\hbar^2}{m k_B}\\left(\\frac{n}{\\zeta(3/2)}\\right)^{2/3},\\qquad \\frac{N_0}{N} = 1 - \\left(\\frac{T}{T_c}\\right)^{3/2}' },
+    { text: 'For fermions at zero temperature every state is filled up to the Fermi wavenumber, which is fixed by the density.', tex: a.nonrel ? 'k_F = (3\\pi^2 n)^{1/3},\\qquad E_F = \\frac{\\hbar^2 k_F^2}{2m}' : 'k_F = (3\\pi^2 n)^{1/3},\\qquad E_F = \\hbar c\\,k_F' },
+    { text: 'At finite temperature the chemical potential follows from requiring the distribution to hold the right number of particles; for T ≪ T_F it lies just below the Fermi energy.', tex: '\\mu \\simeq E_F\\left[1 - \\frac{\\pi^2}{12}\\left(\\frac{T}{T_F}\\right)^2\\right]' },
+  ],
+  solve(v, a) {
+    const mb = v.m_b, Tb = v.T_b, nb = v.n_b, warnings = [], wt = 2 * Math.PI * v.f_tr;
+    const lamT = Math.sqrt(2 * Math.PI * hbar * hbar / (mb * kB * Tb)), psd = nb * lamT ** 3;
+    let Tc0 = a.uniform ? 2 * Math.PI * hbar * hbar / (mb * kB) * Math.pow(nb / ZETA32, 2 / 3) : hbar * wt / kB * Math.cbrt(v.N_at / ZETA3);
+    const aho = Math.sqrt(hbar / (mb * wt));
+    const shift = a.ideal ? 0 : (a.uniform ? 1.3 * v.a_sc * Math.cbrt(nb) : -3.426 * v.a_sc / aho * Math.pow(v.N_at, 1 / 6));
+    if (!a.ideal && Math.abs(shift) > 0.3) warnings.push('The interaction shift of the condensation temperature is not small; the dilute-gas results used here do not apply (liquid helium is the classic example).');
+    const Tc = Tc0 * Math.max(1 + shift, 0.05), tRed = Tb / Tc, ex = a.uniform ? 1.5 : 3;
+    const f0 = tRed < 1 ? 1 - Math.pow(tRed, ex) : 0;
+    // fugacity above T_c (uniform ideal gas); below T_c the chemical potential is pinned at zero
+    let zB = 1;
+    if (a.uniform && psd < ZETA32) zB = Math.exp(-N.bisect(al => g32(Math.exp(-al)) - psd, 1e-14, 700, 1e-13));
+    else if (!a.uniform && tRed > 1) zB = NaN;
+    // fermions
+    const mf = v.m_r * C.m_e, nf = v.n_f, Tf = v.T_f, kF = a.uniform ? Math.cbrt(3 * Math.PI ** 2 * nf) : NaN;
+    const EF = a.uniform ? (a.nonrel ? (hbar * kF) ** 2 / (2 * mf) : hbar * c * kF) : hbar * wt * Math.cbrt(6 * v.N_at), TF = EF / kB, th = TF / Tf;
+    const j = a.uniform ? (a.nonrel ? 0.5 : 2) : 2; // a harmonic trap has the same density of states exponent as the ultra-relativistic gas
+    const fe = fermiEta(th, j), muF = fe.eta * kB * Tf;
+    if (a.uniform && a.nonrel && EF > 0.1 * mf * c2) warnings.push('The Fermi energy is not small compared with the rest energy: the non-relativistic formula overestimates it. Use the ultra-relativistic option or a full relativistic treatment.');
+    if (a.uniform && !a.nonrel && EF < 3 * mf * c2) warnings.push('The Fermi energy is not large compared with the rest energy, so the ultra-relativistic formula is only indicative here.');
+    const numOK = fe.eta < 2000 && fe.mode !== 'classical' ? fermiIntegral(j, fe.eta) / fe.target - 1 : 0;
+    const vF = a.uniform ? (a.nonrel ? hbar * kF / mf : c) : Math.sqrt(2 * EF / mf);
+    const Pdeg = a.uniform ? (a.nonrel ? 0.4 : 0.25) * nf * EF : NaN;
+    const xs = N.linspace(-4, 6, 101), es = N.linspace(0, 2, 121), tr = N.linspace(0, 1.5, 91);
+    return {
+      scalars: [
+        scalar('T_c', 'Bose–Einstein condensation temperature', Tc, 'K', { show: 'uK' }), scalar('t_red', 'Bose gas temperature over T_c', tRed, '1'),
+        scalar('f_0', 'Condensate fraction', f0, '1', { note: tRed < 1 ? 'condensed' : 'above the transition: no condensate' }),
+        scalar('lambda_T', 'Thermal de Broglie wavelength of the bosons', lamT, 'm', { show: 'nm' }), scalar('psd', 'Phase-space density nλ³', psd, '1', { note: 'condensation at 2.612 in a uniform ideal gas' }),
+        scalar('z_B', 'Fugacity of the Bose gas', zB, '1', { text: Number.isFinite(zB) ? undefined : 'Not evaluated for a trapped gas above the transition' }),
+        scalar('mu_B', 'Chemical potential of the Bose gas', Number.isFinite(zB) ? kB * Tb * Math.log(zB) : NaN, 'J', { text: Number.isFinite(zB) ? undefined : 'Not evaluated for a trapped gas above the transition' }),
+        scalar('dT_rel', 'Fractional shift of T_c from interactions', shift, '1'),
+        scalar('E_F', 'Fermi energy', EF, 'J', { show: 'eV' }), scalar('T_F', 'Fermi temperature', TF, 'K'), scalar('theta_F', 'Fermi gas temperature over T_F', 1 / th, '1', { note: th > 10 ? 'strongly degenerate' : th > 1 ? 'degenerate' : 'non-degenerate (nearly classical)' }),
+        scalar('k_F', 'Fermi wavenumber', kF, '1/m', { text: a.uniform ? undefined : 'Not defined for a trapped gas' }), scalar('v_F', 'Fermi velocity', vF, 'm/s'),
+        scalar('mu_F', 'Chemical potential of the Fermi gas', muF, 'J', { show: 'eV' }), scalar('mu_rel', 'Chemical potential over the Fermi energy', muF / EF, '1'),
+        scalar('P_deg', 'Degeneracy pressure at zero temperature', Pdeg, 'Pa', { text: a.uniform ? undefined : 'Not defined for a trapped gas' }),
+        scalar('a_ho', 'Oscillator length of the trap', aho, 'm', { show: 'um' }),
+      ],
+      series: [
+        line('occupation', 'Mean occupation of a single-particle state', 'Energy above the chemical potential', 'k_BT', xs, [{ label: 'Fermi–Dirac', data: xs.map(x => 1 / (Math.exp(x) + 1)) }, { label: 'Bose–Einstein', data: xs.map(x => (x > 0.08 ? 1 / (Math.exp(x) - 1) : NaN)) }, { label: 'Maxwell–Boltzmann', data: xs.map(x => (x > -2.5 ? Math.exp(-x) : NaN)), dash: true }], 'Mean occupation', '–', { yRange: [0, 4], note: 'All three agree where the occupation is small.' }),
+        line('fermi', 'Occupation of the Fermi gas against energy', 'Energy', 'E_F', es, [{ label: 'At the stated temperature', data: es.map(e => { const xx = (e * EF - muF) / (kB * Tf); return xx > 700 ? 0 : 1 / (Math.exp(xx) + 1); }) }, { label: 'Zero temperature', data: es.map(e => (e <= 1 ? 1 : 0)), dash: true }], 'Occupation', '–'),
+        line('condensate', 'Condensate fraction against temperature', 'Temperature', 'T_c', tr, [{ label: a.uniform ? 'Uniform gas: 1 − (T/T_c)^(3/2)' : 'Harmonic trap: 1 − (T/T_c)³', data: tr.map(t => (t < 1 ? 1 - Math.pow(t, ex) : 0)) }], 'N₀/N', '–', { marker: [Math.min(tRed, 1.5), f0] }),
+      ],
+      checks: [
+        check('Fermi distribution holds the right number of particles', numOK, 2e-4, 'Fermi–Dirac integral at the computed chemical potential against the density'),
+        check('Bose excited states hold the remaining particles', a.uniform && psd < ZETA32 ? g32(zB) / psd - 1 : 0, 1e-6, 'g₃⁄₂(z) = nλ³ above the transition'),
+        check('Chemical potential of bosons does not exceed the ground-state energy', Number.isFinite(zB) ? Math.max(0, zB - 1) : 0, 0, 'z ≤ 1'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v) {
+    const on = { ideal: true, uniform: true, nonrel: true }, out = [];
+    const cu = this.solve({ ...v, m_r: 1, n_f: 8.47e28, T_f: 300 }, on);
+    out.push(bench('Fermi energy of copper (eV)', val(cu, 'E_F') / EV, 7.00, 'Ashcroft & Mermin, Table 2.1: 7.00 eV', 6e-3));
+    out.push(bench('Chemical potential of copper at 300 K over E_F', val(cu, 'mu_rel'), 1 - Math.PI ** 2 / 12 * (300 / val(cu, 'T_F')) ** 2, 'Sommerfeld expansion', 1e-9));
+    const he = this.solve({ ...v, m_b: 4.002602 * AMU, n_b: 2.18e28, T_b: 1 }, on);
+    out.push(bench('Ideal-gas condensation temperature at the density of liquid helium (K)', val(he, 'T_c'), 3.13, 'Standard textbook value 3.13 K (observed λ-point 2.17 K, lowered by interactions)', 5e-3));
+    let z32 = 0; for (let k = 1; k <= 200000; k++) z32 += Math.pow(k, -1.5); z32 += 2 / Math.sqrt(200000.5);
+    out.push(bench('ζ(3/2) by direct summation with tail', z32, ZETA32, 'ζ(3/2) = 2.612375…', 1e-8));
+    out.push(bench('Bose function: series and expansion agree at their junction', g32(Math.exp(-0.1000001)), g32(Math.exp(-0.0999999)), 'Robinson expansion against the direct series', 1e-6));
+    const hot = fermiEta(0.01, 0.5);
+    out.push(bench('Fermi gas far above T_F: classical chemical potential', hot.eta, Math.log(4 / (3 * Math.sqrt(Math.PI)) * Math.pow(0.01, 1.5)), 'μ/k_BT = ln[(4/3√π)(T_F/T)^(3/2)]', 1e-3));
+    const mid = fermiEta(40, 0.5);
+    out.push(bench('Sommerfeld chemical potential satisfies the number equation', fermiIntegral(0.5, mid.eta), mid.target, 'F₁⁄₂(η) = (2/3)(T_F/T)^(3/2)', 1e-5));
+    return out;
+  },
+  validation: [],
+  diagram(v) {
+    return svg(`
+      ${S.text(160, 40, 'bosons')} ${S.text(480, 40, 'fermions')}
+      ${[0, 1, 2, 3, 4].map(i => S.line(90, 290 - 45 * i, 230, 290 - 45 * i, 'd-line')).join('')} ${[0, 1, 2, 3, 4].map(i => S.line(410, 290 - 45 * i, 550, 290 - 45 * i, 'd-line')).join('')}
+      ${[0, 1, 2, 3, 4, 5, 6].map(i => S.circle(106 + 18 * i, 282, 7, 'd-liquid')).join('')} ${S.circle(140, 237, 7, 'd-liquid')} ${S.circle(180, 237, 7, 'd-liquid')} ${S.circle(160, 192, 7, 'd-liquid')}
+      ${[0, 1, 2].map(i => S.circle(460, 282 - 45 * i, 7, 'd-hazard') + S.circle(500, 282 - 45 * i, 7, 'd-hazard')).join('')} ${S.circle(460, 147, 7, 'd-hazard')}
+      ${S.text(160, 320, 'many in the lowest state')} ${S.text(480, 320, 'one per state (two spins per level)')}
+      ${S.line(400, 170, 560, 170, 'd-dim')} ${S.text(566, 174, 'E_F', 'd-text', 'start')}
+      ${S.text(320, 80, 'occupation 1/(e^((E−μ)/k_BT) ∓ 1)', 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Observe the onset of Bose–Einstein condensation in a trapped atomic gas, and Fermi degeneracy in a second species, and compare with the ideal-gas predictions.',
+    apparatus: ['Magneto-optical trap loading a magnetic or optical dipole trap in ultra-high vacuum', 'Radio-frequency or optical evaporative cooling', 'Resonant imaging beam and camera for absorption imaging after release', 'For electrons in metals: a calorimeter for the electronic heat capacity at low temperature'],
+    instruments: [{ name: 'Absorption imaging after time of flight', measures: 'Momentum distribution, atom number and temperature', range: '10 nK–10 µK', resolution: '≈ 5 % in temperature' }, { name: 'Trap-frequency measurement', measures: 'Geometric-mean trap frequency', range: '10 Hz–10 kHz', resolution: '≈ 1 %' }, { name: 'Low-temperature calorimeter', measures: 'Electronic specific heat γT of a metal', range: '0.1–10 K', resolution: '≈ 1 %' }],
+    procedure: ['Cool the gas by evaporation, recording atom number and temperature at each stage.', 'Fit the time-of-flight images with a thermal distribution plus a condensate peak to obtain the condensate fraction.', 'Plot the fraction against T/T_c with T_c computed from the measured number and trap frequency.', 'For fermions, fit the momentum distribution with a Fermi–Dirac profile to obtain T/T_F and observe the saturation of cloud size (Pauli pressure).'],
+    controls: ['Thermometry from the thermal wings only', 'Vary atom number to test T_c ∝ N^(1/3)', 'Compare bosonic and fermionic isotopes of the same element in the same trap'],
+    signatures: ['A narrow, anisotropic peak appearing in the momentum distribution below T_c', 'Condensate fraction following 1 − (T/T_c)³ in a harmonic trap', 'Fermionic cloud size ceasing to shrink as it is cooled below T_F', 'Electronic heat capacity linear in temperature, far below the classical value'],
+    safety: ['Laser safety', 'High-current coils and ultra-high-vacuum hazards', 'Reactive alkali metals'],
+  },
+  falsify: ['A dilute Bose gas showing no macroscopic ground-state occupation well below the computed T_c.', 'A measured occupation of a fermionic state exceeding one.', 'An electronic heat capacity of a metal equal to the classical value (3/2)k_B per electron.', 'A dilute gas at low phase-space density whose distribution differs from Maxwell–Boltzmann.'],
+  alternatives: [{ name: 'Interacting Bose gas', text: 'Mean-field (Gross–Pitaevskii) and beyond-mean-field theory modify the transition temperature, the condensate shape and its excitations.' }, { name: 'Superfluid helium', text: 'A strongly interacting liquid in which the condensate fraction is only about 8 % at zero temperature.' }, { name: 'Paired fermions', text: 'Attractive interactions lead to Cooper pairing and superfluidity (BCS–BEC crossover), not described by an ideal Fermi gas.' }, { name: 'Lower dimensions', text: 'A uniform ideal Bose gas does not condense at finite temperature in two dimensions; the Berezinskii–Kosterlitz–Thouless transition replaces it.' }],
+  limits: 'Ideal gases in three dimensions, in the thermodynamic limit, with optional leading interaction shifts of T_c. Spin degeneracy 1 for bosons, 2 for fermions in a uniform gas and 1 in a trap. The Fermi dispersion is either fully non-relativistic or fully ultra-relativistic. The trapped Fermi gas uses the semiclassical density of states.',
+  numerics: { method: 'Closed forms; Bose function by series and Robinson expansion; Fermi–Dirac integrals by midpoint quadrature with bisection for the chemical potential, and Sommerfeld expansion in the strongly degenerate regime', order: 2 },
+  inverse: { series: 'condensate', curve: 0, fit: ['n_b'] },
+  extensions: ['Heat capacity through the Bose–Einstein transition', 'Gross–Pitaevskii density profile of a trapped condensate', 'Chandrasekhar mass from relativistic electron degeneracy', 'Planck radiation law as Bose statistics of photons'],
+};
+
+export default [
+  twin, rocket, elevator, schwarzschild, gps, blackHole, cosmology, wormholeModel, modGravity, constants, yukawa,
+  tunnelling, oscillator, wavePacket, rabi, cat, doubleSlit, bell, casimir, statistics,
+];

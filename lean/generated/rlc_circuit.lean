@@ -1,0 +1,183 @@
+import Mathlib.Tactic
+import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
+import Mathlib.Analysis.SpecialFunctions.Pow.Real
+import Mathlib.Analysis.SpecialFunctions.Log.Base
+import Mathlib.Analysis.Calculus.ContDiff.Operations
+
+/-!
+# Series RLC circuit: step and frequency response
+
+Machine-checkable statements for this investigation (rlc-circuit).
+Dimensional homogeneity is proved by computation. Regularity statements are proved where the
+declared domain makes them true, and are otherwise stated with their hypotheses made explicit.
+-/
+
+namespace Bespoke
+
+/-- Physical dimension: exponents of (mass, length, time, current, temperature, amount,
+luminous intensity), stored in twelfths so that square and cube roots stay integral. -/
+structure Dim where
+  m : Int
+  l : Int
+  t : Int
+  i : Int
+  th : Int
+  n : Int
+  j : Int
+  deriving DecidableEq, Repr
+
+namespace Dim
+def one : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩
+def mul (a b : Dim) : Dim := ⟨a.m + b.m, a.l + b.l, a.t + b.t, a.i + b.i, a.th + b.th, a.n + b.n, a.j + b.j⟩
+def div (a b : Dim) : Dim := ⟨a.m - b.m, a.l - b.l, a.t - b.t, a.i - b.i, a.th - b.th, a.n - b.n, a.j - b.j⟩
+/-- Rational power p/q. -/
+def pow (a : Dim) (p q : Int) : Dim := ⟨a.m * p / q, a.l * p / q, a.t * p / q, a.i * p / q, a.th * p / q, a.n * p / q, a.j * p / q⟩
+end Dim
+
+/-- The softened denominator never vanishes. -/
+theorem soft_den_pos (b ε : ℝ) (hε : 0 < ε) : 0 < b ^ 2 + ε ^ 2 := by positivity
+
+/-- A regularised quotient is bounded by |a| / (2 ε) for every real b: it cannot blow up. -/
+theorem soft_recip_bounded (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := by
+  have hpos : 0 < b ^ 2 + ε ^ 2 := by positivity
+  rw [abs_div, abs_mul, abs_of_pos hpos, div_le_div_iff₀ hpos (by positivity)]
+  have h : 2 * ε * |b| ≤ b ^ 2 + ε ^ 2 := by nlinarith [sq_nonneg (|b| - ε), sq_abs b]
+  nlinarith [abs_nonneg a, abs_nonneg b]
+
+/-- The regularised reciprocal is infinitely differentiable on the whole real line. -/
+theorem soft_recip_smooth (ε : ℝ) (hε : 0 < ε) : ContDiff ℝ ⊤ (fun b : ℝ => b / (b ^ 2 + ε ^ 2)) := by
+  apply ContDiff.div contDiff_id (by fun_prop)
+  intro x; positivity
+
+/-- Exponential relaxation never exceeds its initial amplitude. -/
+theorem decay_bounded (x ell : ℝ) (hx : 0 ≤ x) (hl : 0 < ell) : Real.exp (-x / ell) ≤ 1 := by
+  rw [Real.exp_le_one_iff]; have := div_nonneg hx hl.le; linarith [neg_div ell x]
+
+/-- Saturating nonlinearity stays strictly inside (-1, 1). -/
+theorem tanh_bounded (x : ℝ) : |Real.tanh x| < 1 := by
+  rw [abs_lt]; exact ⟨Real.neg_one_lt_tanh x, Real.tanh_lt_one x⟩
+
+/-- Below light speed the Lorentz factor is well defined. -/
+theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c ^ 2 := by
+  have h : v ^ 2 < c ^ 2 := by nlinarith [abs_lt.mp hv, sq_abs v, abs_nonneg v]
+  have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
+  linarith
+
+/-! ## Dimensions of the symbols -/
+
+def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
+def d_BW : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Half-power bandwidth [Hz]
+def d_C_cap : Dim := ⟨-12, -24, 48, 24, 0, 0, 0⟩  -- Capacitance [uF]
+def d_L : Dim := ⟨12, 24, -24, -24, 0, 0, 0⟩  -- Inductance [mH]
+def d_Q : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Quality factor [1]
+def d_R : Dim := ⟨12, 24, -36, -24, 0, 0, 0⟩  -- Series resistance [ohm]
+def d_R_t : Dim := ⟨12, 24, -36, -24, 0, 0, 0⟩  -- Total series resistance [ohm]
+def d_V_s : Dim := ⟨12, 24, -36, -12, 0, 0, 0⟩  -- Source step voltage [V]
+def d_Z_d : Dim := ⟨12, 24, -36, -24, 0, 0, 0⟩  -- Impedance magnitude at the drive frequency [ohm]
+def d_f_0 : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Resonant frequency [Hz]
+def d_f_d : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Drive frequency for the steady-state response [Hz]
+def d_i : Dim := ⟨0, 0, 0, 12, 0, 0, 0⟩  -- Loop current [A]
+def d_omega_0 : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Undamped resonant angular frequency [1/s]
+def d_omega_d : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Damped angular frequency [1/s]
+def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Time [s]
+def d_v_C : Dim := ⟨12, 24, -36, -12, 0, 0, 0⟩  -- Capacitor voltage [V]
+def d_zeta : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Damping ratio [1]
+
+/-! ## 1. Kirchhoff voltage law around the loop
+
+    L*d(i,t) + R_t*i + v_C = V_s
+-/
+/-- Both sides of "Kirchhoff voltage law around the loop" carry the same physical dimension. -/
+theorem eq1_kvl_dim : (Dim.mul d_L (Dim.div d_i d_t)) = d_V_s := by decide
+theorem eq1_kvl_term1 : (Dim.mul d_L (Dim.div d_i d_t)) = (Dim.mul d_R_t d_i) := by decide
+theorem eq1_kvl_term2 : (Dim.mul d_L (Dim.div d_i d_t)) = d_v_C := by decide
+
+/-! ## 2. Capacitor charge balance
+
+    C_cap*d(v_C,t) = i
+-/
+/-- Both sides of "Capacitor charge balance" carry the same physical dimension. -/
+theorem eq2_cap_dim : (Dim.mul d_C_cap (Dim.div d_v_C d_t)) = d_i := by decide
+
+/-! ## 3. Total series resistance
+
+    R_t = R
+-/
+/-- Both sides of "Total series resistance" carry the same physical dimension. -/
+theorem eq3_rt_dim : d_R_t = d_R := by decide
+
+/-! ## 4. Resonant angular frequency
+
+    omega_0 = 1/sqrt(L*C_cap)
+-/
+/-- Both sides of "Resonant angular frequency" carry the same physical dimension. -/
+theorem eq4_w0_dim : d_omega_0 = (Dim.div Dim.one (Dim.pow (Dim.mul d_L d_C_cap) 1 2)) := by decide
+/-- The argument `L * C_cap` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_w0_reg1 (L C_cap : ℝ) (hL : 0 < L) (hC_cap : 0 < C_cap) : 0 ≤ L * C_cap := by positivity
+/-- The denominator `sqrt(L * C_cap)` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_w0_reg2 (L C_cap : ℝ) (hL : 0 < L) (hC_cap : 0 < C_cap) : Real.sqrt (L * C_cap) ≠ 0 := by positivity
+
+/-! ## 5. Resonant frequency
+
+    f_0 = omega_0/(2*pi)
+-/
+/-- Both sides of "Resonant frequency" carry the same physical dimension. -/
+theorem eq5_f0_dim : d_f_0 = (Dim.div d_omega_0 (Dim.mul Dim.one Dim.one)) := by decide
+/-- The denominator `2 * pi` stays away from its singular set whenever the quantities are positive. -/
+theorem eq5_f0_reg1  : (2 : ℝ) * Real.pi ≠ 0 := by positivity
+
+/-! ## 6. Quality factor
+
+    Q = omega_0*L/R_t
+-/
+/-- Both sides of "Quality factor" carry the same physical dimension. -/
+theorem eq6_q_dim : d_Q = (Dim.div (Dim.mul d_omega_0 d_L) d_R_t) := by decide
+/-- The denominator `R_t` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_q_reg1 (R_t : ℝ) (hR_t : 0 < R_t) : R_t ≠ 0 := by positivity
+
+/-! ## 7. Damping ratio
+
+    zeta = R_t/2*sqrt(C_cap/L)
+-/
+/-- Both sides of "Damping ratio" carry the same physical dimension. -/
+theorem eq7_zeta_dim : d_zeta = (Dim.mul (Dim.div d_R_t Dim.one) (Dim.pow (Dim.div d_C_cap d_L) 1 2)) := by decide
+/-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_zeta_reg1  : (2 : ℝ) ≠ 0 := by positivity
+/-- The denominator `L` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_zeta_reg2 (L : ℝ) (hL : 0 < L) : L ≠ 0 := by positivity
+/-- The argument `C_cap / L` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_zeta_reg3 (C_cap L : ℝ) (hC_cap : 0 < C_cap) (hL : 0 < L) : 0 ≤ C_cap / L := by positivity
+
+/-! ## 8. Damped angular frequency
+
+    omega_d = omega_0*sqrt(1 - zeta^2)
+-/
+/-- Both sides of "Damped angular frequency" carry the same physical dimension. -/
+theorem eq8_wd_dim : d_omega_d = (Dim.mul d_omega_0 (Dim.pow Dim.one 1 2)) := by decide
+theorem eq8_wd_term1 : Dim.one = (Dim.pow d_zeta 2 1) := by decide
+/-- Domain condition for `1 - zeta^2`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq8_wd_cond1 (zeta : ℝ) (hdom : 0 ≤ (1 : ℝ) - zeta ^ 2) : 0 ≤ (1 : ℝ) - zeta ^ 2 := hdom
+
+/-! ## 9. Half-power bandwidth
+
+    BW = f_0/Q
+-/
+/-- Both sides of "Half-power bandwidth" carry the same physical dimension. -/
+theorem eq9_bw_dim : d_BW = (Dim.div d_f_0 d_Q) := by decide
+/-- The denominator `Q` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_bw_reg1 (Q : ℝ) (hQ : 0 < Q) : Q ≠ 0 := by positivity
+
+/-! ## 10. Impedance magnitude
+
+    Z_d = sqrt(R_t^2 + (2*pi*f_d*L - 1/(2*pi*f_d*C_cap))^2)
+-/
+/-- Both sides of "Impedance magnitude" carry the same physical dimension. -/
+theorem eq10_z_dim : d_Z_d = (Dim.pow (Dim.pow d_R_t 2 1) 1 2) := by decide
+theorem eq10_z_term1 : (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_f_d) d_L) = (Dim.div Dim.one (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_f_d) d_C_cap)) := by decide
+theorem eq10_z_term2 : (Dim.pow d_R_t 2 1) = (Dim.pow (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_f_d) d_L) 2 1) := by decide
+/-- The denominator `2 * pi * f_d * C_cap` stays away from its singular set whenever the quantities are positive. -/
+theorem eq10_z_reg1 (f_d C_cap : ℝ) (hf_d : 0 < f_d) (hC_cap : 0 < C_cap) : (2 : ℝ) * Real.pi * f_d * C_cap ≠ 0 := by positivity
+/-- Domain condition for `R_t^2 + (2 * pi * f_d * L - 1 / (2 * pi * f_d * C_cap))^2`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq10_z_cond2 (R_t f_d L C_cap : ℝ) (hdom : 0 ≤ R_t ^ 2 + ((2 : ℝ) * Real.pi * f_d * L - (1 : ℝ) / ((2 : ℝ) * Real.pi * f_d * C_cap)) ^ 2) : 0 ≤ R_t ^ 2 + ((2 : ℝ) * Real.pi * f_d * L - (1 : ℝ) / ((2 : ℝ) * Real.pi * f_d * C_cap)) ^ 2 := hdom
+
+end Bespoke

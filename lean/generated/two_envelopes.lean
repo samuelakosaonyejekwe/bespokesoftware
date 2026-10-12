@@ -1,0 +1,122 @@
+import Mathlib.Tactic
+import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
+import Mathlib.Analysis.SpecialFunctions.Pow.Real
+import Mathlib.Analysis.SpecialFunctions.Log.Base
+import Mathlib.Analysis.Calculus.ContDiff.Operations
+
+/-!
+# The two-envelope paradox
+
+Machine-checkable statements for this investigation (two-envelopes).
+Dimensional homogeneity is proved by computation. Regularity statements are proved where the
+declared domain makes them true, and are otherwise stated with their hypotheses made explicit.
+-/
+
+namespace Bespoke
+
+/-- Physical dimension: exponents of (mass, length, time, current, temperature, amount,
+luminous intensity), stored in twelfths so that square and cube roots stay integral. -/
+structure Dim where
+  m : Int
+  l : Int
+  t : Int
+  i : Int
+  th : Int
+  n : Int
+  j : Int
+  deriving DecidableEq, Repr
+
+namespace Dim
+def one : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩
+def mul (a b : Dim) : Dim := ⟨a.m + b.m, a.l + b.l, a.t + b.t, a.i + b.i, a.th + b.th, a.n + b.n, a.j + b.j⟩
+def div (a b : Dim) : Dim := ⟨a.m - b.m, a.l - b.l, a.t - b.t, a.i - b.i, a.th - b.th, a.n - b.n, a.j - b.j⟩
+/-- Rational power p/q. -/
+def pow (a : Dim) (p q : Int) : Dim := ⟨a.m * p / q, a.l * p / q, a.t * p / q, a.i * p / q, a.th * p / q, a.n * p / q, a.j * p / q⟩
+end Dim
+
+/-- The softened denominator never vanishes. -/
+theorem soft_den_pos (b ε : ℝ) (hε : 0 < ε) : 0 < b ^ 2 + ε ^ 2 := by positivity
+
+/-- A regularised quotient is bounded by |a| / (2 ε) for every real b: it cannot blow up. -/
+theorem soft_recip_bounded (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := by
+  have hpos : 0 < b ^ 2 + ε ^ 2 := by positivity
+  rw [abs_div, abs_mul, abs_of_pos hpos, div_le_div_iff₀ hpos (by positivity)]
+  have h : 2 * ε * |b| ≤ b ^ 2 + ε ^ 2 := by nlinarith [sq_nonneg (|b| - ε), sq_abs b]
+  nlinarith [abs_nonneg a, abs_nonneg b]
+
+/-- The regularised reciprocal is infinitely differentiable on the whole real line. -/
+theorem soft_recip_smooth (ε : ℝ) (hε : 0 < ε) : ContDiff ℝ ⊤ (fun b : ℝ => b / (b ^ 2 + ε ^ 2)) := by
+  apply ContDiff.div contDiff_id (by fun_prop)
+  intro x; positivity
+
+/-- Exponential relaxation never exceeds its initial amplitude. -/
+theorem decay_bounded (x ell : ℝ) (hx : 0 ≤ x) (hl : 0 < ell) : Real.exp (-x / ell) ≤ 1 := by
+  rw [Real.exp_le_one_iff]; have := div_nonneg hx hl.le; linarith [neg_div ell x]
+
+/-- Saturating nonlinearity stays strictly inside (-1, 1). -/
+theorem tanh_bounded (x : ℝ) : |Real.tanh x| < 1 := by
+  rw [abs_lt]; exact ⟨Real.neg_one_lt_tanh x, Real.tanh_lt_one x⟩
+
+/-- Below light speed the Lorentz factor is well defined. -/
+theorem lorentz_pos (v c : ℝ) (hc : 0 < c) (hv : |v| < c) : 0 < 1 - v ^ 2 / c ^ 2 := by
+  have h : v ^ 2 < c ^ 2 := by nlinarith [abs_lt.mp hv, sq_abs v, abs_nonneg v]
+  have : v ^ 2 / c ^ 2 < 1 := by rw [div_lt_one (by positivity)]; exact h
+  linarith
+
+/-! ## Dimensions of the symbols -/
+
+def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
+def d_E_other : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Expected content of the other envelope [1]
+def d_G_all : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Expected gain from always switching [1]
+def d_P_up : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Probability that the other envelope holds the larger amount [1]
+def d_g_c : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Conditional expected gain from switching as a fraction of the amount observed [1]
+def d_r_g : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Ratio of the geometric prior: each doubling of the smaller amount is this much less likely [1]
+def d_x_obs : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Amount observed in the chosen envelope [1]
+
+/-! ## 1. Probability that the other envelope is the larger (interior amounts)
+
+    P_up = r_g/(1 + r_g)
+-/
+/-- Both sides of "Probability that the other envelope is the larger (interior amounts)" carry the same physical dimension. -/
+theorem eq1_pup_dim : d_P_up = (Dim.div d_r_g Dim.one) := by decide
+theorem eq1_pup_term1 : Dim.one = d_r_g := by decide
+/-- The denominator `1 + r_g` stays away from its singular set whenever the quantities are positive. -/
+theorem eq1_pup_reg1 (r_g : ℝ) (hr_g : 0 < r_g) : (1 : ℝ) + r_g ≠ 0 := by positivity
+
+/-! ## 2. Expected content of the other envelope
+
+    E_other = P_up*2*x_obs + (1 - P_up)*x_obs/2
+-/
+/-- Both sides of "Expected content of the other envelope" carry the same physical dimension. -/
+theorem eq2_other_dim : d_E_other = (Dim.mul (Dim.mul d_P_up Dim.one) d_x_obs) := by decide
+theorem eq2_other_term1 : Dim.one = d_P_up := by decide
+theorem eq2_other_term2 : (Dim.mul (Dim.mul d_P_up Dim.one) d_x_obs) = (Dim.div (Dim.mul Dim.one d_x_obs) Dim.one) := by decide
+/-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq2_other_reg1  : (2 : ℝ) ≠ 0 := by positivity
+
+/-! ## 3. Conditional gain as a fraction of the observed amount
+
+    g_c = (r_g - 1/2)/(1 + r_g)
+-/
+/-- Both sides of "Conditional gain as a fraction of the observed amount" carry the same physical dimension. -/
+theorem eq3_gain_dim : d_g_c = (Dim.div d_r_g Dim.one) := by decide
+theorem eq3_gain_term1 : d_r_g = (Dim.div Dim.one Dim.one) := by decide
+theorem eq3_gain_term2 : Dim.one = d_r_g := by decide
+/-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_gain_reg1  : (2 : ℝ) ≠ 0 := by positivity
+/-- The denominator `1 + r_g` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_gain_reg2 (r_g : ℝ) (hr_g : 0 < r_g) : (1 : ℝ) + r_g ≠ 0 := by positivity
+
+/-! ## 4. Expected gain from always switching
+
+    G_all = 0
+-/
+/-- Both sides of "Expected gain from always switching" carry the same physical dimension. -/
+theorem eq4_sym_dim : d_G_all = Dim.one := by decide
+
+/-! ## Logical structure of the argument -/
+
+/-- The conclusion follows from the premises in classical propositional logic. -/
+theorem argument_valid (Gain Half Proper Symmetric : Prop) (h1 : Half → Gain) (h2 : (Proper ∧ Symmetric) → (¬Gain)) (h3 : Proper) (h4 : Symmetric) : ¬Half := by tauto
+
+end Bespoke

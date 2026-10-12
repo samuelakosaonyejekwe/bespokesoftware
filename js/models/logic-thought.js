@@ -2530,7 +2530,7 @@ const drakeFermi = {
     inp('u_hyp', 'Uncertainty of the four unknown factors, in orders of magnitude either way', '1', 2, { min: 0, max: 6, kind: 'hypothetical', aliases: ['uncertainty', 'orders of magnitude'] }),
     inp('u_ast', 'Uncertainty of the three astrophysical factors, in orders of magnitude either way', '1', 0.3, { min: 0, max: 1, aliases: ['astrophysical uncertainty'] }),
     inp('beta_x', 'Expansion speed of a colonising civilisation as a fraction of the speed of light (used when colonisation is allowed)', '1', 0.01, { min: 1e-5, max: 0.5, kind: 'hypothetical', aliases: ['expansion speed', 'colonisation speed', 'colonization speed'] }),
-    inp('n_samples', 'Monte-Carlo samples', '1', 10000, { min: 1000, max: 200000, kind: 'numerical', aliases: ['samples'] }),
+    inp('n_samples', 'Monte-Carlo samples', '1', 5000, { min: 1000, max: 200000, kind: 'numerical', aliases: ['samples'] }),
     inp('seed', 'Random seed', '1', 9, { min: 1, max: 1000000, kind: 'numerical', aliases: ['seed'] }),
   ],
   assumptions: [

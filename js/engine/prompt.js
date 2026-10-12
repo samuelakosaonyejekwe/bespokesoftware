@@ -74,6 +74,7 @@ const WORD_UNITS = [
 const SKIP_AFTER_IN = new Set(['the', 'a', 'an', 'this', 'that', 'each', 'every', 'order', 'total', 'which', 'both', 'all', 'its', 'their', 'our', 'my', 'one', 'two', 'such', 'any', 'some', 'water', 'air', 'vacuum', 'space', 'series', 'parallel', 'steady', 'deep']);
 const BAD_UNITS = new Set(['a', 'at', 'as', 'is', 'd', 'h', 't', 'u', 'G', 'P', 'R', 'S', 'F', 'H', 'T', 'D_perm', 'l', 'rev', 'M_conc', 'g0', 'te', 'ha', 'oz', 'sec', 'cal', 'barn', 'kat', 'St', 'Np', 'lx', 'lm', 'sr', 'cd', 'Da', 'pc', 'au', 'Wb', 'ft', 'yd', 'mi', 'R', 'C', 'A', 'J', 'N', 'V', 'W', 'K', 'L', 'g', 's', 'm']);
 const SAFE_SINGLE = new Set(['m', 's', 'g', 'K', 'N', 'V', 'W', 'J', 'A', 'L', 'C', 'T', 'F', 'H', 'h', 'd', 't', 'ft', 'mi']); // accepted only when directly attached to a number or clearly a unit context
+const RELAXED = new Set(['m', 's', 'g', 'K', 'N', 'V', 'W', 'J', 'L', 'h', 'ft', 'mi']); // read as units whenever they follow a number
 const MULT = { thousand: 1e3, million: 1e6, billion: 1e9, trillion: 1e12, hundred: 100, dozen: 12 };
 
 /** Find numbers with (optional) units. Returns [{value, unit, si, dim, quantity, start, end, raw}]. */
@@ -110,7 +111,7 @@ export function extractQuantities(prompt) {
           const single = !/[/^*·]/.test(cand);
           const after = lc(text.slice(end + mu[0].indexOf(cand) + cand.length).trim().split(/[\s,.;]/)[0]);
           let ok = true;
-          if (single && BAD_UNITS.has(cand) && !(SAFE_SINGLE.has(cand) && (attached || /^[\s]*$/.test(after) || !/^[a-z]{3,}$/.test(after) || ['long', 'wide', 'high', 'deep', 'thick', 'pipe', 'pipeline', 'diameter', 'tall', 'apart', 'away', 'above', 'below', 'per', 'of', 'and', 'at', 'in', 'to', 'for', 'from', 'with', 'by', 'is', 'on'].includes(after)))) ok = false;
+          if (single && BAD_UNITS.has(cand) && !RELAXED.has(cand) && !(SAFE_SINGLE.has(cand) && (attached || /^[\s]*$/.test(after) || !/^[a-z]{3,}$/.test(after) || ['long', 'wide', 'high', 'deep', 'thick', 'pipe', 'pipeline', 'diameter', 'tall', 'apart', 'away', 'above', 'below', 'per', 'of', 'and', 'at', 'in', 'to', 'for', 'from', 'with', 'by', 'is', 'on'].includes(after)))) ok = false;
           if (cand === 'in' && SKIP_AFTER_IN.has(after)) ok = false;
           if (cand === 'm' && /^(?:illion|ore|any)/.test(after)) ok = false;
           if (ok) { unit = cand; u = tu; ulen = mu[0].indexOf(cand) + cand.length; }
@@ -148,7 +149,7 @@ export function mapQuantities(extracted, inputs) {
       const ref = Math.abs(inp.si), val = Math.abs(q.si);
       if (ref > 0 && val > 0) s += Math.max(0, 2 - Math.abs(Math.log10(val / ref)));
       if (inp.rangeSI && (q.si < inp.rangeSI[0] * 0.5 || q.si > inp.rangeSI[1] * 2)) s -= 4;
-      if (q.bare && !hit) return -Infinity; // bare numbers need wording to anchor them
+      if ((q.bare || isDimless(q.dim)) && !hit) return -Infinity; // pure numbers and percentages need wording to anchor them
       return s;
     });
     return { qi, scores };

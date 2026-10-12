@@ -32,7 +32,8 @@ async function render() {
   $$('.botnav a').forEach(a => a.toggleAttribute('aria-current', false));
   const nav = { '': 'home', m1: 'm1', m2: 'm2', re: 're', sources: 'sources' }[name]; if (nav) $(`.botnav a[data-nav="${nav}"]`)?.setAttribute('aria-current', 'page');
   if (!v.keepScroll) window.scrollTo(0, 0);
-  if (v.after) { try { cleanup = (await v.after(main)) || null; } catch (err) { console.error(err); toast(`A panel failed to draw: ${err.message}`); } }
+  // each view gets a fresh root element so that its event listeners disappear with it
+  if (v.after) { try { cleanup = (await v.after(main.firstElementChild)) || null; } catch (err) { console.error(err); toast(`A panel failed to draw: ${err.message}`); } }
   main.focus({ preventScroll: true });
 }
 export const go = hash => { if (location.hash === hash) render(); else location.hash = hash; };
