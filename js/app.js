@@ -4,6 +4,8 @@ import * as Pages from './ui/pages.js';
 import { investigationView } from './ui/investigation.js';
 import { prefs } from './core/store.js';
 import { refreshAll } from './core/connectors.js';
+import { watch as typesetMath } from './ui/mathify.js';
+import { watch as explainPanels } from './ui/guide.js';
 
 const main = $('#main');
 const routes = {
@@ -100,5 +102,5 @@ const foregroundRefresh = () => { if (document.visibilityState !== 'visible' || 
 document.addEventListener('visibilitychange', foregroundRefresh); setTimeout(foregroundRefresh, 4000);
 
 window.addEventListener('error', e => console.error(e.error || e.message));
-const boot = () => render();
+const boot = () => { typesetMath(main); explainPanels(main); render(); };
 if (window.katex || document.readyState === 'complete') boot(); else window.addEventListener('DOMContentLoaded', boot);

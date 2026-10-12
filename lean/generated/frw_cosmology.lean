@@ -94,7 +94,7 @@ def d_D_M : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Transverse comoving distance [
 def d_G : Dim := ⟨-12, 36, -24, 0, 0, 0, 0⟩  -- Gravitational constant [m^3/(kg s^2)]
 def d_H : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Hubble rate [1/s]
 def d_H_0 : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Hubble constant [km/s/Mpc]
-def d_Omega_L : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Dark-energy density parameter (used when the universe is not assumed flat) [1]
+def d_Omega_de : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Dark-energy density parameter in use [1]
 def d_Omega_m : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Matter density parameter [1]
 def d_Omega_r : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Radiation density parameter (photons and relativistic neutrinos) [1]
 def d_a_s : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Scale factor (1 today) [1]
@@ -107,12 +107,12 @@ def d_z : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Redshift of interest [1]
 
 /-! ## 1. Friedmann equation
 
-    (d(a_s,t)/a_s)^2 = H_0^2*(Omega_r/a_s^4 + Omega_m/a_s^3 + Omega_L)
+    (d(a_s,t)/a_s)^2 = H_0^2*(Omega_r/a_s^4 + Omega_m/a_s^3 + Omega_de)
 -/
 /-- Both sides of "Friedmann equation" carry the same physical dimension. -/
 theorem eq1_fried_dim : (Dim.pow (Dim.div (Dim.div d_a_s d_t) d_a_s) 2 1) = (Dim.mul (Dim.pow d_H_0 2 1) (Dim.div d_Omega_r (Dim.pow d_a_s 4 1))) := by decide
 theorem eq1_fried_term1 : (Dim.div d_Omega_r (Dim.pow d_a_s 4 1)) = (Dim.div d_Omega_m (Dim.pow d_a_s 3 1)) := by decide
-theorem eq1_fried_term2 : (Dim.div d_Omega_r (Dim.pow d_a_s 4 1)) = d_Omega_L := by decide
+theorem eq1_fried_term2 : (Dim.div d_Omega_r (Dim.pow d_a_s 4 1)) = d_Omega_de := by decide
 /-- Domain condition for `a_s`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq1_fried_cond1 (a_s : ℝ) (hdom : a_s ≠ 0) : a_s ≠ 0 := hdom
 /-- Domain condition for `a_s^4`: a condition on the solution; stated here as an explicit hypothesis. -/
@@ -129,12 +129,12 @@ theorem eq2_hub_dim : d_H = (Dim.div (Dim.div d_a_s d_t) d_a_s) := by decide
 /-- Domain condition for `a_s`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq2_hub_cond1 (a_s : ℝ) (hdom : a_s ≠ 0) : a_s ≠ 0 := hdom
 
-/-! ## 3. Flatness
+/-! ## 3. Flatness fixes the dark-energy density
 
-    Omega_L = 1 - Omega_m - Omega_r
+    Omega_de = 1 - Omega_m - Omega_r
 -/
-/-- Both sides of "Flatness" carry the same physical dimension. -/
-theorem eq3_close_dim : d_Omega_L = Dim.one := by decide
+/-- Both sides of "Flatness fixes the dark-energy density" carry the same physical dimension. -/
+theorem eq3_close_dim : d_Omega_de = Dim.one := by decide
 theorem eq3_close_term1 : Dim.one = d_Omega_m := by decide
 theorem eq3_close_term2 : Dim.one = d_Omega_r := by decide
 
@@ -186,12 +186,12 @@ theorem eq8_da_reg1 (z : ℝ) (hz : 0 < z) : (1 : ℝ) + z ≠ 0 := by positivit
 
 /-! ## 9. Deceleration parameter today
 
-    q_0 = Omega_r + Omega_m/2 + -Omega_L
+    q_0 = Omega_r + Omega_m/2 - Omega_de
 -/
 /-- Both sides of "Deceleration parameter today" carry the same physical dimension. -/
 theorem eq9_q_dim : d_q_0 = d_Omega_r := by decide
 theorem eq9_q_term1 : d_Omega_r = (Dim.div d_Omega_m Dim.one) := by decide
-theorem eq9_q_term2 : d_Omega_r = d_Omega_L := by decide
+theorem eq9_q_term2 : d_Omega_r = d_Omega_de := by decide
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq9_q_reg1  : (2 : ℝ) ≠ 0 := by positivity
 

@@ -109,37 +109,41 @@ def d_w_B : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Share of B patients who are in 
 
 /-! ## 1. Success rate of A in group 1
 
-    p_A1 = s_A1/n_A1
+    p_A1 = min(s_A1, n_A1)/n_A1
 -/
 /-- Both sides of "Success rate of A in group 1" carry the same physical dimension. -/
 theorem eq1_ra1_dim : d_p_A1 = (Dim.div d_s_A1 d_n_A1) := by decide
+theorem eq1_ra1_term1 : d_s_A1 = d_n_A1 := by decide
 /-- The denominator `n_A1` stays away from its singular set whenever the quantities are positive. -/
 theorem eq1_ra1_reg1 (n_A1 : ℝ) (hn_A1 : 0 < n_A1) : n_A1 ≠ 0 := by positivity
 
 /-! ## 2. Success rate of A in group 2
 
-    p_A2 = s_A2/n_A2
+    p_A2 = min(s_A2, n_A2)/n_A2
 -/
 /-- Both sides of "Success rate of A in group 2" carry the same physical dimension. -/
 theorem eq2_ra2_dim : d_p_A2 = (Dim.div d_s_A2 d_n_A2) := by decide
+theorem eq2_ra2_term1 : d_s_A2 = d_n_A2 := by decide
 /-- The denominator `n_A2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq2_ra2_reg1 (n_A2 : ℝ) (hn_A2 : 0 < n_A2) : n_A2 ≠ 0 := by positivity
 
 /-! ## 3. Success rate of B in group 1
 
-    p_B1 = s_B1/n_B1
+    p_B1 = min(s_B1, n_B1)/n_B1
 -/
 /-- Both sides of "Success rate of B in group 1" carry the same physical dimension. -/
 theorem eq3_rb1_dim : d_p_B1 = (Dim.div d_s_B1 d_n_B1) := by decide
+theorem eq3_rb1_term1 : d_s_B1 = d_n_B1 := by decide
 /-- The denominator `n_B1` stays away from its singular set whenever the quantities are positive. -/
 theorem eq3_rb1_reg1 (n_B1 : ℝ) (hn_B1 : 0 < n_B1) : n_B1 ≠ 0 := by positivity
 
 /-! ## 4. Success rate of B in group 2
 
-    p_B2 = s_B2/n_B2
+    p_B2 = min(s_B2, n_B2)/n_B2
 -/
 /-- Both sides of "Success rate of B in group 2" carry the same physical dimension. -/
 theorem eq4_rb2_dim : d_p_B2 = (Dim.div d_s_B2 d_n_B2) := by decide
+theorem eq4_rb2_term1 : d_s_B2 = d_n_B2 := by decide
 /-- The denominator `n_B2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq4_rb2_reg1 (n_B2 : ℝ) (hn_B2 : 0 < n_B2) : n_B2 ≠ 0 := by positivity
 

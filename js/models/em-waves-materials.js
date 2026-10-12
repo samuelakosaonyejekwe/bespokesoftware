@@ -1664,8 +1664,10 @@ function pcCore(v, a, lossless = a.lossless) {
   const trans = (w, n = Nc) => {
     let M = [[[1, 0], [0, 0]], [[0, 0], [1, 0]]], b = cell(w), e = n;
     while (e > 0) { if (e & 1) M = mmul(b, M); b = mmul(b, b); e >>= 1; }
-    const j = [0, w * Ze], P = csub(M[0][0], cmul(j, M[0][1])), Q = cadd(M[0][0], cmul(j, M[0][1])), R = csub(M[1][0], cmul(j, M[1][1])), Sv = cadd(M[1][0], cmul(j, M[1][1]));
-    const r = cdiv(csub(Sv, cmul(j, Q)), csub(cmul(j, P), R)), t = cadd(Q, cmul(P, r));
+    // det M = 1, so the transmitted amplitude is 2 over a plain sum of the four entries. Solving for the reflection first and
+    // then subtracting loses every significant digit deep inside a stop band, where the entries grow like exp(N·Im qa).
+    const j = [0, w * Ze], t = cdiv([2, 0], csub(csub(cadd(M[0][0], M[1][1]), cmul(j, M[0][1])), cdiv(M[1][0], j)));
+    const r = csub(cmul(csub(M[1][1], cmul(j, M[0][1])), t), [1, 0]);
     return { T: cabs(t) ** 2, R: cabs(r) ** 2 };
   };
   const fB = 1 / (2 * (d1 / c1 + d2 / c2)), rhoE = (v.rho_1 * d1 + v.rho_2 * d2) / ac;

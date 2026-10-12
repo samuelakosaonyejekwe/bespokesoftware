@@ -131,94 +131,102 @@ theorem eq1_vm_term1 : d_v_sl = d_v_sg := by decide
 theorem eq2_vt_dim : d_v_t = (Dim.mul d_C_0 d_v_m) := by decide
 theorem eq2_vt_term1 : (Dim.mul d_C_0 d_v_m) = d_v_d := by decide
 
-/-! ## 3. Drift velocity (low Froude number)
+/-! ## 3. Distribution coefficient (Froude number below 3.5)
+
+    C_0 = 1.05 + 0.15*sin(theta)^2
+-/
+/-- Both sides of "Distribution coefficient (Froude number below 3.5)" carry the same physical dimension. -/
+theorem eq3_c0_dim : d_C_0 = Dim.one := by decide
+theorem eq3_c0_term1 : d_theta = Dim.one := by decide
+theorem eq3_c0_term2 : Dim.one = (Dim.mul Dim.one (Dim.pow Dim.one 2 1)) := by decide
+
+/-! ## 4. Drift velocity (Froude number below 3.5)
 
     v_d = 0.54*sqrt(g*D)*cos(theta) + 0.35*sqrt(g*D)*sin(theta)
 -/
-/-- Both sides of "Drift velocity (low Froude number)" carry the same physical dimension. -/
-theorem eq3_vd_dim : d_v_d = (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) := by decide
-theorem eq3_vd_term1 : d_theta = Dim.one := by decide
-theorem eq3_vd_term2 : d_theta = Dim.one := by decide
-theorem eq3_vd_term3 : (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) = (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) := by decide
+/-- Both sides of "Drift velocity (Froude number below 3.5)" carry the same physical dimension. -/
+theorem eq4_vd_dim : d_v_d = (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) := by decide
+theorem eq4_vd_term1 : d_theta = Dim.one := by decide
+theorem eq4_vd_term2 : d_theta = Dim.one := by decide
+theorem eq4_vd_term3 : (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) = (Dim.mul (Dim.mul Dim.one (Dim.pow (Dim.mul d_g d_D) 1 2)) Dim.one) := by decide
 /-- The argument `g * D` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_vd_reg1 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : 0 ≤ g * D := by positivity
+theorem eq4_vd_reg1 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : 0 ≤ g * D := by positivity
 /-- The argument `g * D` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_vd_reg2 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : 0 ≤ g * D := by positivity
+theorem eq4_vd_reg2 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : 0 ≤ g * D := by positivity
 
-/-! ## 4. Slug-body holdup
+/-! ## 5. Slug-body holdup
 
     H_ls = 1/(1 + (v_m/v_ref)^1.39)
 -/
 -- dimensional statement omitted: a symbol has no registered unit
 /-- Domain condition for `v_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_hls_cond1 (v_ref : ℝ) (hdom : v_ref ≠ 0) : v_ref ≠ 0 := hdom
+theorem eq5_hls_cond1 (v_ref : ℝ) (hdom : v_ref ≠ 0) : v_ref ≠ 0 := hdom
 /-- Domain condition for `v_m / v_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_hls_cond2 (v_m v_ref : ℝ) (hdom : 0 ≤ v_m / v_ref) : 0 ≤ v_m / v_ref := hdom
+theorem eq5_hls_cond2 (v_m v_ref : ℝ) (hdom : 0 ≤ v_m / v_ref) : 0 ≤ v_m / v_ref := hdom
 /-- Domain condition for `1 + (v_m / v_ref)^1.39`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_hls_cond3 (v_m v_ref : ℝ) (hdom : (1 : ℝ) + Real.rpow (v_m / v_ref) (1.39 : ℝ) ≠ 0) : (1 : ℝ) + Real.rpow (v_m / v_ref) (1.39 : ℝ) ≠ 0 := hdom
+theorem eq5_hls_cond3 (v_m v_ref : ℝ) (hdom : (1 : ℝ) + Real.rpow (v_m / v_ref) (1.39 : ℝ) ≠ 0) : (1 : ℝ) + Real.rpow (v_m / v_ref) (1.39 : ℝ) ≠ 0 := hdom
 
-/-! ## 5. Slug frequency
+/-! ## 6. Slug frequency
 
     f_s/f_ref = 0.0226*(v_sl/(g*D)*(v_c^2/v_m + v_m))^1.2
 -/
 -- dimensional statement omitted: a symbol has no registered unit
 /-- Domain condition for `f_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_fs_cond1 (f_ref : ℝ) (hdom : f_ref ≠ 0) : f_ref ≠ 0 := hdom
+theorem eq6_fs_cond1 (f_ref : ℝ) (hdom : f_ref ≠ 0) : f_ref ≠ 0 := hdom
 /-- The denominator `g * D` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_fs_reg2 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : g * D ≠ 0 := by positivity
+theorem eq6_fs_reg2 (g D : ℝ) (hg : 0 < g) (hD : 0 < D) : g * D ≠ 0 := by positivity
 /-- The denominator `v_m` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_fs_reg3 (v_m : ℝ) (hv_m : 0 < v_m) : v_m ≠ 0 := by positivity
+theorem eq6_fs_reg3 (v_m : ℝ) (hv_m : 0 < v_m) : v_m ≠ 0 := by positivity
 /-- Domain condition for `v_sl / (g * D) * (v_c^2 / v_m + v_m)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_fs_cond4 (v_sl g D v_c v_m : ℝ) (hdom : 0 ≤ v_sl / (g * D) * (v_c ^ 2 / v_m + v_m)) : 0 ≤ v_sl / (g * D) * (v_c ^ 2 / v_m + v_m) := hdom
+theorem eq6_fs_cond4 (v_sl g D v_c v_m : ℝ) (hdom : 0 ≤ v_sl / (g * D) * (v_c ^ 2 / v_m + v_m)) : 0 ≤ v_sl / (g * D) * (v_c ^ 2 / v_m + v_m) := hdom
 
-/-! ## 6. Slug length
+/-! ## 7. Slug length
 
     L_s = n_ls*D
 -/
 /-- Both sides of "Slug length" carry the same physical dimension. -/
-theorem eq6_ls_dim : d_L_s = (Dim.mul d_n_ls d_D) := by decide
+theorem eq7_ls_dim : d_L_s = (Dim.mul d_n_ls d_D) := by decide
 
-/-! ## 7. Slug-unit length
+/-! ## 8. Slug-unit length
 
     L_u = v_t/f_s
 -/
 /-- Both sides of "Slug-unit length" carry the same physical dimension. -/
-theorem eq7_lu_dim : d_L_u = (Dim.div d_v_t d_f_s) := by decide
+theorem eq8_lu_dim : d_L_u = (Dim.div d_v_t d_f_s) := by decide
 /-- The denominator `f_s` stays away from its singular set whenever the quantities are positive. -/
-theorem eq7_lu_reg1 (f_s : ℝ) (hf_s : 0 < f_s) : f_s ≠ 0 := by positivity
+theorem eq8_lu_reg1 (f_s : ℝ) (hf_s : 0 < f_s) : f_s ≠ 0 := by positivity
 
-/-! ## 8. Mean liquid holdup
+/-! ## 9. Mean liquid holdup
 
-    H_l = 1 - v_sg/(C_0*v_m + v_d)
+    H_l = 1 - v_sg/v_t
 -/
 /-- Both sides of "Mean liquid holdup" carry the same physical dimension. -/
-theorem eq8_hl_dim : d_H_l = Dim.one := by decide
-theorem eq8_hl_term1 : (Dim.mul d_C_0 d_v_m) = d_v_d := by decide
-theorem eq8_hl_term2 : Dim.one = (Dim.div d_v_sg (Dim.mul d_C_0 d_v_m)) := by decide
-/-- Domain condition for `C_0 * v_m + v_d`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq8_hl_cond1 (C_0 v_m v_d : ℝ) (hdom : C_0 * v_m + v_d ≠ 0) : C_0 * v_m + v_d ≠ 0 := hdom
+theorem eq9_hl_dim : d_H_l = Dim.one := by decide
+theorem eq9_hl_term1 : Dim.one = (Dim.div d_v_sg d_v_t) := by decide
+/-- The denominator `v_t` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_hl_reg1 (v_t : ℝ) (hv_t : 0 < v_t) : v_t ≠ 0 := by positivity
 
-/-! ## 9. Stratified-to-intermittent transition
+/-! ## 10. Stratified-to-intermittent transition
 
     u_G = (1 - h_L)*sqrt((rho_l - rho_g)*g*cos(theta)*A_G/(rho_g*S_i))
 -/
 /-- Both sides of "Stratified-to-intermittent transition" carry the same physical dimension. -/
-theorem eq9_kh_dim : d_u_G = (Dim.mul Dim.one (Dim.pow (Dim.div (Dim.mul (Dim.mul (Dim.mul d_rho_l d_g) Dim.one) d_A_G) (Dim.mul d_rho_g d_S_i)) 1 2)) := by decide
-theorem eq9_kh_term1 : Dim.one = d_h_L := by decide
-theorem eq9_kh_term2 : d_rho_l = d_rho_g := by decide
-theorem eq9_kh_term3 : d_theta = Dim.one := by decide
+theorem eq10_kh_dim : d_u_G = (Dim.mul Dim.one (Dim.pow (Dim.div (Dim.mul (Dim.mul (Dim.mul d_rho_l d_g) Dim.one) d_A_G) (Dim.mul d_rho_g d_S_i)) 1 2)) := by decide
+theorem eq10_kh_term1 : Dim.one = d_h_L := by decide
+theorem eq10_kh_term2 : d_rho_l = d_rho_g := by decide
+theorem eq10_kh_term3 : d_theta = Dim.one := by decide
 /-- Domain condition for `rho_g * S_i`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq9_kh_cond1 (rho_g S_i : ℝ) (hdom : rho_g * S_i ≠ 0) : rho_g * S_i ≠ 0 := hdom
+theorem eq10_kh_cond1 (rho_g S_i : ℝ) (hdom : rho_g * S_i ≠ 0) : rho_g * S_i ≠ 0 := hdom
 /-- Domain condition for `(rho_l - rho_g) * g * cos(theta) * A_G / (rho_g * S_i)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq9_kh_cond2 (rho_l rho_g g theta A_G S_i : ℝ) (hdom : 0 ≤ (rho_l - rho_g) * g * Real.cos theta * A_G / (rho_g * S_i)) : 0 ≤ (rho_l - rho_g) * g * Real.cos theta * A_G / (rho_g * S_i) := hdom
+theorem eq10_kh_cond2 (rho_l rho_g g theta A_G S_i : ℝ) (hdom : 0 ≤ (rho_l - rho_g) * g * Real.cos theta * A_G / (rho_g * S_i)) : 0 ≤ (rho_l - rho_g) * g * Real.cos theta * A_G / (rho_g * S_i) := hdom
 
-/-! ## 10. Peak slug force on a 90° bend
+/-! ## 11. Peak slug force on a 90° bend
 
     F_b = sqrt(2)*rho_s*A*v_t^2
 -/
 /-- Both sides of "Peak slug force on a 90° bend" carry the same physical dimension. -/
-theorem eq10_fb_dim : d_F_b = (Dim.mul (Dim.mul (Dim.mul (Dim.pow Dim.one 1 2) d_rho_s) d_A) (Dim.pow d_v_t 2 1)) := by decide
+theorem eq11_fb_dim : d_F_b = (Dim.mul (Dim.mul (Dim.mul (Dim.pow Dim.one 1 2) d_rho_s) d_A) (Dim.pow d_v_t 2 1)) := by decide
 /-- The argument `2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq10_fb_reg1  : 0 ≤ (2 : ℝ) := by positivity
+theorem eq11_fb_reg1  : 0 ≤ (2 : ℝ) := by positivity
 
 end Bespoke

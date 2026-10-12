@@ -145,18 +145,18 @@ theorem eq4_drive_term1 : (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_f_d) d_t
 
 /-! ## 5. Spontaneous polarisation
 
-    P_s = sqrt(-alpha_L/beta_L)
+    P_s = sqrt(max(-alpha_L, 0)/beta_L)
 -/
 /-- Both sides of "Spontaneous polarisation" carry the same physical dimension. -/
 theorem eq5_ps_dim : d_P_s = (Dim.pow (Dim.div d_alpha_L d_beta_L) 1 2) := by decide
 /-- The denominator `beta_L` stays away from its singular set whenever the quantities are positive. -/
 theorem eq5_ps_reg1 (beta_L : ℝ) (hbeta_L : 0 < beta_L) : beta_L ≠ 0 := by positivity
-/-- Domain condition for `-alpha_L / beta_L`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq5_ps_cond2 (alpha_L beta_L : ℝ) (hdom : 0 ≤ -alpha_L / beta_L) : 0 ≤ -alpha_L / beta_L := hdom
+/-- Domain condition for `max(-alpha_L, 0) / beta_L`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq5_ps_cond2 (alpha_L beta_L : ℝ) (hdom : 0 ≤ max (-alpha_L) (0 : ℝ) / beta_L) : 0 ≤ max (-alpha_L) (0 : ℝ) / beta_L := hdom
 
 /-! ## 6. Thermodynamic coercive field
 
-    E_c0 = 2/(3*sqrt(3))*(-alpha_L)*sqrt(-alpha_L/beta_L)
+    E_c0 = 2/(3*sqrt(3))*max(-alpha_L, 0)*sqrt(max(-alpha_L, 0)/beta_L)
 -/
 /-- Both sides of "Thermodynamic coercive field" carry the same physical dimension. -/
 theorem eq6_ec_dim : d_E_c0 = (Dim.mul (Dim.mul (Dim.div Dim.one (Dim.mul Dim.one (Dim.pow Dim.one 1 2))) d_alpha_L) (Dim.pow (Dim.div d_alpha_L d_beta_L) 1 2)) := by decide
@@ -166,17 +166,20 @@ theorem eq6_ec_reg1  : 0 ≤ (3 : ℝ) := by positivity
 theorem eq6_ec_reg2  : (3 : ℝ) * Real.sqrt (3 : ℝ) ≠ 0 := by positivity
 /-- The denominator `beta_L` stays away from its singular set whenever the quantities are positive. -/
 theorem eq6_ec_reg3 (beta_L : ℝ) (hbeta_L : 0 < beta_L) : beta_L ≠ 0 := by positivity
-/-- Domain condition for `-alpha_L / beta_L`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq6_ec_cond4 (alpha_L beta_L : ℝ) (hdom : 0 ≤ -alpha_L / beta_L) : 0 ≤ -alpha_L / beta_L := hdom
+/-- Domain condition for `max(-alpha_L, 0) / beta_L`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq6_ec_cond4 (alpha_L beta_L : ℝ) (hdom : 0 ≤ max (-alpha_L) (0 : ℝ) / beta_L) : 0 ≤ max (-alpha_L) (0 : ℝ) / beta_L := hdom
 
-/-! ## 7. Relaxation time about the polar state
+/-! ## 7. Relaxation time about the equilibrium state
 
-    tau_P = 1/(2*Gamma_k*abs(alpha_L))
+    tau_P = ifpos(-alpha_L, 1/(2*Gamma_k*abs(alpha_L)), 1/(Gamma_k*alpha_L))
 -/
-/-- Both sides of "Relaxation time about the polar state" carry the same physical dimension. -/
+/-- Both sides of "Relaxation time about the equilibrium state" carry the same physical dimension. -/
 theorem eq7_tau_dim : d_tau_P = (Dim.div Dim.one (Dim.mul (Dim.mul Dim.one d_Gamma_k) d_alpha_L)) := by decide
+theorem eq7_tau_term1 : (Dim.div Dim.one (Dim.mul (Dim.mul Dim.one d_Gamma_k) d_alpha_L)) = (Dim.div Dim.one (Dim.mul d_Gamma_k d_alpha_L)) := by decide
 /-- Domain condition for `2 * Gamma_k * abs(alpha_L)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
 theorem eq7_tau_cond1 (Gamma_k alpha_L : ℝ) (hdom : (2 : ℝ) * Gamma_k * abs alpha_L ≠ 0) : (2 : ℝ) * Gamma_k * abs alpha_L ≠ 0 := hdom
+/-- Domain condition for `Gamma_k * alpha_L`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq7_tau_cond2 (Gamma_k alpha_L : ℝ) (hdom : Gamma_k * alpha_L ≠ 0) : Gamma_k * alpha_L ≠ 0 := hdom
 
 /-! ## 8. Displacement plotted
 

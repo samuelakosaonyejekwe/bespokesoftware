@@ -190,18 +190,19 @@ theorem eq8_eq_cond1 (sigma_theta sigma_r sigma_z : ℝ) (hdom : 0 ≤ (0.5 : �
 
 /-! ## 9. Burst pressure
 
-    p_b = 2/sqrt(3)*sigma_y*(2 - sigma_y/sigma_u)*ln(r_o/r_i)
+    p_b = 2/sqrt(3)*sigma_y*(2 - sigma_y/max(sigma_u, sigma_y))*ln(r_o/r_i)
 -/
 /-- Both sides of "Burst pressure" carry the same physical dimension. -/
 theorem eq9_pb_dim : d_p_b = (Dim.mul (Dim.mul (Dim.mul (Dim.div Dim.one (Dim.pow Dim.one 1 2)) d_sigma_y) Dim.one) Dim.one) := by decide
-theorem eq9_pb_term1 : Dim.one = (Dim.div d_sigma_y d_sigma_u) := by decide
-theorem eq9_pb_term2 : (Dim.div d_r_o d_r_i) = Dim.one := by decide
+theorem eq9_pb_term1 : d_sigma_u = d_sigma_y := by decide
+theorem eq9_pb_term2 : Dim.one = (Dim.div d_sigma_y d_sigma_u) := by decide
+theorem eq9_pb_term3 : (Dim.div d_r_o d_r_i) = Dim.one := by decide
 /-- The argument `3` stays away from its singular set whenever the quantities are positive. -/
 theorem eq9_pb_reg1  : 0 ≤ (3 : ℝ) := by positivity
 /-- The denominator `sqrt(3)` stays away from its singular set whenever the quantities are positive. -/
 theorem eq9_pb_reg2  : Real.sqrt (3 : ℝ) ≠ 0 := by positivity
-/-- The denominator `sigma_u` stays away from its singular set whenever the quantities are positive. -/
-theorem eq9_pb_reg3 (sigma_u : ℝ) (hsigma_u : 0 < sigma_u) : sigma_u ≠ 0 := by positivity
+/-- Domain condition for `max(sigma_u, sigma_y)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq9_pb_cond3 (sigma_u sigma_y : ℝ) (hdom : max sigma_u sigma_y ≠ 0) : max sigma_u sigma_y ≠ 0 := hdom
 /-- The denominator `r_i` stays away from its singular set whenever the quantities are positive. -/
 theorem eq9_pb_reg4 (r_i : ℝ) (hr_i : 0 < r_i) : r_i ≠ 0 := by positivity
 /-- Domain condition for `r_o / r_i`: a condition on the solution; stated here as an explicit hypothesis. -/

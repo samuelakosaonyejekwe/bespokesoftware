@@ -142,11 +142,13 @@ theorem eq2_slope_reg2 (a_0 e_o AR : ℝ) (ha_0 : 0 < a_0) (he_o : 0 < e_o) (hAR
 
 /-! ## 3. Lift coefficient
 
-    C_L = a_w*(alpha - alpha_0)
+    C_L = max(-C_Lmax, min(C_Lmax, a_w*(alpha - alpha_0)))
 -/
 /-- Both sides of "Lift coefficient" carry the same physical dimension. -/
-theorem eq3_cl_dim : d_C_L = (Dim.mul d_a_w d_alpha) := by decide
+theorem eq3_cl_dim : d_C_L = d_C_Lmax := by decide
 theorem eq3_cl_term1 : d_alpha = d_alpha_0 := by decide
+theorem eq3_cl_term2 : d_C_Lmax = (Dim.mul d_a_w d_alpha) := by decide
+theorem eq3_cl_term3 : d_C_Lmax = d_C_Lmax := by decide
 
 /-! ## 4. Parabolic drag polar
 
@@ -204,19 +206,28 @@ theorem eq9_preq_term1 : (Dim.mul (Dim.mul (Dim.mul (Dim.mul Dim.one d_rho) (Dim
 /-- The denominator `pi * e_o * AR * rho * V * S` stays away from its singular set whenever the quantities are positive. -/
 theorem eq9_preq_reg1 (e_o AR rho V S : ℝ) (he_o : 0 < e_o) (hAR : 0 < AR) (hrho : 0 < rho) (hV : 0 < V) (hS : 0 < S) : Real.pi * e_o * AR * rho * V * S ≠ 0 := by positivity
 
-/-! ## 10. Breguet range (propeller)
+/-! ## 10. Lift-to-drag ratio in level flight
+
+    LD = m*g*V/P_req
+-/
+/-- Both sides of "Lift-to-drag ratio in level flight" carry the same physical dimension. -/
+theorem eq10_ld_dim : d_LD = (Dim.div (Dim.mul (Dim.mul d_m d_g) d_V) d_P_req) := by decide
+/-- The denominator `P_req` stays away from its singular set whenever the quantities are positive. -/
+theorem eq10_ld_reg1 (P_req : ℝ) (hP_req : 0 < P_req) : P_req ≠ 0 := by positivity
+
+/-! ## 11. Breguet range (propeller)
 
     R_b = eta_p/(g*c_b)*LD*ln(1/(1 - zeta))
 -/
 /-- Both sides of "Breguet range (propeller)" carry the same physical dimension. -/
-theorem eq10_range_dim : d_R_b = (Dim.mul (Dim.mul (Dim.div d_eta_p (Dim.mul d_g d_c_b)) d_LD) Dim.one) := by decide
-theorem eq10_range_term1 : Dim.one = d_zeta := by decide
-theorem eq10_range_term2 : (Dim.div Dim.one Dim.one) = Dim.one := by decide
+theorem eq11_range_dim : d_R_b = (Dim.mul (Dim.mul (Dim.div d_eta_p (Dim.mul d_g d_c_b)) d_LD) Dim.one) := by decide
+theorem eq11_range_term1 : Dim.one = d_zeta := by decide
+theorem eq11_range_term2 : (Dim.div Dim.one Dim.one) = Dim.one := by decide
 /-- The denominator `g * c_b` stays away from its singular set whenever the quantities are positive. -/
-theorem eq10_range_reg1 (g c_b : ℝ) (hg : 0 < g) (hc_b : 0 < c_b) : g * c_b ≠ 0 := by positivity
+theorem eq11_range_reg1 (g c_b : ℝ) (hg : 0 < g) (hc_b : 0 < c_b) : g * c_b ≠ 0 := by positivity
 /-- Domain condition for `1 - zeta`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq10_range_cond2 (zeta : ℝ) (hdom : (1 : ℝ) - zeta ≠ 0) : (1 : ℝ) - zeta ≠ 0 := hdom
+theorem eq11_range_cond2 (zeta : ℝ) (hdom : (1 : ℝ) - zeta ≠ 0) : (1 : ℝ) - zeta ≠ 0 := hdom
 /-- Domain condition for `1 / (1 - zeta)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq10_range_cond3 (zeta : ℝ) (hdom : 0 < (1 : ℝ) / ((1 : ℝ) - zeta)) : 0 < (1 : ℝ) / ((1 : ℝ) - zeta) := hdom
+theorem eq11_range_cond3 (zeta : ℝ) (hdom : 0 < (1 : ℝ) / ((1 : ℝ) - zeta)) : 0 < (1 : ℝ) / ((1 : ℝ) - zeta) := hdom
 
 end Bespoke

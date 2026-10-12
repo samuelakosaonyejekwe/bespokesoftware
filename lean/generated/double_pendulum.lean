@@ -164,7 +164,7 @@ theorem eq6_i2_dim : d_phi_2 = d_theta_2 := by decide
 
 /-! ## 7. Mechanical energy
 
-    E = 0.5*(m_1 + m_2)*L_1^2*omega_1^2 + 0.5*m_2*L_2^2*omega_2^2 + m_2*L_1*L_2*cos(phi_1 - phi_2)*omega_1*omega_2 - (m_1 + m_2)*g*L_1*cos(phi_1) - m_2*g*L_2*cos(phi_2)
+    E = 0.5*(m_1 + m_2)*L_1^2*omega_1^2 + 0.5*m_2*L_2^2*omega_2^2 + m_2*L_1*L_2*cos(phi_1 - phi_2)*omega_1*omega_2 + (m_1 + m_2)*g*L_1*(1 - cos(phi_1)) + m_2*g*L_2*(1 - cos(phi_2))
 -/
 /-- Both sides of "Mechanical energy" carry the same physical dimension. -/
 theorem eq7_en_dim : d_E = (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_1) (Dim.pow d_L_1 2 1)) (Dim.pow d_omega_1 2 1)) := by decide
@@ -175,9 +175,11 @@ theorem eq7_en_term4 : d_phi_1 = Dim.one := by decide
 theorem eq7_en_term5 : (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_1) (Dim.pow d_L_1 2 1)) (Dim.pow d_omega_1 2 1)) = (Dim.mul (Dim.mul (Dim.mul (Dim.mul (Dim.mul d_m_2 d_L_1) d_L_2) Dim.one) d_omega_1) d_omega_2) := by decide
 theorem eq7_en_term6 : d_m_1 = d_m_2 := by decide
 theorem eq7_en_term7 : d_phi_1 = Dim.one := by decide
-theorem eq7_en_term8 : (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_1) (Dim.pow d_L_1 2 1)) (Dim.pow d_omega_1 2 1)) = (Dim.mul (Dim.mul (Dim.mul d_m_1 d_g) d_L_1) Dim.one) := by decide
-theorem eq7_en_term9 : d_phi_2 = Dim.one := by decide
-theorem eq7_en_term10 : (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_1) (Dim.pow d_L_1 2 1)) (Dim.pow d_omega_1 2 1)) = (Dim.mul (Dim.mul (Dim.mul d_m_2 d_g) d_L_2) Dim.one) := by decide
+theorem eq7_en_term8 : Dim.one = Dim.one := by decide
+theorem eq7_en_term9 : (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_1) (Dim.pow d_L_1 2 1)) (Dim.pow d_omega_1 2 1)) = (Dim.mul (Dim.mul (Dim.mul d_m_1 d_g) d_L_1) Dim.one) := by decide
+theorem eq7_en_term10 : d_phi_2 = Dim.one := by decide
+theorem eq7_en_term11 : Dim.one = Dim.one := by decide
+theorem eq7_en_term12 : (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_1) (Dim.pow d_L_1 2 1)) (Dim.pow d_omega_1 2 1)) = (Dim.mul (Dim.mul (Dim.mul d_m_2 d_g) d_L_2) Dim.one) := by decide
 
 /-! ## 8. Normal modes for equal masses and lengths
 

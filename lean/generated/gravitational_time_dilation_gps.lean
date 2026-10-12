@@ -90,10 +90,12 @@ def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
 def d_GM : Dim := ⟨0, 36, -24, 0, 0, 0, 0⟩  -- Gravitational parameter of the planet [m^3/s^2]
 def d_Phi : Dim := ⟨0, 24, -24, 0, 0, 0, 0⟩  -- Newtonian potential (negative) [J/kg]
 def d_R_E : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Equatorial radius of the planet [km]
+def d_T_rot : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Rotation period of the planet [h]
 def d_c : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Speed of light [m/s]
 def d_dt : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Accumulated clock offset [s]
 def d_dx : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Ranging error [m]
 def d_h : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Satellite altitude above the equatorial radius [km]
+def d_lat : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Latitude of the ground clock [deg]
 def d_r : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Orbital radius [m]
 def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Coordinate time [s]
 def d_t_el : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Elapsed time without correction [d]
@@ -137,50 +139,60 @@ theorem eq3_vs_reg1 (r : ℝ) (hr : 0 < r) : r ≠ 0 := by positivity
 /-- The argument `GM / r` stays away from its singular set whenever the quantities are positive. -/
 theorem eq3_vs_reg2 (GM r : ℝ) (hGM : 0 < GM) (hr : 0 < r) : 0 ≤ GM / r := by positivity
 
-/-! ## 4. Gravitational offset
+/-! ## 4. Ground-clock speed
+
+    v_g = 2*pi*R_E*cos(lat)/T_rot
+-/
+/-- Both sides of "Ground-clock speed" carry the same physical dimension. -/
+theorem eq4_vg_dim : d_v_g = (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_R_E) Dim.one) d_T_rot) := by decide
+theorem eq4_vg_term1 : d_lat = Dim.one := by decide
+/-- The denominator `T_rot` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_vg_reg1 (T_rot : ℝ) (hT_rot : 0 < T_rot) : T_rot ≠ 0 := by positivity
+
+/-! ## 5. Gravitational offset
 
     x_gr = GM/c^2*(1/R_E - 1/r)
 -/
 /-- Both sides of "Gravitational offset" carry the same physical dimension. -/
-theorem eq4_gr_dim : d_x_gr = (Dim.mul (Dim.div d_GM (Dim.pow d_c 2 1)) (Dim.div Dim.one d_R_E)) := by decide
-theorem eq4_gr_term1 : (Dim.div Dim.one d_R_E) = (Dim.div Dim.one d_r) := by decide
+theorem eq5_gr_dim : d_x_gr = (Dim.mul (Dim.div d_GM (Dim.pow d_c 2 1)) (Dim.div Dim.one d_R_E)) := by decide
+theorem eq5_gr_term1 : (Dim.div Dim.one d_R_E) = (Dim.div Dim.one d_r) := by decide
 /-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_gr_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
+theorem eq5_gr_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
 /-- The denominator `R_E` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_gr_reg2 (R_E : ℝ) (hR_E : 0 < R_E) : R_E ≠ 0 := by positivity
+theorem eq5_gr_reg2 (R_E : ℝ) (hR_E : 0 < R_E) : R_E ≠ 0 := by positivity
 /-- The denominator `r` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_gr_reg3 (r : ℝ) (hr : 0 < r) : r ≠ 0 := by positivity
+theorem eq5_gr_reg3 (r : ℝ) (hr : 0 < r) : r ≠ 0 := by positivity
 
-/-! ## 5. Velocity offset
+/-! ## 6. Velocity offset
 
     x_sr = -(v_s^2 - v_g^2)/(2*c^2)
 -/
 /-- Both sides of "Velocity offset" carry the same physical dimension. -/
-theorem eq5_sr_dim : d_x_sr = (Dim.div (Dim.pow d_v_s 2 1) (Dim.mul Dim.one (Dim.pow d_c 2 1))) := by decide
-theorem eq5_sr_term1 : (Dim.pow d_v_s 2 1) = (Dim.pow d_v_g 2 1) := by decide
+theorem eq6_sr_dim : d_x_sr = (Dim.div (Dim.pow d_v_s 2 1) (Dim.mul Dim.one (Dim.pow d_c 2 1))) := by decide
+theorem eq6_sr_term1 : (Dim.pow d_v_s 2 1) = (Dim.pow d_v_g 2 1) := by decide
 /-- The denominator `2 * c^2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_sr_reg1 (c : ℝ) (hc : 0 < c) : (2 : ℝ) * c ^ 2 ≠ 0 := by positivity
+theorem eq6_sr_reg1 (c : ℝ) (hc : 0 < c) : (2 : ℝ) * c ^ 2 ≠ 0 := by positivity
 
-/-! ## 6. Net fractional offset
+/-! ## 7. Net fractional offset
 
     x_net = x_gr + x_sr
 -/
 /-- Both sides of "Net fractional offset" carry the same physical dimension. -/
-theorem eq6_net_dim : d_x_net = d_x_gr := by decide
-theorem eq6_net_term1 : d_x_gr = d_x_sr := by decide
+theorem eq7_net_dim : d_x_net = d_x_gr := by decide
+theorem eq7_net_term1 : d_x_gr = d_x_sr := by decide
 
-/-! ## 7. Accumulated time offset
+/-! ## 8. Accumulated time offset
 
     dt = x_net*t_el
 -/
 /-- Both sides of "Accumulated time offset" carry the same physical dimension. -/
-theorem eq7_acc_dim : d_dt = (Dim.mul d_x_net d_t_el) := by decide
+theorem eq8_acc_dim : d_dt = (Dim.mul d_x_net d_t_el) := by decide
 
-/-! ## 8. Ranging error
+/-! ## 9. Ranging error
 
     dx = c*dt
 -/
 /-- Both sides of "Ranging error" carry the same physical dimension. -/
-theorem eq8_rng_dim : d_dx = (Dim.mul d_c d_dt) := by decide
+theorem eq9_rng_dim : d_dx = (Dim.mul d_c d_dt) := by decide
 
 end Bespoke

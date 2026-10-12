@@ -109,7 +109,7 @@ const pipeline = {
         scalar('f', 'Darcy friction factor (mean)', fr, '1'), scalar('p_out', 'Outlet pressure', pOut, 'Pa', { show: 'bar' }),
         scalar('dp', 'Total pressure drop', v.p_in - pOut, 'Pa', { show: 'bar' }), scalar('dp_f', 'Frictional pressure drop', dpF, 'Pa', { show: 'bar' }),
         scalar('T_out', 'Arrival temperature', T[n], 'K', { show: '°C' }), scalar('ell', 'Thermal decay length', ell, 'm', { show: 'km' }),
-        scalar('Q_loss', 'Heat lost to surroundings', heatLoss, 'W', { show: 'kW' }), scalar('P_pump', 'Hydraulic power dissipated', (v.p_in - pOut) * v.Q, 'W', { show: 'kW' }),
+        scalar('Q_loss', 'Heat lost to surroundings', heatLoss, 'W', { show: 'kW' }), scalar('P_pump', 'Hydraulic power for the pressure drop (inlet volume flow)', (v.p_in - pOut) * v.Q, 'W', { show: 'kW' }),
       ],
       series: [
         line('p-profile', 'Pressure along the pipeline', 'Distance', 'km', x.map(s => s / 1000), [{ label: 'Pressure', data: p.map(s => s / 1e5) }], 'Pressure', 'bar'),
@@ -511,8 +511,8 @@ const hydrate = {
     // shut-in: integrate the lumped energy balance numerically up to the reported hot-end time and compare the temperature reached
     const tHot = get(r0, 't_hot'), tau = get(r0, 'tau_c');
     if (Number.isFinite(tHot) && tHot > 0) {
+      // the hydrate temperature is taken at the settle-out pressure, the mean of the end pressures
       const ode = N.rk45((t, y) => [-(y[0] - v.T_amb) / tau], [v.T_in], 0, tHot, 3, { rtol: 1e-10, atol: 1e-10 });
-      // the settle-out pressure is the mean of the end pressures
       out.push(bench('Hot-end temperature at the reported cool-down time, by numerical integration', ode.y[0].at(-1), kamath(v.p_in - v.dp / 2), 'Independent Runge–Kutta integration of the lumped energy balance', 1e-6));
     }
     out.push(bench('Motiee correlation at 1000 psia and gas gravity 0.6', (motiee(1000 * 6894.757, 0.6) - 273.15) * 1.8 + 32, 56.26, 'Hand evaluation of the published polynomial, in °F', 1e-3));

@@ -194,20 +194,20 @@ theorem eq9_gor_reg1  : (6 : ℝ) ≠ 0 := by positivity
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq9_gor_reg2  : (2 : ℝ) ≠ 0 := by positivity
 
-/-! ## 10. Peak force on the sphere
+/-! ## 10. Peak force on the sphere (magnitude)
 
-    F_max = pi*d_p^3/2*k_w*E_ac*Phi_c
+    F_max = pi*d_p^3/2*k_w*E_ac*abs(Phi_c)
 -/
-/-- Both sides of "Peak force on the sphere" carry the same physical dimension. -/
+/-- Both sides of "Peak force on the sphere (magnitude)" carry the same physical dimension. -/
 theorem eq10_fmax_dim : d_F_max = (Dim.mul (Dim.mul (Dim.mul (Dim.div (Dim.mul Dim.one (Dim.pow d_d_p 3 1)) Dim.one) d_k_w) d_E_ac) d_Phi_c) := by decide
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq10_fmax_reg1  : (2 : ℝ) ≠ 0 := by positivity
 
-/-! ## 11. Net weight of the sphere
+/-! ## 11. Net weight of the sphere (magnitude)
 
-    W_p = pi*d_p^3/6*(rho_p - rho_0)*g
+    W_p = pi*d_p^3/6*abs(rho_p - rho_0)*g
 -/
-/-- Both sides of "Net weight of the sphere" carry the same physical dimension. -/
+/-- Both sides of "Net weight of the sphere (magnitude)" carry the same physical dimension. -/
 theorem eq11_wp_dim : d_W_p = (Dim.mul (Dim.mul (Dim.div (Dim.mul Dim.one (Dim.pow d_d_p 3 1)) Dim.one) d_rho_p) d_g) := by decide
 theorem eq11_wp_term1 : d_rho_p = d_rho_0 := by decide
 /-- The denominator `6` stays away from its singular set whenever the quantities are positive. -/

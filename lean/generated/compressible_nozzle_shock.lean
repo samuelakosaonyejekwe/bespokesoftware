@@ -104,11 +104,14 @@ def d_V_e : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Exit velocity [m/s]
 def d_eps : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Exit-to-throat area ratio [1]
 def d_gamma : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Ratio of specific heats [1]
 def d_mdot : Dim := ⟨12, 0, -12, 0, 0, 0, 0⟩  -- Mass flow rate [kg/s]
+def d_mdot_ch : Dim := ⟨12, 0, -12, 0, 0, 0, 0⟩  -- Choked ideal mass flow [kg/s]
+def d_mdot_sub : Dim := ⟨12, 0, -12, 0, 0, 0, 0⟩  -- Ideal mass flow of an exit plane at the back pressure [kg/s]
 def d_p : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Static pressure [Pa]
 def d_p_0 : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Stagnation (chamber) pressure [bar]
 def d_p_1 : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Pressure ahead of the shock [Pa]
 def d_p_2 : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Pressure behind the shock [Pa]
 def d_p_b : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Back (ambient) pressure [bar]
+def d_p_crit : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Critical (sonic) pressure [Pa]
 def d_p_e : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Exit-plane pressure [Pa]
 def d_rho_1 : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Density ahead of the shock [kg/m^3]
 def d_rho_2 : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Density behind the shock [kg/m^3]
@@ -171,85 +174,130 @@ theorem eq3_area_cond5 (gamma : ℝ) (hdom : (2 : ℝ) * (gamma - (1 : ℝ)) ≠
 /-- Both sides of "Exit area" carry the same physical dimension. -/
 theorem eq4_ae_dim : d_A_e = (Dim.mul d_eps d_A_t) := by decide
 
-/-! ## 5. Choked mass flow
+/-! ## 5. Critical (sonic) pressure
 
-    mdot = A_t*p_0*sqrt(gamma/(R_g*T_0))*(2/(gamma + 1))^((gamma + 1)/(2*(gamma - 1)))
+    p_crit = p_0*(2/(gamma + 1))^(gamma/(gamma - 1))
 -/
-/-- Both sides of "Choked mass flow" carry the same physical dimension. -/
-theorem eq5_mdot_dim : d_mdot = (Dim.mul (Dim.mul (Dim.mul d_A_t d_p_0) (Dim.pow (Dim.div d_gamma (Dim.mul d_R_g d_T_0)) 1 2)) Dim.one) := by decide
-theorem eq5_mdot_term1 : d_gamma = Dim.one := by decide
-theorem eq5_mdot_term2 : d_gamma = Dim.one := by decide
-theorem eq5_mdot_term3 : d_gamma = Dim.one := by decide
-/-- The denominator `R_g * T_0` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_mdot_reg1 (R_g T_0 : ℝ) (hR_g : 0 < R_g) (hT_0 : 0 < T_0) : R_g * T_0 ≠ 0 := by positivity
-/-- The argument `gamma / (R_g * T_0)` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_mdot_reg2 (gamma R_g T_0 : ℝ) (hgamma : 0 < gamma) (hR_g : 0 < R_g) (hT_0 : 0 < T_0) : 0 ≤ gamma / (R_g * T_0) := by positivity
+/-- Both sides of "Critical (sonic) pressure" carry the same physical dimension. -/
+theorem eq5_pcrit_dim : d_p_crit = (Dim.mul d_p_0 Dim.one) := by decide
+theorem eq5_pcrit_term1 : d_gamma = Dim.one := by decide
+theorem eq5_pcrit_term2 : d_gamma = Dim.one := by decide
 /-- The denominator `gamma + 1` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_mdot_reg3 (gamma : ℝ) (hgamma : 0 < gamma) : gamma + (1 : ℝ) ≠ 0 := by positivity
-/-- Domain condition for `2 * (gamma - 1)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq5_mdot_cond4 (gamma : ℝ) (hdom : (2 : ℝ) * (gamma - (1 : ℝ)) ≠ 0) : (2 : ℝ) * (gamma - (1 : ℝ)) ≠ 0 := hdom
+theorem eq5_pcrit_reg1 (gamma : ℝ) (hgamma : 0 < gamma) : gamma + (1 : ℝ) ≠ 0 := by positivity
+/-- Domain condition for `gamma - 1`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq5_pcrit_cond2 (gamma : ℝ) (hdom : gamma - (1 : ℝ) ≠ 0) : gamma - (1 : ℝ) ≠ 0 := hdom
 
-/-! ## 6. Shock pressure ratio
+/-! ## 6. Choked ideal mass flow
+
+    mdot_ch = A_t*p_0*sqrt(gamma/(R_g*T_0))*(2/(gamma + 1))^((gamma + 1)/(2*(gamma - 1)))
+-/
+/-- Both sides of "Choked ideal mass flow" carry the same physical dimension. -/
+theorem eq6_mch_dim : d_mdot_ch = (Dim.mul (Dim.mul (Dim.mul d_A_t d_p_0) (Dim.pow (Dim.div d_gamma (Dim.mul d_R_g d_T_0)) 1 2)) Dim.one) := by decide
+theorem eq6_mch_term1 : d_gamma = Dim.one := by decide
+theorem eq6_mch_term2 : d_gamma = Dim.one := by decide
+theorem eq6_mch_term3 : d_gamma = Dim.one := by decide
+/-- The denominator `R_g * T_0` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_mch_reg1 (R_g T_0 : ℝ) (hR_g : 0 < R_g) (hT_0 : 0 < T_0) : R_g * T_0 ≠ 0 := by positivity
+/-- The argument `gamma / (R_g * T_0)` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_mch_reg2 (gamma R_g T_0 : ℝ) (hgamma : 0 < gamma) (hR_g : 0 < R_g) (hT_0 : 0 < T_0) : 0 ≤ gamma / (R_g * T_0) := by positivity
+/-- The denominator `gamma + 1` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_mch_reg3 (gamma : ℝ) (hgamma : 0 < gamma) : gamma + (1 : ℝ) ≠ 0 := by positivity
+/-- Domain condition for `2 * (gamma - 1)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq6_mch_cond4 (gamma : ℝ) (hdom : (2 : ℝ) * (gamma - (1 : ℝ)) ≠ 0) : (2 : ℝ) * (gamma - (1 : ℝ)) ≠ 0 := hdom
+
+/-! ## 7. Ideal mass flow of an exit plane at the back pressure
+
+    mdot_sub = A_e*p_0*sqrt(2*gamma/((gamma - 1)*R_g*T_0)*max((p_b/p_0)^(2/gamma) - (p_b/p_0)^((gamma + 1)/gamma), 0))
+-/
+/-- Both sides of "Ideal mass flow of an exit plane at the back pressure" carry the same physical dimension. -/
+theorem eq7_msub_dim : d_mdot_sub = (Dim.mul (Dim.mul d_A_e d_p_0) (Dim.pow (Dim.mul (Dim.div (Dim.mul Dim.one d_gamma) (Dim.mul (Dim.mul d_gamma d_R_g) d_T_0)) Dim.one) 1 2)) := by decide
+theorem eq7_msub_term1 : d_gamma = Dim.one := by decide
+theorem eq7_msub_term2 : d_gamma = Dim.one := by decide
+theorem eq7_msub_term3 : Dim.one = Dim.one := by decide
+/-- Domain condition for `(gamma - 1) * R_g * T_0`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq7_msub_cond1 (gamma R_g T_0 : ℝ) (hdom : (gamma - (1 : ℝ)) * R_g * T_0 ≠ 0) : (gamma - (1 : ℝ)) * R_g * T_0 ≠ 0 := hdom
+/-- The denominator `p_0` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_msub_reg2 (p_0 : ℝ) (hp_0 : 0 < p_0) : p_0 ≠ 0 := by positivity
+/-- The denominator `gamma` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_msub_reg3 (gamma : ℝ) (hgamma : 0 < gamma) : gamma ≠ 0 := by positivity
+/-- The denominator `p_0` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_msub_reg4 (p_0 : ℝ) (hp_0 : 0 < p_0) : p_0 ≠ 0 := by positivity
+/-- The denominator `gamma` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_msub_reg5 (gamma : ℝ) (hgamma : 0 < gamma) : gamma ≠ 0 := by positivity
+/-- Domain condition for `2 * gamma / ((gamma - 1) * R_g * T_0) * max((p_b / p_0)^(2 / gamma) - (p_b / p_0)^((gamma + 1) / gamma), 0)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq7_msub_cond6 (gamma R_g T_0 p_b p_0 : ℝ) (hdom : 0 ≤ (2 : ℝ) * gamma / ((gamma - (1 : ℝ)) * R_g * T_0) * max (Real.rpow (p_b / p_0) ((2 : ℝ) / gamma) - Real.rpow (p_b / p_0) ((gamma + (1 : ℝ)) / gamma)) (0 : ℝ)) : 0 ≤ (2 : ℝ) * gamma / ((gamma - (1 : ℝ)) * R_g * T_0) * max (Real.rpow (p_b / p_0) ((2 : ℝ) / gamma) - Real.rpow (p_b / p_0) ((gamma + (1 : ℝ)) / gamma)) (0 : ℝ) := hdom
+
+/-! ## 8. Mass flow
+
+    mdot = ifpos(p_b - p_crit, min(mdot_ch, mdot_sub), mdot_ch)
+-/
+/-- Both sides of "Mass flow" carry the same physical dimension. -/
+theorem eq8_mdot_dim : d_mdot = d_mdot_ch := by decide
+theorem eq8_mdot_term1 : d_p_b = d_p_crit := by decide
+theorem eq8_mdot_term2 : d_mdot_ch = d_mdot_sub := by decide
+theorem eq8_mdot_term3 : d_mdot_ch = d_mdot_ch := by decide
+
+/-! ## 9. Shock pressure ratio
 
     p_2/p_1 = 1 + 2*gamma/(gamma + 1)*(M_1^2 - 1)
 -/
 /-- Both sides of "Shock pressure ratio" carry the same physical dimension. -/
-theorem eq6_sp_dim : (Dim.div d_p_2 d_p_1) = Dim.one := by decide
-theorem eq6_sp_term1 : d_gamma = Dim.one := by decide
-theorem eq6_sp_term2 : (Dim.pow d_M_1 2 1) = Dim.one := by decide
-theorem eq6_sp_term3 : Dim.one = (Dim.mul (Dim.div (Dim.mul Dim.one d_gamma) d_gamma) (Dim.pow d_M_1 2 1)) := by decide
+theorem eq9_sp_dim : (Dim.div d_p_2 d_p_1) = Dim.one := by decide
+theorem eq9_sp_term1 : d_gamma = Dim.one := by decide
+theorem eq9_sp_term2 : (Dim.pow d_M_1 2 1) = Dim.one := by decide
+theorem eq9_sp_term3 : Dim.one = (Dim.mul (Dim.div (Dim.mul Dim.one d_gamma) d_gamma) (Dim.pow d_M_1 2 1)) := by decide
 /-- Domain condition for `p_1`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq6_sp_cond1 (p_1 : ℝ) (hdom : p_1 ≠ 0) : p_1 ≠ 0 := hdom
+theorem eq9_sp_cond1 (p_1 : ℝ) (hdom : p_1 ≠ 0) : p_1 ≠ 0 := hdom
 /-- The denominator `gamma + 1` stays away from its singular set whenever the quantities are positive. -/
-theorem eq6_sp_reg2 (gamma : ℝ) (hgamma : 0 < gamma) : gamma + (1 : ℝ) ≠ 0 := by positivity
+theorem eq9_sp_reg2 (gamma : ℝ) (hgamma : 0 < gamma) : gamma + (1 : ℝ) ≠ 0 := by positivity
 
-/-! ## 7. Shock density ratio
+/-! ## 10. Shock density ratio
 
     rho_2/rho_1 = (gamma + 1)*M_1^2/((gamma - 1)*M_1^2 + 2)
 -/
 /-- Both sides of "Shock density ratio" carry the same physical dimension. -/
-theorem eq7_sr_dim : (Dim.div d_rho_2 d_rho_1) = (Dim.div (Dim.mul d_gamma (Dim.pow d_M_1 2 1)) (Dim.mul d_gamma (Dim.pow d_M_1 2 1))) := by decide
-theorem eq7_sr_term1 : d_gamma = Dim.one := by decide
-theorem eq7_sr_term2 : d_gamma = Dim.one := by decide
-theorem eq7_sr_term3 : (Dim.mul d_gamma (Dim.pow d_M_1 2 1)) = Dim.one := by decide
+theorem eq10_sr_dim : (Dim.div d_rho_2 d_rho_1) = (Dim.div (Dim.mul d_gamma (Dim.pow d_M_1 2 1)) (Dim.mul d_gamma (Dim.pow d_M_1 2 1))) := by decide
+theorem eq10_sr_term1 : d_gamma = Dim.one := by decide
+theorem eq10_sr_term2 : d_gamma = Dim.one := by decide
+theorem eq10_sr_term3 : (Dim.mul d_gamma (Dim.pow d_M_1 2 1)) = Dim.one := by decide
 /-- The denominator `rho_1` stays away from its singular set whenever the quantities are positive. -/
-theorem eq7_sr_reg1 (rho_1 : ℝ) (hrho_1 : 0 < rho_1) : rho_1 ≠ 0 := by positivity
+theorem eq10_sr_reg1 (rho_1 : ℝ) (hrho_1 : 0 < rho_1) : rho_1 ≠ 0 := by positivity
 /-- Domain condition for `(gamma - 1) * M_1^2 + 2`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq7_sr_cond2 (gamma M_1 : ℝ) (hdom : (gamma - (1 : ℝ)) * M_1 ^ 2 + (2 : ℝ) ≠ 0) : (gamma - (1 : ℝ)) * M_1 ^ 2 + (2 : ℝ) ≠ 0 := hdom
+theorem eq10_sr_cond2 (gamma M_1 : ℝ) (hdom : (gamma - (1 : ℝ)) * M_1 ^ 2 + (2 : ℝ) ≠ 0) : (gamma - (1 : ℝ)) * M_1 ^ 2 + (2 : ℝ) ≠ 0 := hdom
 
-/-! ## 8. Mach number behind the shock
+/-! ## 11. Mach number behind the shock
 
     M_2^2 = (1 + (gamma - 1)/2*M_1^2)/(gamma*M_1^2 - (gamma - 1)/2)
 -/
 /-- Both sides of "Mach number behind the shock" carry the same physical dimension. -/
-theorem eq8_sm_dim : (Dim.pow d_M_2 2 1) = (Dim.div Dim.one (Dim.mul d_gamma (Dim.pow d_M_1 2 1))) := by decide
-theorem eq8_sm_term1 : d_gamma = Dim.one := by decide
-theorem eq8_sm_term2 : Dim.one = (Dim.mul (Dim.div d_gamma Dim.one) (Dim.pow d_M_1 2 1)) := by decide
-theorem eq8_sm_term3 : d_gamma = Dim.one := by decide
-theorem eq8_sm_term4 : (Dim.mul d_gamma (Dim.pow d_M_1 2 1)) = (Dim.div d_gamma Dim.one) := by decide
+theorem eq11_sm_dim : (Dim.pow d_M_2 2 1) = (Dim.div Dim.one (Dim.mul d_gamma (Dim.pow d_M_1 2 1))) := by decide
+theorem eq11_sm_term1 : d_gamma = Dim.one := by decide
+theorem eq11_sm_term2 : Dim.one = (Dim.mul (Dim.div d_gamma Dim.one) (Dim.pow d_M_1 2 1)) := by decide
+theorem eq11_sm_term3 : d_gamma = Dim.one := by decide
+theorem eq11_sm_term4 : (Dim.mul d_gamma (Dim.pow d_M_1 2 1)) = (Dim.div d_gamma Dim.one) := by decide
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq8_sm_reg1  : (2 : ℝ) ≠ 0 := by positivity
+theorem eq11_sm_reg1  : (2 : ℝ) ≠ 0 := by positivity
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq8_sm_reg2  : (2 : ℝ) ≠ 0 := by positivity
+theorem eq11_sm_reg2  : (2 : ℝ) ≠ 0 := by positivity
 /-- Domain condition for `gamma * M_1^2 - (gamma - 1) / 2`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq8_sm_cond3 (gamma M_1 : ℝ) (hdom : gamma * M_1 ^ 2 - (gamma - (1 : ℝ)) / (2 : ℝ) ≠ 0) : gamma * M_1 ^ 2 - (gamma - (1 : ℝ)) / (2 : ℝ) ≠ 0 := hdom
+theorem eq11_sm_cond3 (gamma M_1 : ℝ) (hdom : gamma * M_1 ^ 2 - (gamma - (1 : ℝ)) / (2 : ℝ) ≠ 0) : gamma * M_1 ^ 2 - (gamma - (1 : ℝ)) / (2 : ℝ) ≠ 0 := hdom
 
-/-! ## 9. Exit velocity
+/-! ## 12. Exit velocity
 
     V_e = M_e*sqrt(gamma*R_g*T_e)
 -/
 /-- Both sides of "Exit velocity" carry the same physical dimension. -/
-theorem eq9_ve_dim : d_V_e = (Dim.mul d_M_e (Dim.pow (Dim.mul (Dim.mul d_gamma d_R_g) d_T_e) 1 2)) := by decide
+theorem eq12_ve_dim : d_V_e = (Dim.mul d_M_e (Dim.pow (Dim.mul (Dim.mul d_gamma d_R_g) d_T_e) 1 2)) := by decide
 /-- The argument `gamma * R_g * T_e` stays away from its singular set whenever the quantities are positive. -/
-theorem eq9_ve_reg1 (gamma R_g T_e : ℝ) (hgamma : 0 < gamma) (hR_g : 0 < R_g) (hT_e : 0 < T_e) : 0 ≤ gamma * R_g * T_e := by positivity
+theorem eq12_ve_reg1 (gamma R_g T_e : ℝ) (hgamma : 0 < gamma) (hR_g : 0 < R_g) (hT_e : 0 < T_e) : 0 ≤ gamma * R_g * T_e := by positivity
 
-/-! ## 10. Thrust
+/-! ## 13. Thrust
 
     F = mdot*V_e + (p_e - p_b)*A_e
 -/
 /-- Both sides of "Thrust" carry the same physical dimension. -/
-theorem eq10_thrust_dim : d_F = (Dim.mul d_mdot d_V_e) := by decide
-theorem eq10_thrust_term1 : d_p_e = d_p_b := by decide
-theorem eq10_thrust_term2 : (Dim.mul d_mdot d_V_e) = (Dim.mul d_p_e d_A_e) := by decide
+theorem eq13_thrust_dim : d_F = (Dim.mul d_mdot d_V_e) := by decide
+theorem eq13_thrust_term1 : d_p_e = d_p_b := by decide
+theorem eq13_thrust_term2 : (Dim.mul d_mdot d_V_e) = (Dim.mul d_p_e d_A_e) := by decide
 
 end Bespoke

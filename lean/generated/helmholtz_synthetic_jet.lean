@@ -91,6 +91,7 @@ def d_A_o : Dim := ⟨0, 24, 0, 0, 0, 0, 0⟩  -- Orifice area [m^2]
 def d_D_c : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Cavity (diaphragm) diameter [mm]
 def d_F_j : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Jet-formation parameter Re/S² [1]
 def d_H_c : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Cavity depth [mm]
+def d_K_j : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Jet-formation constant [1]
 def d_L_0 : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Stroke length [m]
 def d_L_eff : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Effective neck length [m]
 def d_P_e : Dim := ⟨12, 24, -36, 0, 0, 0, 0⟩  -- Electrical power [W]
@@ -216,10 +217,11 @@ theorem eq11_fj_reg1 (S_t : ℝ) (hS_t : 0 < S_t) : S_t ^ 2 ≠ 0 := by positivi
 
 /-! ## 12. Time-mean thrust
 
-    T_j = rho*A_o*U_o^2/4
+    T_j = ifpos(F_j - K_j, rho*A_o*U_o^2/4, 0)
 -/
 /-- Both sides of "Time-mean thrust" carry the same physical dimension. -/
 theorem eq12_thr_dim : d_T_j = (Dim.div (Dim.mul (Dim.mul d_rho d_A_o) (Dim.pow d_U_o 2 1)) Dim.one) := by decide
+theorem eq12_thr_term1 : d_F_j = d_K_j := by decide
 /-- The denominator `4` stays away from its singular set whenever the quantities are positive. -/
 theorem eq12_thr_reg1  : (4 : ℝ) ≠ 0 := by positivity
 

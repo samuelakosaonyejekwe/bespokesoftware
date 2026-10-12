@@ -47,6 +47,7 @@ function recordVideo(canvas, pl, a) {
   setTimeout(() => { pl.pause(); rec.stop(); }, a.frames.length / 18 * 1000 + 300);
 }
 
+const rawOr = v => (v && v.__raw != null ? v.__raw : esc(v));
 const KIND = { law: ['Fundamental law', 'ok'], derived: ['Derived', 'live'], closure: ['Closure relation', 'soft'], empirical: ['Empirical correlation', 'warn'], definition: ['Definition', 'mute'], hypothesis: ['Hypothesis', 'hypo'], boundary: ['Boundary condition', 'mute'], initial: ['Initial condition', 'mute'] };
 const VER = { verified: ['Verified', 'ok'], conditional: ['Verified with a domain condition', 'warn'], singular: ['Singular term found and regularised', 'warn'], inconsistent: ['Dimensionally inconsistent', 'bad'], incomplete: ['Units incomplete', 'warn'], rejected: ['Does not parse', 'bad'] };
 /** Equation card with origin, verification steps and any regularised or repaired form. */
@@ -62,7 +63,7 @@ export function equationCard(rec, q = {}, asm = [], extraBtn = '') {
     ${rec.repair ? html`<div class="note warn"><b>Proposed correction.</b> ${rec.repair.text}${join(rec.repair.candidates, (k, i) => html`<div class="row" style="margin-top:.4rem">${tex(k.tex)}<button class="btn sm" data-repair="${rec.id}:${i}">Adopt this amendment</button></div>`)}</div>` : ''}
   </div>`;
 }
-export const scalarsTable = (scalars) => raw(`<div class="tw"><table><thead><tr><th>Quantity</th><th>Symbol</th><th class="num">Value</th></tr></thead><tbody>${scalars.map(s => `<tr><td>${esc(s.name)}${s.status === 'hypothetical' ? ' <span class="chip hypo">conditional</span>' : ''}${s.note ? ` <span class="dim small">(${esc(s.note)})</span>` : ''}</td><td>${tex(symTexSafe(s.sym)).__raw}</td><td class="num"><b>${esc(showScalar(s))}</b></td></tr>`).join('')}</tbody></table></div>`);
+export const scalarsTable = (scalars) => raw(`<div class="tw"><table><thead><tr><th>Quantity</th><th>Symbol</th><th class="num">Value</th></tr></thead><tbody>${scalars.map(s => `<tr><td>${esc(s.name)}${s.status === 'hypothetical' ? ' <span class="chip hypo">conditional</span>' : ''}${s.note ? ` <span class="dim small">(${esc(s.note)})</span>` : ''}</td><td>${tex(symTexSafe(s.sym)).__raw}</td><td class="num"><b>${rawOr(showScalar(s))}</b></td></tr>`).join('')}</tbody></table></div>`);
 import { symTex } from '../core/expr.js';
 export const symTexSafe = s => { try { return symTex(s); } catch { return s; } };
-export const statGrid = (scalars, n = 6) => raw(`<div class="grid g4">${scalars.slice(0, n).map(s => `<div class="stat"><div class="v">${esc(showScalar(s, 4))}</div><div class="l">${esc(s.name)}</div></div>`).join('')}</div>`);
+export const statGrid = (scalars, n = 6) => raw(`<div class="grid g4">${scalars.slice(0, n).map(s => `<div class="stat"><div class="v">${rawOr(showScalar(s, 4))}</div><div class="l">${esc(s.name)}</div></div>`).join('')}</div>`);

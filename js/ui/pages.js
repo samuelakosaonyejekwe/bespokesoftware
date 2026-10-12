@@ -1,7 +1,7 @@
 // Top-level pages: home, the two prompt interfaces, the reverse-engineering studio,
 // saved work, the model library, the field taxonomy, live data sources, settings and help.
 import { html, raw, join, esc, chip, toast, on, $, $$, debounce, table, num, when, bytes, tex, section } from './dom.js';
-import { go, install, canPromptInstall, isStandalone } from '../app.js';
+import { go, rerender, install, canPromptInstall, isStandalone } from '../app.js';
 import { MODELS, modelById } from '../models/index.js';
 import * as P from '../engine/prompt.js';
 import { createInvestigation, log } from '../engine/core.js';
@@ -77,7 +77,7 @@ export async function home() {
         <div class="stat"><div class="v">${Conn.SOURCES.length}</div><div class="l">live scientific data sources</div></div>
       </div>
       ${saved.length ? html`<div class="card"><div class="row spread"><h2>Continue where you left off</h2><a class="btn sm" href="#/saved">All saved work (${saved.length})</a></div>
-        <div class="grid g3">${join(saved.slice(0, 6), s => html`<a class="card flat tight modcard" href="#/i/${s.id}/concept"><div class="row"><span class="klass">${s.module === 1 ? 'Module 1' : 'Module 2'}</span>${join(s.klass.tags, k => chip('Class ' + k, 'mute'))}</div><b>${s.title}</b><small>${when(s.updated)}</small></a>`)}</div></div>` : ''}
+        <div class="grid g3">${join(saved.slice(0, 6), s => html`<div class="savedcard"><a class="card flat tight modcard" href="#/i/${s.id}/concept"><div class="row"><span class="klass">${s.module === 1 ? 'Module 1' : 'Module 2'}</span>${join(s.klass.tags, k => chip('Class ' + k, 'mute'))}</div><b>${s.title}</b><small>${when(s.updated)}</small></a><button class="btn sm danger del" data-del="${s.id}" data-name="${s.title}" aria-label="Delete ${s.title}" title="Delete this investigation from this device">Delete</button></div>`)}</div></div>` : ''}
       <div class="grid g2">
         <div class="card"><h2>What makes a result trustworthy here</h2>
           <ul class="clean">
@@ -94,6 +94,7 @@ export async function home() {
           </div>
           <p class="small dim" style="margin-top:.8rem">Library coverage: ${nI} primarily computable, ${nII} with a formal logical structure, ${nIII} speculative or counterfactual.</p></div>
       </div></div>`,
+    after(root) { on(root, 'click', '[data-del]', async (ev, el) => { ev.preventDefault(); if (!confirm(`Delete “${el.dataset.name}” and its uploaded files from this device? This cannot be undone.`)) return; await Store.deleteInvestigation(el.dataset.del); toast('Deleted'); rerender(); }); },
   };
 }
 
@@ -216,12 +217,13 @@ export async function savedPage() {
   const saved = await Store.listInvestigations(), est = await Store.storageEstimate();
   return {
     title: 'Saved investigations', crumb: 'Saved work',
-    html: html`<div class="stack"><div class="row spread"><h1>Saved investigations</h1>${est ? html`<span class="pill">${bytes(est.used)} used on this device</span>` : ''}</div>
+    html: html`<div class="stack"><div class="row spread"><h1>Saved investigations</h1><span class="row">${est ? html`<span class="pill">${bytes(est.used)} used on this device</span>` : ''}${saved.length > 1 ? html`<button class="btn sm danger" id="del-all">Delete all (${saved.length})</button>` : ''}</span></div>
       ${saved.length ? html`<div class="grid g2">${join(saved, s => html`<div class="card"><div class="row"><span class="klass">Module ${s.module}</span>${join(s.klass.tags, k => chip('Class ' + k, 'mute'))}${s.mode && s.mode.startsWith('re') ? chip('Reverse engineering', 'live') : ''}</div>
         <h3 style="margin-top:.5rem">${s.title}</h3><p class="small dim">${s.prompt.slice(0, 160)}${s.prompt.length > 160 ? '…' : ''}</p>
         <div class="row spread"><small>${when(s.updated)} · ${s.worlds} world${s.worlds > 1 ? 's' : ''}</small><span class="row"><a class="btn sm primary" href="#/i/${s.id}/concept">Open</a><button class="btn sm danger" data-del="${s.id}">Delete</button></span></div></div>`)}</div>`
         : html`<div class="card"><p>Nothing saved yet. Investigations are stored on this device as you work.</p><div class="row"><a class="btn primary" href="#/m1">Start a thought experiment</a><a class="btn primary" href="#/m2">Start an engineering simulation</a></div></div>`}</div>`,
-    after(root) { on(root, 'click', '[data-del]', async (_, el) => { if (!confirm('Delete this investigation and its uploaded files from this device? This cannot be undone.')) return; await Store.deleteInvestigation(el.dataset.del); toast('Deleted'); go('#/saved'); }); },
+    after(root) { on(root, 'click', '[data-del]', async (_, el) => { if (!confirm('Delete this investigation and its uploaded files from this device? This cannot be undone.')) return; await Store.deleteInvestigation(el.dataset.del); toast('Deleted'); go('#/saved'); });
+      $('#del-all', root)?.addEventListener('click', async () => { if (!confirm(`Delete all ${saved.length} saved investigations and their uploaded files from this device? This cannot be undone.`)) return; for (const s of saved) await Store.deleteInvestigation(s.id); toast('All saved investigations deleted'); go('#/saved'); }); },
   };
 }
 

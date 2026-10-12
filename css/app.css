@@ -178,3 +178,21 @@ ul.clean{margin:.3rem 0;padding-left:1.15rem}ul.clean li{margin:.2rem 0}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media print{.top,.tabs,.botnav,.wsnav,.btn,.toast{display:none!important}body{background:#fff;color:#000}.card{box-shadow:none;border-color:#bbb;break-inside:avoid}}
+
+.mx{white-space:nowrap}.mx .katex{font-size:1.02em}code.mx{padding:0;font-family:inherit}
+.cat li .btn{flex:none;margin-left:auto}.cat .grow{flex:1;min-width:0}
+.flash{animation:flash 1.6s ease}@keyframes flash{0%,60%{box-shadow:0 0 0 3px var(--accent),0 0 28px color-mix(in srgb,var(--accent) 55%,transparent)}100%{box-shadow:var(--shadow)}}
+.chip{cursor:default}
+.truth td.why{text-align:left;font-family:inherit;font-size:.8rem;color:var(--fg-dim);white-space:nowrap}.truth th[title]{cursor:help}
+.key{list-style:none;margin:.5rem 0;padding:0;display:grid;gap:.3rem}.key li{display:block;padding-left:1.9rem;position:relative}
+.key .sw,.key .ln{position:absolute;left:0;top:.28rem;width:1.3rem;height:.8rem;border-radius:3px;border:1px solid var(--line)}
+.key .sw.model{background:color-mix(in srgb,var(--ok) 30%,transparent);border-color:var(--ok)}.key .sw.counter{background:color-mix(in srgb,var(--bad) 35%,transparent);border-color:var(--bad)}
+.key .ln{height:0;top:.7rem;border:0;border-top:2px dashed var(--fg-dim);border-radius:0}.key .ln.need{border-top:2.5px solid var(--ok)}.key .ln.bad{border-top:2.5px solid var(--bad)}
+.mono{font-family:var(--mono)}
+details.guide{border:0;border-left:3px solid var(--accent2);border-radius:0 8px 8px 0;background:color-mix(in srgb,var(--accent2) 7%,transparent);margin:.35rem 0 .7rem;font-size:.86rem}
+details.guide>summary{padding:.4rem .7rem;font-weight:400;align-items:flex-start;color:var(--fg)}details.guide>summary b{color:var(--accent2)}
+details.guide.flat>summary{cursor:default;list-style:none}details.guide.flat>summary::before{content:"";display:none}
+details.guide>.body{padding:0 .7rem .5rem 1.75rem}details.guide>.body p{margin:.25rem 0}
+.chip[title]{cursor:help}
+details.guide>summary{flex-wrap:nowrap}
+.savedcard{position:relative;display:flex}.savedcard .modcard{padding-bottom:2.4rem}.savedcard .del{position:absolute;right:.6rem;bottom:.6rem;color:var(--fg-dim)}

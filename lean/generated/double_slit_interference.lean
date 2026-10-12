@@ -98,6 +98,7 @@ def d_hbar : Dim := ⟨12, 24, -12, 0, 0, 0, 0⟩  -- Reduced Planck constant [J
 def d_lambda : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- de Broglie wavelength [m]
 def d_m : Dim := ⟨12, 0, 0, 0, 0, 0, 0⟩  -- Particle mass [u]
 def d_v : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Particle speed [m/s]
+def d_w_eff : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Slit width used [m]
 def d_w_s : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Slit width [um]
 def d_y : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Position on the screen [m]
 
@@ -110,61 +111,69 @@ theorem eq1_lam_dim : d_lambda = (Dim.div (Dim.mul (Dim.mul Dim.one Dim.one) d_h
 /-- The denominator `m * v` stays away from its singular set whenever the quantities are positive. -/
 theorem eq1_lam_reg1 (m v : ℝ) (hm : 0 < m) (hv : 0 < v) : m * v ≠ 0 := by positivity
 
-/-! ## 2. Fringe spacing
+/-! ## 2. Slit width used
+
+    w_eff = min(w_s, 0.95*d_s)
+-/
+/-- Both sides of "Slit width used" carry the same physical dimension. -/
+theorem eq2_weff_dim : d_w_eff = d_w_s := by decide
+theorem eq2_weff_term1 : d_w_s = (Dim.mul Dim.one d_d_s) := by decide
+
+/-! ## 3. Fringe spacing
 
     dy = lambda*L/d_s
 -/
 /-- Both sides of "Fringe spacing" carry the same physical dimension. -/
-theorem eq2_dy_dim : d_dy = (Dim.div (Dim.mul d_lambda d_L) d_d_s) := by decide
+theorem eq3_dy_dim : d_dy = (Dim.div (Dim.mul d_lambda d_L) d_d_s) := by decide
 /-- The denominator `d_s` stays away from its singular set whenever the quantities are positive. -/
-theorem eq2_dy_reg1 (d_s : ℝ) (hd_s : 0 < d_s) : d_s ≠ 0 := by positivity
+theorem eq3_dy_reg1 (d_s : ℝ) (hd_s : 0 < d_s) : d_s ≠ 0 := by positivity
 
-/-! ## 3. Intensity on the screen
+/-! ## 4. Intensity on the screen
 
-    I_n = (sin(pi*w_s*y/(lambda*L))/(pi*w_s*y/(lambda*L)))^2*(1 + V_f*cos(2*pi*d_s*y/(lambda*L)))/2
+    I_n = (sin(pi*w_eff*y/(lambda*L))/(pi*w_eff*y/(lambda*L)))^2*(1 + V_f*cos(2*pi*d_s*y/(lambda*L)))/2
 -/
 /-- Both sides of "Intensity on the screen" carry the same physical dimension. -/
-theorem eq3_I'_dim : d_I_n = (Dim.div (Dim.mul (Dim.pow (Dim.div Dim.one (Dim.div (Dim.mul (Dim.mul Dim.one d_w_s) d_y) (Dim.mul d_lambda d_L))) 2 1) Dim.one) Dim.one) := by decide
-theorem eq3_I'_term1 : (Dim.div (Dim.mul (Dim.mul Dim.one d_w_s) d_y) (Dim.mul d_lambda d_L)) = Dim.one := by decide
-theorem eq3_I'_term2 : (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_d_s) d_y) (Dim.mul d_lambda d_L)) = Dim.one := by decide
-theorem eq3_I'_term3 : Dim.one = (Dim.mul d_V_f Dim.one) := by decide
+theorem eq4_I'_dim : d_I_n = (Dim.div (Dim.mul (Dim.pow (Dim.div Dim.one (Dim.div (Dim.mul (Dim.mul Dim.one d_w_eff) d_y) (Dim.mul d_lambda d_L))) 2 1) Dim.one) Dim.one) := by decide
+theorem eq4_I'_term1 : (Dim.div (Dim.mul (Dim.mul Dim.one d_w_eff) d_y) (Dim.mul d_lambda d_L)) = Dim.one := by decide
+theorem eq4_I'_term2 : (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_d_s) d_y) (Dim.mul d_lambda d_L)) = Dim.one := by decide
+theorem eq4_I'_term3 : Dim.one = (Dim.mul d_V_f Dim.one) := by decide
 /-- The denominator `lambda * L` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_I'_reg1 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
+theorem eq4_I'_reg1 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
 /-- The denominator `lambda * L` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_I'_reg2 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
-/-- Domain condition for `pi * w_s * y / (lambda * L)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq3_I'_cond3 (w_s y lambda L : ℝ) (hdom : Real.pi * w_s * y / (lambda * L) ≠ 0) : Real.pi * w_s * y / (lambda * L) ≠ 0 := hdom
+theorem eq4_I'_reg2 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
+/-- Domain condition for `pi * w_eff * y / (lambda * L)`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq4_I'_cond3 (w_eff y lambda L : ℝ) (hdom : Real.pi * w_eff * y / (lambda * L) ≠ 0) : Real.pi * w_eff * y / (lambda * L) ≠ 0 := hdom
 /-- The denominator `lambda * L` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_I'_reg4 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
+theorem eq4_I'_reg4 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_I'_reg5  : (2 : ℝ) ≠ 0 := by positivity
+theorem eq4_I'_reg5  : (2 : ℝ) ≠ 0 := by positivity
 
-/-! ## 4. Far-field parameter
+/-! ## 5. Far-field parameter
 
-    N_F = d_s*w_s/(lambda*L)
+    N_F = d_s*w_eff/(lambda*L)
 -/
 /-- Both sides of "Far-field parameter" carry the same physical dimension. -/
-theorem eq4_nf_dim : d_N_F = (Dim.div (Dim.mul d_d_s d_w_s) (Dim.mul d_lambda d_L)) := by decide
+theorem eq5_nf_dim : d_N_F = (Dim.div (Dim.mul d_d_s d_w_eff) (Dim.mul d_lambda d_L)) := by decide
 /-- The denominator `lambda * L` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_nf_reg1 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
+theorem eq5_nf_reg1 (lambda L : ℝ) (hlambda : 0 < lambda) (hL : 0 < L) : lambda * L ≠ 0 := by positivity
 
-/-! ## 5. Visibility with which-path information
+/-! ## 6. Visibility with which-path information
 
     V_f = sqrt(1 - D_w^2)
 -/
 /-- Both sides of "Visibility with which-path information" carry the same physical dimension. -/
-theorem eq5_vis_dim : d_V_f = (Dim.pow Dim.one 1 2) := by decide
-theorem eq5_vis_term1 : Dim.one = (Dim.pow d_D_w 2 1) := by decide
+theorem eq6_vis_dim : d_V_f = (Dim.pow Dim.one 1 2) := by decide
+theorem eq6_vis_term1 : Dim.one = (Dim.pow d_D_w 2 1) := by decide
 /-- Domain condition for `1 - D_w^2`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq5_vis_cond1 (D_w : ℝ) (hdom : 0 ≤ (1 : ℝ) - D_w ^ 2) : 0 ≤ (1 : ℝ) - D_w ^ 2 := hdom
+theorem eq6_vis_cond1 (D_w : ℝ) (hdom : 0 ≤ (1 : ℝ) - D_w ^ 2) : 0 ≤ (1 : ℝ) - D_w ^ 2 := hdom
 
-/-! ## 6. Duality relation
+/-! ## 7. Duality relation
 
     V_f^2 + D_w^2 = 1
 -/
 /-- Both sides of "Duality relation" carry the same physical dimension. -/
-theorem eq6_dual_dim : (Dim.pow d_V_f 2 1) = Dim.one := by decide
-theorem eq6_dual_term1 : (Dim.pow d_V_f 2 1) = (Dim.pow d_D_w 2 1) := by decide
+theorem eq7_dual_dim : (Dim.pow d_V_f 2 1) = Dim.one := by decide
+theorem eq7_dual_term1 : (Dim.pow d_V_f 2 1) = (Dim.pow d_D_w 2 1) := by decide
 
 /-! ## Logical structure of the argument -/
 

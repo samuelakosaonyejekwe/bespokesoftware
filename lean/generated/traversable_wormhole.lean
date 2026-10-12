@@ -172,31 +172,45 @@ theorem eq5_tau_cond2 (r : ℝ) (hdom : r ^ 3 ≠ 0) : r ^ 3 ≠ 0 := hdom
 theorem eq6_nec_dim : d_w_nec = (Dim.mul d_rho_e (Dim.pow d_c 2 1)) := by decide
 theorem eq6_nec_term1 : (Dim.mul d_rho_e (Dim.pow d_c 2 1)) = d_tau_r := by decide
 
-/-! ## 7. Lateral tidal acceleration at the throat
+/-! ## 7. Lorentz factor of the traveller
+
+    gamma = 1/sqrt(1 - v^2/c^2)
+-/
+/-- Both sides of "Lorentz factor of the traveller" carry the same physical dimension. -/
+theorem eq7_gam_dim : d_gamma = (Dim.div Dim.one (Dim.pow Dim.one 1 2)) := by decide
+theorem eq7_gam_term1 : Dim.one = (Dim.div (Dim.pow d_v 2 1) (Dim.pow d_c 2 1)) := by decide
+/-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_gam_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
+/-- Domain condition for `1 - v^2 / c^2`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq7_gam_cond2 (v c : ℝ) (hdom : 0 ≤ (1 : ℝ) - v ^ 2 / c ^ 2) : 0 ≤ (1 : ℝ) - v ^ 2 / c ^ 2 := hdom
+/-- Domain condition for `sqrt(1 - v^2 / c^2)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq7_gam_cond3 (v c : ℝ) (hdom : Real.sqrt ((1 : ℝ) - v ^ 2 / c ^ 2) ≠ 0) : Real.sqrt ((1 : ℝ) - v ^ 2 / c ^ 2) ≠ 0 := hdom
+
+/-! ## 8. Lateral tidal acceleration at the throat
 
     a_lat = gamma^2*v^2*xi/b_0^2
 -/
 /-- Both sides of "Lateral tidal acceleration at the throat" carry the same physical dimension. -/
-theorem eq7_lat_dim : d_a_lat = (Dim.div (Dim.mul (Dim.mul (Dim.pow d_gamma 2 1) (Dim.pow d_v 2 1)) d_xi) (Dim.pow d_b_0 2 1)) := by decide
+theorem eq8_lat_dim : d_a_lat = (Dim.div (Dim.mul (Dim.mul (Dim.pow d_gamma 2 1) (Dim.pow d_v 2 1)) d_xi) (Dim.pow d_b_0 2 1)) := by decide
 /-- The denominator `b_0^2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq7_lat_reg1 (b_0 : ℝ) (hb_0 : 0 < b_0) : b_0 ^ 2 ≠ 0 := by positivity
+theorem eq8_lat_reg1 (b_0 : ℝ) (hb_0 : 0 < b_0) : b_0 ^ 2 ≠ 0 := by positivity
 
-/-! ## 8. Proper crossing time
+/-! ## 9. Proper crossing time
 
     dtau = 2*l_1/(gamma*v)
 -/
 /-- Both sides of "Proper crossing time" carry the same physical dimension. -/
-theorem eq8_time_dim : d_dtau = (Dim.div (Dim.mul Dim.one d_l_1) (Dim.mul d_gamma d_v)) := by decide
+theorem eq9_time_dim : d_dtau = (Dim.div (Dim.mul Dim.one d_l_1) (Dim.mul d_gamma d_v)) := by decide
 /-- The denominator `gamma * v` stays away from its singular set whenever the quantities are positive. -/
-theorem eq8_time_reg1 (gamma v : ℝ) (hgamma : 0 < gamma) (hv : 0 < v) : gamma * v ≠ 0 := by positivity
+theorem eq9_time_reg1 (gamma v : ℝ) (hgamma : 0 < gamma) (hv : 0 < v) : gamma * v ≠ 0 := by positivity
 
-/-! ## 9. Integrated mass of the supporting matter
+/-! ## 10. Integrated mass of the supporting matter
 
     M_ex = -pi*c^2*b_0/(2*G)
 -/
 /-- Both sides of "Integrated mass of the supporting matter" carry the same physical dimension. -/
-theorem eq9_mex_dim : d_M_ex = (Dim.div (Dim.mul (Dim.mul Dim.one (Dim.pow d_c 2 1)) d_b_0) (Dim.mul Dim.one d_G)) := by decide
+theorem eq10_mex_dim : d_M_ex = (Dim.div (Dim.mul (Dim.mul Dim.one (Dim.pow d_c 2 1)) d_b_0) (Dim.mul Dim.one d_G)) := by decide
 /-- The denominator `2 * G` stays away from its singular set whenever the quantities are positive. -/
-theorem eq9_mex_reg1 (G : ℝ) (hG : 0 < G) : (2 : ℝ) * G ≠ 0 := by positivity
+theorem eq10_mex_reg1 (G : ℝ) (hG : 0 < G) : (2 : ℝ) * G ≠ 0 := by positivity
 
 end Bespoke

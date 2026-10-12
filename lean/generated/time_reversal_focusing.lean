@@ -90,7 +90,7 @@ def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
 def d_L : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Length of the medium [m]
 def d_c_w : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Wave speed [m/s]
 def d_c_x : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Local wave speed [m/s]
-def d_q_f : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Refocused amplitude over emitted amplitude [1]
+def d_q_pred : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Expected refocused amplitude ratio from the loss estimate [1]
 def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Time [s]
 def d_u : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Wave displacement [m]
 def d_u_0 : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Initial displacement [m]
@@ -135,9 +135,9 @@ theorem eq4_tr_dim : d_u_TR = d_u_rec := by decide
 
 /-! ## 5. Expected refocused amplitude
 
-    q_f = 1
+    q_pred = 1
 -/
 /-- Both sides of "Expected refocused amplitude" carry the same physical dimension. -/
-theorem eq5_qf_dim : d_q_f = Dim.one := by decide
+theorem eq5_qf_dim : d_q_pred = Dim.one := by decide
 
 end Bespoke

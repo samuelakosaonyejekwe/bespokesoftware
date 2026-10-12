@@ -180,12 +180,12 @@ theorem eq8_tr_reg2 (g GM : ℝ) (hg : 0 < g) (hGM : 0 < GM) : Real.sqrt (g * GM
 
 /-! ## 9. Natural roll frequency
 
-    omega_r = sqrt(g*GM)/k_xx
+    omega_r = sqrt(g*abs(GM))/k_xx
 -/
 /-- Both sides of "Natural roll frequency" carry the same physical dimension. -/
 theorem eq9_wr_dim : d_omega_r = (Dim.div (Dim.pow (Dim.mul d_g d_GM) 1 2) d_k_xx) := by decide
-/-- The argument `g * GM` stays away from its singular set whenever the quantities are positive. -/
-theorem eq9_wr_reg1 (g GM : ℝ) (hg : 0 < g) (hGM : 0 < GM) : 0 ≤ g * GM := by positivity
+/-- The argument `g * abs(GM)` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_wr_reg1 (g GM : ℝ) (hg : 0 < g) (hGM : 0 < GM) : 0 ≤ g * abs GM := by positivity
 /-- Domain condition for `k_xx`: a condition on the solution; stated here as an explicit hypothesis. -/
 theorem eq9_wr_cond2 (k_xx : ℝ) (hdom : k_xx ≠ 0) : k_xx ≠ 0 := hdom
 

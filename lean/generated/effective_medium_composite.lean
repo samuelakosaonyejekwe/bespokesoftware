@@ -157,42 +157,64 @@ theorem eq3_br_cond4 (eps_BR eps_m : ℝ) (hdom : eps_BR + (1 : ℝ) / (3 : ℝ)
     which is bounded and smooth for every real b. -/
 theorem eq3_br_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
-/-! ## 4. Hashin–Shtrikman bound with the matrix as host
+/-! ## 4. Hashin–Shtrikman lower bound
 
-    eps_HSL = eps_m + phi/(1/(eps_i - eps_m) + (1 - phi)/(3*eps_m))
+    eps_HSL = min(eps_m + phi*eps_m*(eps_i - eps_m)/(eps_m + 1/3*(1 - phi)*(eps_i - eps_m)), eps_i + (1 - phi)*eps_i*(eps_m - eps_i)/(eps_i + 1/3*(1 - (1 - phi))*(eps_m - eps_i)))
 -/
-/-- Both sides of "Hashin–Shtrikman bound with the matrix as host" carry the same physical dimension. -/
+/-- Both sides of "Hashin–Shtrikman lower bound" carry the same physical dimension. -/
 theorem eq4_hsl_dim : d_eps_HSL = d_eps_m := by decide
 theorem eq4_hsl_term1 : d_eps_i = d_eps_m := by decide
 theorem eq4_hsl_term2 : Dim.one = d_phi := by decide
-theorem eq4_hsl_term3 : (Dim.div Dim.one d_eps_i) = (Dim.div Dim.one (Dim.mul Dim.one d_eps_m)) := by decide
-theorem eq4_hsl_term4 : d_eps_m = (Dim.div d_phi (Dim.div Dim.one d_eps_i)) := by decide
-/-- Domain condition for `eps_i - eps_m`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_hsl_cond1 (eps_i eps_m : ℝ) (hdom : eps_i - eps_m ≠ 0) : eps_i - eps_m ≠ 0 := hdom
-/-- The denominator `3 * eps_m` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_hsl_reg2 (eps_m : ℝ) (heps_m : 0 < eps_m) : (3 : ℝ) * eps_m ≠ 0 := by positivity
-/-- Domain condition for `1 / (eps_i - eps_m) + (1 - phi) / (3 * eps_m)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_hsl_cond3 (eps_i eps_m phi : ℝ) (hdom : (1 : ℝ) / (eps_i - eps_m) + ((1 : ℝ) - phi) / ((3 : ℝ) * eps_m) ≠ 0) : (1 : ℝ) / (eps_i - eps_m) + ((1 : ℝ) - phi) / ((3 : ℝ) * eps_m) ≠ 0 := hdom
+theorem eq4_hsl_term3 : d_eps_i = d_eps_m := by decide
+theorem eq4_hsl_term4 : d_eps_m = (Dim.mul (Dim.mul (Dim.div Dim.one Dim.one) Dim.one) d_eps_i) := by decide
+theorem eq4_hsl_term5 : d_eps_m = (Dim.div (Dim.mul (Dim.mul d_phi d_eps_m) d_eps_i) d_eps_m) := by decide
+theorem eq4_hsl_term6 : Dim.one = d_phi := by decide
+theorem eq4_hsl_term7 : d_eps_m = d_eps_i := by decide
+theorem eq4_hsl_term8 : Dim.one = d_phi := by decide
+theorem eq4_hsl_term9 : Dim.one = Dim.one := by decide
+theorem eq4_hsl_term10 : d_eps_m = d_eps_i := by decide
+theorem eq4_hsl_term11 : d_eps_i = (Dim.mul (Dim.mul (Dim.div Dim.one Dim.one) Dim.one) d_eps_m) := by decide
+theorem eq4_hsl_term12 : d_eps_i = (Dim.div (Dim.mul (Dim.mul Dim.one d_eps_i) d_eps_m) d_eps_i) := by decide
+theorem eq4_hsl_term13 : d_eps_m = d_eps_i := by decide
+/-- The denominator `3` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_hsl_reg1  : (3 : ℝ) ≠ 0 := by positivity
+/-- Domain condition for `eps_m + 1 / 3 * (1 - phi) * (eps_i - eps_m)`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq4_hsl_cond2 (eps_m phi eps_i : ℝ) (hdom : eps_m + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - phi) * (eps_i - eps_m) ≠ 0) : eps_m + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - phi) * (eps_i - eps_m) ≠ 0 := hdom
+/-- The denominator `3` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_hsl_reg3  : (3 : ℝ) ≠ 0 := by positivity
+/-- Domain condition for `eps_i + 1 / 3 * (1 - (1 - phi)) * (eps_m - eps_i)`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq4_hsl_cond4 (eps_i phi eps_m : ℝ) (hdom : eps_i + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - ((1 : ℝ) - phi)) * (eps_m - eps_i) ≠ 0) : eps_i + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - ((1 : ℝ) - phi)) * (eps_m - eps_i) ≠ 0 := hdom
 /-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
     which is bounded and smooth for every real b. -/
 theorem eq4_hsl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
-/-! ## 5. Hashin–Shtrikman bound with the filler as host
+/-! ## 5. Hashin–Shtrikman upper bound
 
-    eps_HSU = eps_i + (1 - phi)/(1/(eps_m - eps_i) + phi/(3*eps_i))
+    eps_HSU = max(eps_m + phi*eps_m*(eps_i - eps_m)/(eps_m + 1/3*(1 - phi)*(eps_i - eps_m)), eps_i + (1 - phi)*eps_i*(eps_m - eps_i)/(eps_i + 1/3*(1 - (1 - phi))*(eps_m - eps_i)))
 -/
-/-- Both sides of "Hashin–Shtrikman bound with the filler as host" carry the same physical dimension. -/
-theorem eq5_hsu_dim : d_eps_HSU = d_eps_i := by decide
-theorem eq5_hsu_term1 : Dim.one = d_phi := by decide
-theorem eq5_hsu_term2 : d_eps_m = d_eps_i := by decide
-theorem eq5_hsu_term3 : (Dim.div Dim.one d_eps_m) = (Dim.div d_phi (Dim.mul Dim.one d_eps_i)) := by decide
-theorem eq5_hsu_term4 : d_eps_i = (Dim.div Dim.one (Dim.div Dim.one d_eps_m)) := by decide
-/-- Domain condition for `eps_m - eps_i`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_hsu_cond1 (eps_m eps_i : ℝ) (hdom : eps_m - eps_i ≠ 0) : eps_m - eps_i ≠ 0 := hdom
-/-- The denominator `3 * eps_i` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_hsu_reg2 (eps_i : ℝ) (heps_i : 0 < eps_i) : (3 : ℝ) * eps_i ≠ 0 := by positivity
-/-- Domain condition for `1 / (eps_m - eps_i) + phi / (3 * eps_i)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_hsu_cond3 (eps_m eps_i phi : ℝ) (hdom : (1 : ℝ) / (eps_m - eps_i) + phi / ((3 : ℝ) * eps_i) ≠ 0) : (1 : ℝ) / (eps_m - eps_i) + phi / ((3 : ℝ) * eps_i) ≠ 0 := hdom
+/-- Both sides of "Hashin–Shtrikman upper bound" carry the same physical dimension. -/
+theorem eq5_hsu_dim : d_eps_HSU = d_eps_m := by decide
+theorem eq5_hsu_term1 : d_eps_i = d_eps_m := by decide
+theorem eq5_hsu_term2 : Dim.one = d_phi := by decide
+theorem eq5_hsu_term3 : d_eps_i = d_eps_m := by decide
+theorem eq5_hsu_term4 : d_eps_m = (Dim.mul (Dim.mul (Dim.div Dim.one Dim.one) Dim.one) d_eps_i) := by decide
+theorem eq5_hsu_term5 : d_eps_m = (Dim.div (Dim.mul (Dim.mul d_phi d_eps_m) d_eps_i) d_eps_m) := by decide
+theorem eq5_hsu_term6 : Dim.one = d_phi := by decide
+theorem eq5_hsu_term7 : d_eps_m = d_eps_i := by decide
+theorem eq5_hsu_term8 : Dim.one = d_phi := by decide
+theorem eq5_hsu_term9 : Dim.one = Dim.one := by decide
+theorem eq5_hsu_term10 : d_eps_m = d_eps_i := by decide
+theorem eq5_hsu_term11 : d_eps_i = (Dim.mul (Dim.mul (Dim.div Dim.one Dim.one) Dim.one) d_eps_m) := by decide
+theorem eq5_hsu_term12 : d_eps_i = (Dim.div (Dim.mul (Dim.mul Dim.one d_eps_i) d_eps_m) d_eps_i) := by decide
+theorem eq5_hsu_term13 : d_eps_m = d_eps_i := by decide
+/-- The denominator `3` stays away from its singular set whenever the quantities are positive. -/
+theorem eq5_hsu_reg1  : (3 : ℝ) ≠ 0 := by positivity
+/-- Domain condition for `eps_m + 1 / 3 * (1 - phi) * (eps_i - eps_m)`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq5_hsu_cond2 (eps_m phi eps_i : ℝ) (hdom : eps_m + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - phi) * (eps_i - eps_m) ≠ 0) : eps_m + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - phi) * (eps_i - eps_m) ≠ 0 := hdom
+/-- The denominator `3` stays away from its singular set whenever the quantities are positive. -/
+theorem eq5_hsu_reg3  : (3 : ℝ) ≠ 0 := by positivity
+/-- Domain condition for `eps_i + 1 / 3 * (1 - (1 - phi)) * (eps_m - eps_i)`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq5_hsu_cond4 (eps_i phi eps_m : ℝ) (hdom : eps_i + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - ((1 : ℝ) - phi)) * (eps_m - eps_i) ≠ 0) : eps_i + (1 : ℝ) / (3 : ℝ) * ((1 : ℝ) - ((1 : ℝ) - phi)) * (eps_m - eps_i) ≠ 0 := hdom
 /-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
     which is bounded and smooth for every real b. -/
 theorem eq5_hsu_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε

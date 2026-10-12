@@ -92,11 +92,13 @@ def d_M : Dim := ⟨12, 0, 0, 0, 0, 0, 0⟩  -- Central mass [Msun]
 def d_V_eff : Dim := ⟨0, 24, -24, 0, 0, 0, 0⟩  -- Effective potential per unit mass [J/kg]
 def d_a : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Semi-major axis of the orbit [AU]
 def d_b : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Impact parameter of the light ray [km]
+def d_b_crit : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Critical impact parameter for capture of light [m]
 def d_c : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Speed of light [m/s]
-def d_delta : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Deflection angle of light [rad]
+def d_delta_1 : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Deflection angle of light, first-order formula [rad]
 def d_dphi : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Perihelion advance per orbit [rad]
 def d_e' : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Orbital eccentricity [1]
 def d_h_L : Dim := ⟨0, 24, -12, 0, 0, 0, 0⟩  -- Specific angular momentum [m^2/s]
+def d_p_l : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Semi-latus rectum of the orbit used [m]
 def d_phi : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Orbital angle [rad]
 def d_r : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Radial coordinate [m]
 def d_r_isco : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Innermost stable circular orbit [m]
@@ -117,75 +119,98 @@ theorem eq1_orbit_reg1 (h_L : ℝ) (hh_L : 0 < h_L) : h_L ^ 2 ≠ 0 := by positi
 /-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq1_orbit_reg2 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
 
-/-! ## 2. Effective potential
+/-! ## 2. Semi-latus rectum of the orbit
+
+    p_l = max(a*(1 - e^2), 1.05*(6 + 2*e)*G*M/c^2)
+-/
+/-- Both sides of "Semi-latus rectum of the orbit" carry the same physical dimension. -/
+theorem eq2_slr_dim : d_p_l = (Dim.mul d_a Dim.one) := by decide
+theorem eq2_slr_term1 : Dim.one = (Dim.pow d_e' 2 1) := by decide
+theorem eq2_slr_term2 : Dim.one = (Dim.mul Dim.one d_e') := by decide
+theorem eq2_slr_term3 : (Dim.mul d_a Dim.one) = (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_G) d_M) (Dim.pow d_c 2 1)) := by decide
+/-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq2_slr_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
+
+/-! ## 3. Effective potential
 
     V_eff = -G*M/r + h_L^2/(2*r^2) - G*M*h_L^2/(c^2*r^3)
 -/
 /-- Both sides of "Effective potential" carry the same physical dimension. -/
-theorem eq2_veff_dim : d_V_eff = (Dim.div (Dim.mul d_G d_M) d_r) := by decide
-theorem eq2_veff_term1 : (Dim.div (Dim.mul d_G d_M) d_r) = (Dim.div (Dim.pow d_h_L 2 1) (Dim.mul Dim.one (Dim.pow d_r 2 1))) := by decide
-theorem eq2_veff_term2 : (Dim.div (Dim.mul d_G d_M) d_r) = (Dim.div (Dim.mul (Dim.mul d_G d_M) (Dim.pow d_h_L 2 1)) (Dim.mul (Dim.pow d_c 2 1) (Dim.pow d_r 3 1))) := by decide
+theorem eq3_veff_dim : d_V_eff = (Dim.div (Dim.mul d_G d_M) d_r) := by decide
+theorem eq3_veff_term1 : (Dim.div (Dim.mul d_G d_M) d_r) = (Dim.div (Dim.pow d_h_L 2 1) (Dim.mul Dim.one (Dim.pow d_r 2 1))) := by decide
+theorem eq3_veff_term2 : (Dim.div (Dim.mul d_G d_M) d_r) = (Dim.div (Dim.mul (Dim.mul d_G d_M) (Dim.pow d_h_L 2 1)) (Dim.mul (Dim.pow d_c 2 1) (Dim.pow d_r 3 1))) := by decide
 /-- Domain condition for `r`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq2_veff_cond1 (r : ℝ) (hdom : r ≠ 0) : r ≠ 0 := hdom
+theorem eq3_veff_cond1 (r : ℝ) (hdom : r ≠ 0) : r ≠ 0 := hdom
 /-- Domain condition for `2 * r^2`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq2_veff_cond2 (r : ℝ) (hdom : (2 : ℝ) * r ^ 2 ≠ 0) : (2 : ℝ) * r ^ 2 ≠ 0 := hdom
+theorem eq3_veff_cond2 (r : ℝ) (hdom : (2 : ℝ) * r ^ 2 ≠ 0) : (2 : ℝ) * r ^ 2 ≠ 0 := hdom
 /-- Domain condition for `c^2 * r^3`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq2_veff_cond3 (c r : ℝ) (hdom : c ^ 2 * r ^ 3 ≠ 0) : c ^ 2 * r ^ 3 ≠ 0 := hdom
+theorem eq3_veff_cond3 (c r : ℝ) (hdom : c ^ 2 * r ^ 3 ≠ 0) : c ^ 2 * r ^ 3 ≠ 0 := hdom
 
-/-! ## 3. Perihelion advance per orbit
+/-! ## 4. Perihelion advance per orbit
 
-    dphi = 6*pi*G*M/(c^2*a*(1 - e^2))
+    dphi = 6*pi*G*M/(c^2*p_l)
 -/
 /-- Both sides of "Perihelion advance per orbit" carry the same physical dimension. -/
-theorem eq3_prec_dim : d_dphi = (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_G) d_M) (Dim.mul (Dim.mul (Dim.pow d_c 2 1) d_a) Dim.one)) := by decide
-theorem eq3_prec_term1 : Dim.one = (Dim.pow d_e' 2 1) := by decide
-/-- Domain condition for `c^2 * a * (1 - e^2)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
-theorem eq3_prec_cond1 (c a e' : ℝ) (hdom : c ^ 2 * a * ((1 : ℝ) - e' ^ 2) ≠ 0) : c ^ 2 * a * ((1 : ℝ) - e' ^ 2) ≠ 0 := hdom
+theorem eq4_prec_dim : d_dphi = (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_G) d_M) (Dim.mul (Dim.pow d_c 2 1) d_p_l)) := by decide
+/-- The denominator `c^2 * p_l` stays away from its singular set whenever the quantities are positive. -/
+theorem eq4_prec_reg1 (c p_l : ℝ) (hc : 0 < c) (hp_l : 0 < p_l) : c ^ 2 * p_l ≠ 0 := by positivity
 
-/-! ## 4. Light-ray equation
+/-! ## 5. Light-ray equation
 
     d2(u,phi) + u = 3*G*M*u^2/c^2
 -/
 /-- Both sides of "Light-ray equation" carry the same physical dimension. -/
-theorem eq4_null_dim : (Dim.div d_u (Dim.pow d_phi 2 1)) = (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_u 2 1)) (Dim.pow d_c 2 1)) := by decide
-theorem eq4_null_term1 : (Dim.div d_u (Dim.pow d_phi 2 1)) = d_u := by decide
+theorem eq5_null_dim : (Dim.div d_u (Dim.pow d_phi 2 1)) = (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_u 2 1)) (Dim.pow d_c 2 1)) := by decide
+theorem eq5_null_term1 : (Dim.div d_u (Dim.pow d_phi 2 1)) = d_u := by decide
 /-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_null_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
+theorem eq5_null_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
 
-/-! ## 5. Deflection of light
+/-! ## 6. Critical impact parameter
 
-    delta = 4*G*M/(c^2*b)
+    b_crit = 3*sqrt(3)*G*M/c^2
 -/
-/-- Both sides of "Deflection of light" carry the same physical dimension. -/
-theorem eq5_defl_dim : d_delta = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.mul (Dim.pow d_c 2 1) d_b)) := by decide
-/-- The denominator `c^2 * b` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_defl_reg1 (c b : ℝ) (hc : 0 < c) (hb : 0 < b) : c ^ 2 * b ≠ 0 := by positivity
+/-- Both sides of "Critical impact parameter" carry the same physical dimension. -/
+theorem eq6_bcrit_dim : d_b_crit = (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one (Dim.pow Dim.one 1 2)) d_G) d_M) (Dim.pow d_c 2 1)) := by decide
+/-- The argument `3` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_bcrit_reg1  : 0 ≤ (3 : ℝ) := by positivity
+/-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_bcrit_reg2 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
 
-/-! ## 6. Schwarzschild radius
+/-! ## 7. Deflection of light, first order
+
+    delta_1 = 4*G*M/(c^2*max(b, 1.02*b_crit))
+-/
+/-- Both sides of "Deflection of light, first order" carry the same physical dimension. -/
+theorem eq7_defl_dim : d_delta_1 = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.mul (Dim.pow d_c 2 1) d_b)) := by decide
+theorem eq7_defl_term1 : d_b = (Dim.mul Dim.one d_b_crit) := by decide
+/-- Domain condition for `c^2 * max(b, 1.02 * b_crit)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq7_defl_cond1 (c b b_crit : ℝ) (hdom : c ^ 2 * max b ((1.02 : ℝ) * b_crit) ≠ 0) : c ^ 2 * max b ((1.02 : ℝ) * b_crit) ≠ 0 := hdom
+
+/-! ## 8. Schwarzschild radius
 
     r_s = 2*G*M/c^2
 -/
 /-- Both sides of "Schwarzschild radius" carry the same physical dimension. -/
-theorem eq6_rs_dim : d_r_s = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_c 2 1)) := by decide
+theorem eq8_rs_dim : d_r_s = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_c 2 1)) := by decide
 /-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq6_rs_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
+theorem eq8_rs_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
 
-/-! ## 7. Innermost stable circular orbit
+/-! ## 9. Innermost stable circular orbit
 
     r_isco = 6*G*M/c^2
 -/
 /-- Both sides of "Innermost stable circular orbit" carry the same physical dimension. -/
-theorem eq7_isco_dim : d_r_isco = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_c 2 1)) := by decide
+theorem eq9_isco_dim : d_r_isco = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_c 2 1)) := by decide
 /-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq7_isco_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
+theorem eq9_isco_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
 
-/-! ## 8. Photon sphere
+/-! ## 10. Photon sphere
 
     r_ph = 3*G*M/c^2
 -/
 /-- Both sides of "Photon sphere" carry the same physical dimension. -/
-theorem eq8_rph_dim : d_r_ph = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_c 2 1)) := by decide
+theorem eq10_rph_dim : d_r_ph = (Dim.div (Dim.mul (Dim.mul Dim.one d_G) d_M) (Dim.pow d_c 2 1)) := by decide
 /-- The denominator `c^2` stays away from its singular set whenever the quantities are positive. -/
-theorem eq8_rph_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
+theorem eq10_rph_reg1 (c : ℝ) (hc : 0 < c) : c ^ 2 ≠ 0 := by positivity
 
 end Bespoke

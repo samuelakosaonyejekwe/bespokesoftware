@@ -1,6 +1,7 @@
 // Small DOM and formatting helpers shared by every view.
 import { fmt, fromSI, tryUnit, dimEq } from '../core/units.js';
 import { PROV } from '../engine/core.js';
+import { qtyHtml } from './mathify.js';
 
 export const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 /** Tagged template that escapes interpolations unless wrapped with raw(). Arrays are joined. */
@@ -29,11 +30,14 @@ export const STATE = {
 export const stateChip = k => chip(...(STATE[k] || STATE.na));
 
 /** Scalar value in its preferred display unit. */
+/** Scalar value in its preferred display unit: plain text that also carries typeset markup for the page. */
 export function showScalar(s, sig = 5) {
   if (s.text) return s.text;
   const u = s.show && tryUnit(s.show) && tryUnit(s.unit) && dimEq(tryUnit(s.show).dim, tryUnit(s.unit).dim) ? s.show : s.unit;
   const v = u === s.unit ? s.value : fromSI(s.value, u);
-  return `${fmt(v, sig)}${u && u !== '1' ? ' ' + u : ''}`;
+  const text = `${fmt(v, sig)}${u && u !== '1' ? ' ' + u : ''}`, h = typeof window !== 'undefined' && window.katex ? qtyHtml(v, u, sig) : null;
+  // eslint-disable-next-line no-new-wrappers
+  return h ? Object.assign(new String(text), { __raw: `<span class="mx">${h}</span>` }) : text;
 }
 export const pct = (x, sig = 3) => (Number.isFinite(x) ? `${x >= 0 ? '+' : ''}${fmt(x * 100, sig)} %` : '—');
 export const when = ts => new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });

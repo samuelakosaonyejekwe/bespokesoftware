@@ -103,7 +103,7 @@ def d_m_rec : Dim := ⟨12, 0, -12, 0, 0, 0, 0⟩  -- Oil recovered [kg/s]
 def d_mu_w : Dim := ⟨12, -12, -12, 0, 0, 0, 0⟩  -- Water viscosity [cP]
 def d_rho_o : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Oil density [kg/m^3]
 def d_rho_w : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Water density [kg/m^3]
-def d_v_o : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Overflow rate [m/s]
+def d_v_o : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Overflow rate, or required radial migration velocity in a hydrocyclone [m/s]
 def d_v_t : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Rise velocity of the median droplet [m/s]
 
 /-! ## 1. Terminal velocity

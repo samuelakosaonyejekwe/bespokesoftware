@@ -88,12 +88,14 @@ theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
 
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
 def d_B : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Mudmat width [m]
+def d_B_s : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Shorter plan dimension [m]
 def d_D_f : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Embedment (skirt) depth [m]
 def d_FS_b : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Factor of safety on bearing [1]
 def d_FS_s : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Factor of safety on sliding [1]
 def d_H : Dim := ⟨12, 12, -24, 0, 0, 0, 0⟩  -- Horizontal load [kN]
 def d_H_u : Dim := ⟨12, 12, -24, 0, 0, 0, 0⟩  -- Ultimate sliding resistance [N]
 def d_L : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Mudmat length [m]
+def d_L_l : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Longer plan dimension [m]
 def d_N_c : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Bearing-capacity factor for cohesion [1]
 def d_Q_u : Dim := ⟨12, 12, -24, 0, 0, 0, 0⟩  -- Ultimate vertical capacity [N]
 def d_V : Dim := ⟨12, 12, -24, 0, 0, 0, 0⟩  -- Vertical load (submerged weight and operating loads) [kN]
@@ -104,82 +106,95 @@ def d_q_u : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Ultimate bearing pressure 
 def d_s_ca : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Shape term [1]
 def d_s_u : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Undrained shear strength [kPa]
 
-/-! ## 1. Prandtl bearing-capacity factor
+/-! ## 1. Shorter plan dimension
+
+    B_s = min(B, L)
+-/
+/-- Both sides of "Shorter plan dimension" carry the same physical dimension. -/
+theorem eq1_bs_dim : d_B_s = d_B := by decide
+theorem eq1_bs_term1 : d_B = d_L := by decide
+
+/-! ## 2. Longer plan dimension
+
+    L_l = max(B, L)
+-/
+/-- Both sides of "Longer plan dimension" carry the same physical dimension. -/
+theorem eq2_ll_dim : d_L_l = d_B := by decide
+theorem eq2_ll_term1 : d_B = d_L := by decide
+
+/-! ## 3. Prandtl bearing-capacity factor
 
     N_c = pi + 2
 -/
 /-- Both sides of "Prandtl bearing-capacity factor" carry the same physical dimension. -/
-theorem eq1_nc_dim : d_N_c = Dim.one := by decide
-theorem eq1_nc_term1 : Dim.one = Dim.one := by decide
+theorem eq3_nc_dim : d_N_c = Dim.one := by decide
+theorem eq3_nc_term1 : Dim.one = Dim.one := by decide
 
-/-! ## 2. Shape term
+/-! ## 4. Shape term
 
-    s_ca = 0.2*B/L
+    s_ca = 0.2*B_s/L_l
 -/
 /-- Both sides of "Shape term" carry the same physical dimension. -/
-theorem eq2_sc_dim : d_s_ca = (Dim.div (Dim.mul Dim.one d_B) d_L) := by decide
-/-- The denominator `L` stays away from its singular set whenever the quantities are positive. -/
-theorem eq2_sc_reg1 (L : ℝ) (hL : 0 < L) : L ≠ 0 := by positivity
+theorem eq4_sc_dim : d_s_ca = (Dim.div (Dim.mul Dim.one d_B_s) d_L_l) := by decide
+/-- Domain condition for `L_l`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq4_sc_cond1 (L_l : ℝ) (hdom : L_l ≠ 0) : L_l ≠ 0 := hdom
 
-/-! ## 3. Inclination term
+/-! ## 5. Inclination term
 
-    i_ca = 0.5 - 0.5*sqrt(1 - H/(B*L*s_u))
+    i_ca = 0.5 - 0.5*sqrt(max(1 - H/(B*L*s_u), 0))
 -/
 /-- Both sides of "Inclination term" carry the same physical dimension. -/
-theorem eq3_ic_dim : d_i_ca = Dim.one := by decide
-theorem eq3_ic_term1 : Dim.one = (Dim.div d_H (Dim.mul (Dim.mul d_B d_L) d_s_u)) := by decide
-theorem eq3_ic_term2 : Dim.one = (Dim.mul Dim.one (Dim.pow Dim.one 1 2)) := by decide
+theorem eq5_ic_dim : d_i_ca = Dim.one := by decide
+theorem eq5_ic_term1 : Dim.one = (Dim.div d_H (Dim.mul (Dim.mul d_B d_L) d_s_u)) := by decide
+theorem eq5_ic_term2 : Dim.one = (Dim.mul Dim.one (Dim.pow Dim.one 1 2)) := by decide
 /-- The denominator `B * L * s_u` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_ic_reg1 (B L s_u : ℝ) (hB : 0 < B) (hL : 0 < L) (hs_u : 0 < s_u) : B * L * s_u ≠ 0 := by positivity
-/-- Domain condition for `1 - H / (B * L * s_u)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq3_ic_cond2 (H B L s_u : ℝ) (hdom : 0 ≤ (1 : ℝ) - H / (B * L * s_u)) : 0 ≤ (1 : ℝ) - H / (B * L * s_u) := hdom
-/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
-    which is bounded and smooth for every real b. -/
-theorem eq3_ic_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq5_ic_reg1 (B L s_u : ℝ) (hB : 0 < B) (hL : 0 < L) (hs_u : 0 < s_u) : B * L * s_u ≠ 0 := by positivity
+/-- Domain condition for `max(1 - H / (B * L * s_u), 0)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq5_ic_cond2 (H B L s_u : ℝ) (hdom : 0 ≤ max ((1 : ℝ) - H / (B * L * s_u)) (0 : ℝ)) : 0 ≤ max ((1 : ℝ) - H / (B * L * s_u)) (0 : ℝ) := hdom
 
-/-! ## 4. Ultimate bearing pressure
+/-! ## 6. Ultimate bearing pressure
 
     q_u = N_c*s_u*(1 + s_ca - i_ca) + gamma_sub*D_f
 -/
 /-- Both sides of "Ultimate bearing pressure" carry the same physical dimension. -/
-theorem eq4_qu_dim : d_q_u = (Dim.mul (Dim.mul d_N_c d_s_u) Dim.one) := by decide
-theorem eq4_qu_term1 : Dim.one = d_s_ca := by decide
-theorem eq4_qu_term2 : Dim.one = d_i_ca := by decide
-theorem eq4_qu_term3 : (Dim.mul (Dim.mul d_N_c d_s_u) Dim.one) = (Dim.mul d_gamma_sub d_D_f) := by decide
+theorem eq6_qu_dim : d_q_u = (Dim.mul (Dim.mul d_N_c d_s_u) Dim.one) := by decide
+theorem eq6_qu_term1 : Dim.one = d_s_ca := by decide
+theorem eq6_qu_term2 : Dim.one = d_i_ca := by decide
+theorem eq6_qu_term3 : (Dim.mul (Dim.mul d_N_c d_s_u) Dim.one) = (Dim.mul d_gamma_sub d_D_f) := by decide
 
-/-! ## 5. Sliding resistance
+/-! ## 7. Sliding resistance
 
     H_u = alpha_s*s_u*B*L
 -/
 /-- Both sides of "Sliding resistance" carry the same physical dimension. -/
-theorem eq5_hu_dim : d_H_u = (Dim.mul (Dim.mul (Dim.mul d_alpha_s d_s_u) d_B) d_L) := by decide
+theorem eq7_hu_dim : d_H_u = (Dim.mul (Dim.mul (Dim.mul d_alpha_s d_s_u) d_B) d_L) := by decide
 
-/-! ## 6. Ultimate vertical capacity
+/-! ## 8. Ultimate vertical capacity
 
     Q_u = q_u*B*L
 -/
 /-- Both sides of "Ultimate vertical capacity" carry the same physical dimension. -/
-theorem eq6_Qu_dim : d_Q_u = (Dim.mul (Dim.mul d_q_u d_B) d_L) := by decide
+theorem eq8_Qu_dim : d_Q_u = (Dim.mul (Dim.mul d_q_u d_B) d_L) := by decide
 
-/-! ## 7. Factor of safety on bearing
+/-! ## 9. Factor of safety on bearing
 
     FS_b = Q_u/V
 -/
 /-- Both sides of "Factor of safety on bearing" carry the same physical dimension. -/
-theorem eq7_fsb_dim : d_FS_b = (Dim.div d_Q_u d_V) := by decide
+theorem eq9_fsb_dim : d_FS_b = (Dim.div d_Q_u d_V) := by decide
 /-- The denominator `V` stays away from its singular set whenever the quantities are positive. -/
-theorem eq7_fsb_reg1 (V : ℝ) (hV : 0 < V) : V ≠ 0 := by positivity
+theorem eq9_fsb_reg1 (V : ℝ) (hV : 0 < V) : V ≠ 0 := by positivity
 
-/-! ## 8. Factor of safety on sliding
+/-! ## 10. Factor of safety on sliding
 
     FS_s = H_u/H
 -/
 /-- Both sides of "Factor of safety on sliding" carry the same physical dimension. -/
-theorem eq8_fss_dim : d_FS_s = (Dim.div d_H_u d_H) := by decide
+theorem eq10_fss_dim : d_FS_s = (Dim.div d_H_u d_H) := by decide
 /-- Domain condition for `H`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq8_fss_cond1 (H : ℝ) (hdom : H ≠ 0) : H ≠ 0 := hdom
+theorem eq10_fss_cond1 (H : ℝ) (hdom : H ≠ 0) : H ≠ 0 := hdom
 /-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
     which is bounded and smooth for every real b. -/
-theorem eq8_fss_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq10_fss_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 end Bespoke

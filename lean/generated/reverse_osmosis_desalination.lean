@@ -119,7 +119,7 @@ def d_pi_m : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Osmotic pressure at the w
 def d_pi_o : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Osmotic pressure [Pa]
 def d_pi_p : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Osmotic pressure of permeate [Pa]
 def d_r : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Recovery [1]
-def d_w_min : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Least work of separation [J/m^3]
+def d_w_min0 : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Least work of separation for salt-free permeate [J/m^3]
 
 /-! ## 1. Osmotic pressure
 
@@ -213,12 +213,12 @@ theorem eq10_sec_term1 : (Dim.mul d_Q_f d_P_f) = (Dim.mul (Dim.mul d_eta_erd d_Q
 /-- The denominator `eta_p * Q_p` stays away from its singular set whenever the quantities are positive. -/
 theorem eq10_sec_reg1 (eta_p Q_p : ℝ) (heta_p : 0 < eta_p) (hQ_p : 0 < Q_p) : eta_p * Q_p ≠ 0 := by positivity
 
-/-! ## 11. Least work of separation (pure permeate)
+/-! ## 11. Least work of separation for salt-free permeate
 
-    w_min = (pi_f/r)*ln(1/(1 - r))
+    w_min0 = (pi_f/r)*ln(1/(1 - r))
 -/
-/-- Both sides of "Least work of separation (pure permeate)" carry the same physical dimension. -/
-theorem eq11_wmin_dim : d_w_min = (Dim.mul (Dim.div d_pi_f d_r) Dim.one) := by decide
+/-- Both sides of "Least work of separation for salt-free permeate" carry the same physical dimension. -/
+theorem eq11_wmin_dim : d_w_min0 = (Dim.mul (Dim.div d_pi_f d_r) Dim.one) := by decide
 theorem eq11_wmin_term1 : Dim.one = d_r := by decide
 theorem eq11_wmin_term2 : (Dim.div Dim.one Dim.one) = Dim.one := by decide
 /-- The denominator `r` stays away from its singular set whenever the quantities are positive. -/

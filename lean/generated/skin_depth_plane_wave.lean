@@ -183,16 +183,17 @@ theorem eq8_adb_dim : d_A_dB = (Dim.mul (Dim.mul Dim.one d_t_s) d_alpha) := by d
 
 /-! ## 9. Reflection loss
 
-    R_dB = 20*log10((Z_w + eta_m)^2/(4*Z_w*eta_m))
+    R_dB = 20*log10((Z_w^2 + 2*Z_w*R_s + eta_m^2)/(4*Z_w*eta_m))
 -/
 /-- Both sides of "Reflection loss" carry the same physical dimension. -/
 theorem eq9_rdb_dim : d_R_dB = (Dim.mul Dim.one Dim.one) := by decide
-theorem eq9_rdb_term1 : d_Z_w = d_eta_m := by decide
-theorem eq9_rdb_term2 : (Dim.div (Dim.pow d_Z_w 2 1) (Dim.mul (Dim.mul Dim.one d_Z_w) d_eta_m)) = Dim.one := by decide
+theorem eq9_rdb_term1 : (Dim.pow d_Z_w 2 1) = (Dim.mul (Dim.mul Dim.one d_Z_w) d_R_s) := by decide
+theorem eq9_rdb_term2 : (Dim.pow d_Z_w 2 1) = (Dim.pow d_eta_m 2 1) := by decide
+theorem eq9_rdb_term3 : (Dim.div (Dim.pow d_Z_w 2 1) (Dim.mul (Dim.mul Dim.one d_Z_w) d_eta_m)) = Dim.one := by decide
 /-- The denominator `4 * Z_w * eta_m` stays away from its singular set whenever the quantities are positive. -/
 theorem eq9_rdb_reg1 (Z_w eta_m : ℝ) (hZ_w : 0 < Z_w) (heta_m : 0 < eta_m) : (4 : ℝ) * Z_w * eta_m ≠ 0 := by positivity
-/-- The argument `(Z_w + eta_m)^2 / (4 * Z_w * eta_m)` stays away from its singular set whenever the quantities are positive. -/
-theorem eq9_rdb_reg2 (Z_w eta_m : ℝ) (hZ_w : 0 < Z_w) (heta_m : 0 < eta_m) : 0 < (Z_w + eta_m) ^ 2 / ((4 : ℝ) * Z_w * eta_m) := by positivity
+/-- The argument `(Z_w^2 + 2 * Z_w * R_s + eta_m^2) / (4 * Z_w * eta_m)` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_rdb_reg2 (Z_w R_s eta_m : ℝ) (hZ_w : 0 < Z_w) (hR_s : 0 < R_s) (heta_m : 0 < eta_m) : 0 < (Z_w ^ 2 + (2 : ℝ) * Z_w * R_s + eta_m ^ 2) / ((4 : ℝ) * Z_w * eta_m) := by positivity
 
 /-! ## 10. Re-reflection correction
 

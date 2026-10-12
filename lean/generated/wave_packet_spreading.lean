@@ -87,6 +87,7 @@ theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
 /-! ## Dimensions of the symbols -/
 
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
+def d_E_k : Dim := ⟨12, 24, -24, 0, 0, 0, 0⟩  -- Mean kinetic energy [eV]
 def d_dp : Dim := ⟨12, 12, -12, 0, 0, 0, 0⟩  -- Momentum uncertainty [kg m/s]
 def d_hbar : Dim := ⟨12, 24, -12, 0, 0, 0, 0⟩  -- Reduced Planck constant [J s]
 def d_i_u : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Imaginary unit [1]
@@ -142,22 +143,33 @@ theorem eq4_sig_reg1 (tau_s : ℝ) (htau_s : 0 < tau_s) : tau_s ≠ 0 := by posi
 /-- The argument `1 + (t / tau_s)^2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq4_sig_reg2 (t tau_s : ℝ) (ht : 0 < t) (htau_s : 0 < tau_s) : 0 ≤ (1 : ℝ) + (t / tau_s) ^ 2 := by positivity
 
-/-! ## 5. Group velocity
+/-! ## 5. Mean wavenumber
+
+    k_0 = sqrt(2*m_r*m_e*E_k)/hbar
+-/
+/-- Both sides of "Mean wavenumber" carry the same physical dimension. -/
+theorem eq5_k0_dim : d_k_0 = (Dim.div (Dim.pow (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_r) d_m_e) d_E_k) 1 2) d_hbar) := by decide
+/-- Domain condition for `2 * m_r * m_e * E_k`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
+theorem eq5_k0_cond1 (m_r m_e E_k : ℝ) (hdom : 0 ≤ (2 : ℝ) * m_r * m_e * E_k) : 0 ≤ (2 : ℝ) * m_r * m_e * E_k := hdom
+/-- The denominator `hbar` stays away from its singular set whenever the quantities are positive. -/
+theorem eq5_k0_reg2 (hbar : ℝ) (hhbar : 0 < hbar) : hbar ≠ 0 := by positivity
+
+/-! ## 6. Group velocity
 
     v_g = hbar*k_0/(m_r*m_e)
 -/
 /-- Both sides of "Group velocity" carry the same physical dimension. -/
-theorem eq5_vg_dim : d_v_g = (Dim.div (Dim.mul d_hbar d_k_0) (Dim.mul d_m_r d_m_e)) := by decide
+theorem eq6_vg_dim : d_v_g = (Dim.div (Dim.mul d_hbar d_k_0) (Dim.mul d_m_r d_m_e)) := by decide
 /-- The denominator `m_r * m_e` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_vg_reg1 (m_r m_e : ℝ) (hm_r : 0 < m_r) (hm_e : 0 < m_e) : m_r * m_e ≠ 0 := by positivity
+theorem eq6_vg_reg1 (m_r m_e : ℝ) (hm_r : 0 < m_r) (hm_e : 0 < m_e) : m_r * m_e ≠ 0 := by positivity
 
-/-! ## 6. Momentum uncertainty
+/-! ## 7. Momentum uncertainty
 
     dp = hbar/(2*sigma_0)
 -/
 /-- Both sides of "Momentum uncertainty" carry the same physical dimension. -/
-theorem eq6_dp_dim : d_dp = (Dim.div d_hbar (Dim.mul Dim.one d_sigma_0)) := by decide
+theorem eq7_dp_dim : d_dp = (Dim.div d_hbar (Dim.mul Dim.one d_sigma_0)) := by decide
 /-- The denominator `2 * sigma_0` stays away from its singular set whenever the quantities are positive. -/
-theorem eq6_dp_reg1 (sigma_0 : ℝ) (hsigma_0 : 0 < sigma_0) : (2 : ℝ) * sigma_0 ≠ 0 := by positivity
+theorem eq7_dp_reg1 (sigma_0 : ℝ) (hsigma_0 : 0 < sigma_0) : (2 : ℝ) * sigma_0 ≠ 0 := by positivity
 
 end Bespoke

@@ -127,6 +127,8 @@ function dimTerm(e, table, side) {
         case 'lap': return `(Dim.div ${a[0]} (Dim.pow d_length 2 1))`;
         case 'int': return `(Dim.mul ${a[0]} ${a[1]})`;
         case 'pow': { const f = frac(E.evaluate(e.args[1], {})); return f ? `(Dim.pow ${a[0]} ${f[0] < 0 ? `(${f[0]})` : f[0]} ${f[1]})` : null; }
+        // a conditional takes the dimension of its two branches, which must agree; the tested quantity may carry any dimension
+        case 'ifpos': { const z1 = e.args[1].t === 'num' && e.args[1].v === 0, z2 = e.args[2].t === 'num' && e.args[2].v === 0; if (!z1 && !z2) side.push([a[1], a[2]]); return z1 ? a[2] : a[1]; }
         case 'sign': case 'heaviside': case 'atan2': return 'Dim.one';
         default: side.push([a[0], 'Dim.one']); return 'Dim.one';
       }

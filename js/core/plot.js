@@ -13,10 +13,11 @@ function setup(canvas, h) {
   return { ctx, w, h };
 }
 function niceTicks(lo, hi, n = 6) {
-  if (!(hi > lo)) { const d = Math.abs(lo) || 1; lo -= d * 0.5; hi += d * 0.5; }
+  // a span below the resolution of the numbers themselves is no span: ticks could not advance across it
+  if (!(hi - lo > 1e-9 * Math.max(Math.abs(lo), Math.abs(hi)))) { const d = Math.abs(lo) || 1; lo -= d * 0.5; hi += d * 0.5; }
   const span = hi - lo, step0 = Math.pow(10, Math.floor(Math.log10(span / n))), err = span / n / step0;
   const step = step0 * (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1), t = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) t.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9 && t.length < 60; v += step) t.push(Math.abs(v) < step * 1e-9 ? 0 : v);
   return t;
 }
 const logTicks = (lo, hi) => { const t = []; for (let e = Math.floor(lo); e <= Math.ceil(hi); e++) if (e >= lo - 1e-9 && e <= hi + 1e-9) t.push(e); return t.length >= 2 ? t : [lo, hi]; };
@@ -34,7 +35,7 @@ export function lineChart(canvas, spec, opts = {}) {
   const xs = [spec.x.data, ...(spec.overlay || []).map(o => o.x), ...(spec.points ? [spec.points.map(p => p.x)] : [])].map(a => a.map(tx));
   const ys = [...spec.y.map(s => s.data), ...(spec.overlay || []).map(o => o.y), ...(spec.band ? [spec.band.lo, spec.band.hi] : []), ...(spec.points ? [spec.points.map(p => p.y)] : [])].map(a => a.map(ty));
   let [x0, x1] = extent(xs), [y0, y1] = spec.yRange ? spec.yRange.map(ty) : extent(ys);
-  if (y0 === y1) { const d = Math.abs(y0) * 0.1 || 1; y0 -= d; y1 += d; } else if (!spec.yRange) { const p = (y1 - y0) * 0.06; y0 -= p; y1 += p; }
+  if (!(y1 - y0 > 1e-9 * Math.max(Math.abs(y0), Math.abs(y1)))) { const d = Math.abs(y0) * 0.1 || 1; y0 -= d; y1 += d; } else if (!spec.yRange) { const p = (y1 - y0) * 0.06; y0 -= p; y1 += p; }
   if (x0 === x1) { x0 -= 1; x1 += 1; }
   const X = v => m.l + (tx(v) - x0) / (x1 - x0) * pw, Y = v => m.t + ph - (ty(v) - y0) / (y1 - y0) * ph;
   ctx.font = '11px system-ui, sans-serif'; ctx.lineWidth = 1;

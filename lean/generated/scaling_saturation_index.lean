@@ -91,7 +91,9 @@ def d_A_L : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Langelier solids term [1]
 def d_Alk : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Alkalinity of the feed (as CaCO₃) [mg/L]
 def d_B_L : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Langelier temperature term [1]
 def d_CF : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Concentration factor [1]
+def d_CPF : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Concentration-polarisation factor at the membrane wall [1]
 def d_C_L : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Langelier calcium term [1]
+def d_Ca : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Calcium in the feed (as Ca²⁺) [mg/L]
 def d_Ca_h : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Calcium hardness of concentrate as CaCO₃ [kg/m^3]
 def d_D_L : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Langelier alkalinity term [1]
 def d_I_s : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Ionic strength over 1 mol/L [1]
@@ -104,6 +106,7 @@ def d_T : Dim := ⟨0, 0, 0, 0, 12, 0, 0⟩  -- Temperature [°C]
 def d_TDS : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Total dissolved solids of the feed [mg/L]
 def d_T_ref : Dim := ⟨0, 0, 0, 0, 12, 0, 0⟩  -- Reference temperature 1 K [K]
 def d_c_ref : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Reference concentration 1 mg/L [kg/m^3]
+def d_f_w : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Concentration factor where saturation is evaluated [1]
 def d_gamma : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Activity coefficient of a divalent ion [1]
 def d_m_Ca : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Free calcium over 1 mol/L [1]
 def d_m_SO4 : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Free sulphate over 1 mol/L [1]
@@ -136,131 +139,139 @@ theorem eq2_phc_term2 : d_pH = Dim.one := by decide
 /-- The argument `CF` stays away from its singular set whenever the quantities are positive. -/
 theorem eq2_phc_reg1 (CF : ℝ) (hCF : 0 < CF) : 0 < CF := by positivity
 
-/-! ## 3. Solids term
+/-! ## 3. Concentration factor at the membrane wall
 
-    A_L = (log10(CF*TDS/c_ref) - 1)/10
+    f_w = CF*CPF
+-/
+/-- Both sides of "Concentration factor at the membrane wall" carry the same physical dimension. -/
+theorem eq3_fw_dim : d_f_w = (Dim.mul d_CF d_CPF) := by decide
+
+/-! ## 4. Solids term
+
+    A_L = (log10(f_w*TDS/c_ref) - 1)/10
 -/
 /-- Both sides of "Solids term" carry the same physical dimension. -/
-theorem eq3_al_dim : d_A_L = (Dim.div Dim.one Dim.one) := by decide
-theorem eq3_al_term1 : (Dim.div (Dim.mul d_CF d_TDS) d_c_ref) = Dim.one := by decide
-theorem eq3_al_term2 : Dim.one = Dim.one := by decide
+theorem eq4_al_dim : d_A_L = (Dim.div Dim.one Dim.one) := by decide
+theorem eq4_al_term1 : (Dim.div (Dim.mul d_f_w d_TDS) d_c_ref) = Dim.one := by decide
+theorem eq4_al_term2 : Dim.one = Dim.one := by decide
 /-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_al_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
-/-- Domain condition for `CF * TDS / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq3_al_cond2 (CF TDS c_ref : ℝ) (hdom : 0 < CF * TDS / c_ref) : 0 < CF * TDS / c_ref := hdom
+theorem eq4_al_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
+/-- Domain condition for `f_w * TDS / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq4_al_cond2 (f_w TDS c_ref : ℝ) (hdom : 0 < f_w * TDS / c_ref) : 0 < f_w * TDS / c_ref := hdom
 /-- The denominator `10` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_al_reg3  : (10 : ℝ) ≠ 0 := by positivity
-/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
-    which is bounded and smooth for every real b. -/
-theorem eq3_al_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq4_al_reg3  : (10 : ℝ) ≠ 0 := by positivity
 
-/-! ## 4. Temperature term
+/-! ## 5. Temperature term
 
     B_L = 34.55 - 13.12*log10(T/T_ref)
 -/
 /-- Both sides of "Temperature term" carry the same physical dimension. -/
-theorem eq4_bl_dim : d_B_L = Dim.one := by decide
-theorem eq4_bl_term1 : (Dim.div d_T d_T_ref) = Dim.one := by decide
-theorem eq4_bl_term2 : Dim.one = (Dim.mul Dim.one Dim.one) := by decide
+theorem eq5_bl_dim : d_B_L = Dim.one := by decide
+theorem eq5_bl_term1 : (Dim.div d_T d_T_ref) = Dim.one := by decide
+theorem eq5_bl_term2 : Dim.one = (Dim.mul Dim.one Dim.one) := by decide
 /-- The denominator `T_ref` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_bl_reg1 (T_ref : ℝ) (hT_ref : 0 < T_ref) : T_ref ≠ 0 := by positivity
+theorem eq5_bl_reg1 (T_ref : ℝ) (hT_ref : 0 < T_ref) : T_ref ≠ 0 := by positivity
 /-- Domain condition for `T / T_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_bl_cond2 (T T_ref : ℝ) (hdom : 0 < T / T_ref) : 0 < T / T_ref := hdom
+theorem eq5_bl_cond2 (T T_ref : ℝ) (hdom : 0 < T / T_ref) : 0 < T / T_ref := hdom
 /-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
     which is bounded and smooth for every real b. -/
-theorem eq4_bl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq5_bl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
-/-! ## 5. Calcium term
+/-! ## 6. Calcium hardness
+
+    Ca_h = 2.497*f_w*Ca
+-/
+/-- Both sides of "Calcium hardness" carry the same physical dimension. -/
+theorem eq6_cah_dim : d_Ca_h = (Dim.mul (Dim.mul Dim.one d_f_w) d_Ca) := by decide
+
+/-! ## 7. Calcium term
 
     C_L = log10(Ca_h/c_ref) - 0.4
 -/
 /-- Both sides of "Calcium term" carry the same physical dimension. -/
-theorem eq5_cl_dim : d_C_L = Dim.one := by decide
-theorem eq5_cl_term1 : (Dim.div d_Ca_h d_c_ref) = Dim.one := by decide
-theorem eq5_cl_term2 : Dim.one = Dim.one := by decide
+theorem eq7_cl_dim : d_C_L = Dim.one := by decide
+theorem eq7_cl_term1 : (Dim.div d_Ca_h d_c_ref) = Dim.one := by decide
+theorem eq7_cl_term2 : Dim.one = Dim.one := by decide
 /-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
-theorem eq5_cl_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
+theorem eq7_cl_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
 /-- Domain condition for `Ca_h / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_cl_cond2 (Ca_h c_ref : ℝ) (hdom : 0 < Ca_h / c_ref) : 0 < Ca_h / c_ref := hdom
+theorem eq7_cl_cond2 (Ca_h c_ref : ℝ) (hdom : 0 < Ca_h / c_ref) : 0 < Ca_h / c_ref := hdom
 /-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
     which is bounded and smooth for every real b. -/
-theorem eq5_cl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq7_cl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
-/-! ## 6. Alkalinity term
+/-! ## 8. Alkalinity term
 
-    D_L = log10(CF*Alk/c_ref)
+    D_L = log10(f_w*Alk/c_ref)
 -/
 /-- Both sides of "Alkalinity term" carry the same physical dimension. -/
-theorem eq6_dl_dim : d_D_L = Dim.one := by decide
-theorem eq6_dl_term1 : (Dim.div (Dim.mul d_CF d_Alk) d_c_ref) = Dim.one := by decide
+theorem eq8_dl_dim : d_D_L = Dim.one := by decide
+theorem eq8_dl_term1 : (Dim.div (Dim.mul d_f_w d_Alk) d_c_ref) = Dim.one := by decide
 /-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
-theorem eq6_dl_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
-/-- Domain condition for `CF * Alk / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq6_dl_cond2 (CF Alk c_ref : ℝ) (hdom : 0 < CF * Alk / c_ref) : 0 < CF * Alk / c_ref := hdom
-/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
-    which is bounded and smooth for every real b. -/
-theorem eq6_dl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq8_dl_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
+/-- Domain condition for `f_w * Alk / c_ref`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq8_dl_cond2 (f_w Alk c_ref : ℝ) (hdom : 0 < f_w * Alk / c_ref) : 0 < f_w * Alk / c_ref := hdom
 
-/-! ## 7. Saturation pH
+/-! ## 9. Saturation pH
 
     pH_s = 9.3 + A_L + B_L - C_L - D_L
 -/
 /-- Both sides of "Saturation pH" carry the same physical dimension. -/
-theorem eq7_phs_dim : d_pH_s = Dim.one := by decide
-theorem eq7_phs_term1 : Dim.one = d_A_L := by decide
-theorem eq7_phs_term2 : Dim.one = d_B_L := by decide
-theorem eq7_phs_term3 : Dim.one = d_C_L := by decide
-theorem eq7_phs_term4 : Dim.one = d_D_L := by decide
+theorem eq9_phs_dim : d_pH_s = Dim.one := by decide
+theorem eq9_phs_term1 : Dim.one = d_A_L := by decide
+theorem eq9_phs_term2 : Dim.one = d_B_L := by decide
+theorem eq9_phs_term3 : Dim.one = d_C_L := by decide
+theorem eq9_phs_term4 : Dim.one = d_D_L := by decide
 
-/-! ## 8. Langelier saturation index
+/-! ## 10. Langelier saturation index
 
     LSI = pH_c - pH_s
 -/
 /-- Both sides of "Langelier saturation index" carry the same physical dimension. -/
-theorem eq8_lsi_dim : d_LSI = d_pH_c := by decide
-theorem eq8_lsi_term1 : d_pH_c = d_pH_s := by decide
+theorem eq10_lsi_dim : d_LSI = d_pH_c := by decide
+theorem eq10_lsi_term1 : d_pH_c = d_pH_s := by decide
 
-/-! ## 9. Ionic strength
+/-! ## 11. Ionic strength
 
-    I_s = 2.5e-5*CF*TDS/c_ref
+    I_s = 2.5e-5*f_w*TDS/c_ref
 -/
 /-- Both sides of "Ionic strength" carry the same physical dimension. -/
-theorem eq9_is_dim : d_I_s = (Dim.div (Dim.mul (Dim.mul Dim.one d_CF) d_TDS) d_c_ref) := by decide
+theorem eq11_is_dim : d_I_s = (Dim.div (Dim.mul (Dim.mul Dim.one d_f_w) d_TDS) d_c_ref) := by decide
 /-- The denominator `c_ref` stays away from its singular set whenever the quantities are positive. -/
-theorem eq9_is_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
+theorem eq11_is_reg1 (c_ref : ℝ) (hc_ref : 0 < c_ref) : c_ref ≠ 0 := by positivity
 
-/-! ## 10. Davies activity coefficient
+/-! ## 12. Davies activity coefficient
 
     log10(gamma) = -0.509*4*(sqrt(I_s)/(1 + sqrt(I_s)) - 0.3*I_s)
 -/
 /-- Both sides of "Davies activity coefficient" carry the same physical dimension. -/
-theorem eq10_dav_dim : Dim.one = (Dim.mul (Dim.mul Dim.one Dim.one) (Dim.div (Dim.pow d_I_s 1 2) Dim.one)) := by decide
-theorem eq10_dav_term1 : d_gamma = Dim.one := by decide
-theorem eq10_dav_term2 : Dim.one = (Dim.pow d_I_s 1 2) := by decide
-theorem eq10_dav_term3 : (Dim.div (Dim.pow d_I_s 1 2) Dim.one) = (Dim.mul Dim.one d_I_s) := by decide
+theorem eq12_dav_dim : Dim.one = (Dim.mul (Dim.mul Dim.one Dim.one) (Dim.div (Dim.pow d_I_s 1 2) Dim.one)) := by decide
+theorem eq12_dav_term1 : d_gamma = Dim.one := by decide
+theorem eq12_dav_term2 : Dim.one = (Dim.pow d_I_s 1 2) := by decide
+theorem eq12_dav_term3 : (Dim.div (Dim.pow d_I_s 1 2) Dim.one) = (Dim.mul Dim.one d_I_s) := by decide
 /-- The argument `gamma` stays away from its singular set whenever the quantities are positive. -/
-theorem eq10_dav_reg1 (gamma : ℝ) (hgamma : 0 < gamma) : 0 < gamma := by positivity
+theorem eq12_dav_reg1 (gamma : ℝ) (hgamma : 0 < gamma) : 0 < gamma := by positivity
 /-- The argument `I_s` stays away from its singular set whenever the quantities are positive. -/
-theorem eq10_dav_reg2 (I_s : ℝ) (hI_s : 0 < I_s) : 0 ≤ I_s := by positivity
+theorem eq12_dav_reg2 (I_s : ℝ) (hI_s : 0 < I_s) : 0 ≤ I_s := by positivity
 /-- The argument `I_s` stays away from its singular set whenever the quantities are positive. -/
-theorem eq10_dav_reg3 (I_s : ℝ) (hI_s : 0 < I_s) : 0 ≤ I_s := by positivity
+theorem eq12_dav_reg3 (I_s : ℝ) (hI_s : 0 < I_s) : 0 ≤ I_s := by positivity
 /-- The denominator `1 + sqrt(I_s)` stays away from its singular set whenever the quantities are positive. -/
-theorem eq10_dav_reg4 (I_s : ℝ) (hI_s : 0 < I_s) : (1 : ℝ) + Real.sqrt I_s ≠ 0 := by positivity
+theorem eq12_dav_reg4 (I_s : ℝ) (hI_s : 0 < I_s) : (1 : ℝ) + Real.sqrt I_s ≠ 0 := by positivity
 
-/-! ## 11. Ion-pair equilibrium
+/-! ## 13. Ion-pair equilibrium
 
     m_pair = K_a*gamma^2*m_Ca*m_SO4
 -/
 /-- Both sides of "Ion-pair equilibrium" carry the same physical dimension. -/
-theorem eq11_pair_dim : d_m_pair = (Dim.mul (Dim.mul (Dim.mul d_K_a (Dim.pow d_gamma 2 1)) d_m_Ca) d_m_SO4) := by decide
+theorem eq13_pair_dim : d_m_pair = (Dim.mul (Dim.mul (Dim.mul d_K_a (Dim.pow d_gamma 2 1)) d_m_Ca) d_m_SO4) := by decide
 
-/-! ## 12. Gypsum saturation ratio
+/-! ## 14. Gypsum saturation ratio
 
     SR = gamma^2*m_Ca*m_SO4/K_sp
 -/
 /-- Both sides of "Gypsum saturation ratio" carry the same physical dimension. -/
-theorem eq12_sr_dim : d_SR = (Dim.div (Dim.mul (Dim.mul (Dim.pow d_gamma 2 1) d_m_Ca) d_m_SO4) d_K_sp) := by decide
+theorem eq14_sr_dim : d_SR = (Dim.div (Dim.mul (Dim.mul (Dim.pow d_gamma 2 1) d_m_Ca) d_m_SO4) d_K_sp) := by decide
 /-- Domain condition for `K_sp`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq12_sr_cond1 (K_sp : ℝ) (hdom : K_sp ≠ 0) : K_sp ≠ 0 := hdom
+theorem eq14_sr_cond1 (K_sp : ℝ) (hdom : K_sp ≠ 0) : K_sp ≠ 0 := hdom
 
 end Bespoke

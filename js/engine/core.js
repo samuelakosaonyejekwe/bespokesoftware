@@ -44,7 +44,9 @@ export function createInvestigation({ module, mode = 'A', prompt, modelId = null
   // the full model library and the formula atlas compete on the same evidence: matched phrases and share of the prompt covered
   const atlasBest = P.rankModels(prompt, ATLAS_INDEX, 1)[0] || null, weight = r => (r ? r.kw + 20 * r.cov : 0);
   const atlasWins = !!atlasBest && (atlasBest.hits || []).length > 0 && weight(atlasBest) > weight(ranked[0]);
-  const chosen = modelId || (P.strongMatch(ranked[0]) && !atlasWins && (!promptEqs.length || keywordMatch(ranked[0])) ? ranked[0].id : null);
+  // an argument stated as premises and a conclusion, with no quantities, is analysed as logic: a physical model needs more than a passing word
+  const formal = Logic.fromText(prompt), argued = !!formal.conclusion && formal.premises.length > 0 && !P.extractQuantities(prompt).length;
+  const chosen = modelId || (P.strongMatch(ranked[0]) && !atlasWins && !(argued && ranked[0].cov < 0.5) && (!promptEqs.length || keywordMatch(ranked[0])) ? ranked[0].id : null);
   const model = chosen ? modelById(chosen) : null;
   const inv = {
     id: uid(), v: 1, module, mode, prompt, title: P.titleFrom(prompt), created: Date.now(), updated: Date.now(),
@@ -349,14 +351,37 @@ export function uncertainty(c, n = 200) {
   return { n, failed, vars: vars.map(i => ({ sym: i.sym, name: i.name, unc: i.unc, prov: i.prov })), stats, band };
 }
 
-/** One-at-a-time parameter sweep of an input over its range (or a custom range). */
+/**
+ * One-at-a-time parameter sweep of an input over its range (or a custom range). The present value is always one of the
+ * points, so every curve passes through the result shown elsewhere; whole-number inputs step in whole numbers; and
+ * intervals where an output bends sharply (a resonance, a threshold) are subdivided until the shape is resolved.
+ */
 export function sweep(c, sym, nPts = 30, lo, hi) {
   const model = c.model, i = c.inputs.find(q => q.sym === sym); if (!model || !i) return null;
   const a = lo ?? Math.max(i.rangeSI[0], i.si > 0 ? i.si / 4 : i.rangeSI[0]), b = hi ?? Math.min(i.rangeSI[1], i.si > 0 ? i.si * 4 : i.rangeSI[1]);
   if (model.heavy) nPts = Math.min(nPts, 12);
-  const xs = N.linspace(a, b, nPts), out = {};
-  xs.forEach((x, k) => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true); r.scalars.forEach(s => { (out[s.sym] = out[s.sym] || { ...s, data: new Array(nPts).fill(NaN) }).data[k] = Number.isFinite(s.value) ? s.value : NaN; }); });
-  return { input: i, xs, outputs: Object.values(out).filter(o => o.data.some(Number.isFinite)) };
+  let xs = N.linspace(a, b, nPts);
+  if (i.integer) xs = xs.map(Math.round);
+  if (i.si >= a && i.si <= b) xs.push(i.si);
+  xs = [...new Set(xs)].sort((p, q) => p - q);
+  const cols = new Map(), meta = {};
+  const solve = x => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true), col = {}; r.scalars.forEach(s => { meta[s.sym] = meta[s.sym] || s; col[s.sym] = Number.isFinite(s.value) ? s.value : NaN; }); cols.set(x, col); };
+  xs.forEach(solve);
+  // refinement: where the middle of three neighbours lies far from the chord through the outer two, halve both intervals
+  const budget = (model.heavy ? 2 : 4) * nPts;
+  for (let pass = 0; pass < 4 && !i.integer && xs.length < budget; pass++) {
+    const span = {}; Object.keys(meta).forEach(k => { const d = xs.map(x => cols.get(x)[k]).filter(Number.isFinite); span[k] = d.length ? Math.max(...d) - Math.min(...d) : 0; });
+    const add = new Set();
+    for (let k = 1; k < xs.length - 1; k++) {
+      const [x0, x1, x2] = [xs[k - 1], xs[k], xs[k + 1]], [c0, c1, c2] = [cols.get(x0), cols.get(x1), cols.get(x2)];
+      const bent = Object.keys(meta).some(q => { const sp = span[q]; if (!(sp > 1e-3 * Math.max(Math.abs(c0[q]), Math.abs(c1[q]), Math.abs(c2[q]), 1e-300))) return false; const chord = c0[q] + (c2[q] - c0[q]) * (x1 - x0) / (x2 - x0); return Number.isFinite(chord) && Number.isFinite(c1[q]) && Math.abs(c1[q] - chord) > 0.08 * sp; });
+      if (bent) { add.add((x0 + x1) / 2); add.add((x1 + x2) / 2); }
+    }
+    const fresh = [...add].filter(x => !cols.has(x)).slice(0, budget - xs.length); if (!fresh.length) break;
+    fresh.forEach(solve); xs = [...xs, ...fresh].sort((p, q) => p - q);
+  }
+  const outputs = Object.keys(meta).map(k => ({ ...meta[k], data: xs.map(x => { const v = cols.get(x)[k]; return v === undefined ? NaN : v; }) })).filter(o => o.data.some(Number.isFinite));
+  return { input: i, xs, outputs };
 }
 
 /** Which conclusions depend on which assumptions: flip each assumption alone and measure the change in every output. */

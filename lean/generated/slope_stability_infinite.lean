@@ -138,7 +138,7 @@ theorem eq4_u_term1 : d_beta = Dim.one := by decide
 
 /-! ## 5. Shear strength
 
-    tau_f = c_eff + (sigma_n - u_p)*tan(phi)
+    tau_f = c_eff + max(sigma_n - u_p, 0)*tan(phi)
 -/
 /-- Both sides of "Shear strength" carry the same physical dimension. -/
 theorem eq5_tf_dim : d_tau_f = d_c_eff := by decide

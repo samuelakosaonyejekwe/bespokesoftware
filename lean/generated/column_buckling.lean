@@ -94,6 +94,7 @@ def d_K : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Effective-length factor [1]
 def d_L : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Column length [m]
 def d_P : Dim := ⟨12, 12, -24, 0, 0, 0, 0⟩  -- Applied axial load [kN]
 def d_P_E : Dim := ⟨12, 12, -24, 0, 0, 0, 0⟩  -- Euler critical load [N]
+def d_P_cr : Dim := ⟨12, 12, -24, 0, 0, 0, 0⟩  -- Critical load [N]
 def d_c_y : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Distance from the centroid to the extreme fibre [mm]
 def d_delta : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Lateral deflection at mid-height [m]
 def d_e_0 : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Initial bow amplitude or load eccentricity [mm]
@@ -144,41 +145,52 @@ theorem eq4_lc_reg1 (sigma_y : ℝ) (hsigma_y : 0 < sigma_y) : sigma_y ≠ 0 := 
 /-- The argument `2 * E / sigma_y` stays away from its singular set whenever the quantities are positive. -/
 theorem eq4_lc_reg2 (E sigma_y : ℝ) (hE : 0 < E) (hsigma_y : 0 < sigma_y) : 0 ≤ (2 : ℝ) * E / sigma_y := by positivity
 
-/-! ## 5. Johnson parabola (λ < λ_c)
+/-! ## 5. Critical stress: Johnson parabola below the transition, Euler hyperbola above
 
-    sigma_cr = sigma_y*(1 - sigma_y*lambda^2/(4*pi^2*E))
+    sigma_cr = ifpos(lambda_c - lambda, sigma_y*(1 - sigma_y*lambda^2/(4*pi^2*E)), pi^2*E/lambda^2)
 -/
-/-- Both sides of "Johnson parabola (λ < λ_c)" carry the same physical dimension. -/
+/-- Both sides of "Critical stress: Johnson parabola below the transition, Euler hyperbola above" carry the same physical dimension. -/
 theorem eq5_scr_dim : d_sigma_cr = (Dim.mul d_sigma_y Dim.one) := by decide
-theorem eq5_scr_term1 : Dim.one = (Dim.div (Dim.mul d_sigma_y (Dim.pow d_lambda 2 1)) (Dim.mul (Dim.mul Dim.one (Dim.pow Dim.one 2 1)) d_E)) := by decide
+theorem eq5_scr_term1 : d_lambda_c = d_lambda := by decide
+theorem eq5_scr_term2 : Dim.one = (Dim.div (Dim.mul d_sigma_y (Dim.pow d_lambda 2 1)) (Dim.mul (Dim.mul Dim.one (Dim.pow Dim.one 2 1)) d_E)) := by decide
+theorem eq5_scr_term3 : (Dim.mul d_sigma_y Dim.one) = (Dim.div (Dim.mul (Dim.pow Dim.one 2 1) d_E) (Dim.pow d_lambda 2 1)) := by decide
 /-- The denominator `4 * pi^2 * E` stays away from its singular set whenever the quantities are positive. -/
 theorem eq5_scr_reg1 (E : ℝ) (hE : 0 < E) : (4 : ℝ) * Real.pi ^ 2 * E ≠ 0 := by positivity
+/-- The denominator `lambda^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq5_scr_reg2 (lambda : ℝ) (hlambda : 0 < lambda) : lambda ^ 2 ≠ 0 := by positivity
 
-/-! ## 6. Amplified bow
+/-! ## 6. Critical load
+
+    P_cr = sigma_cr*A
+-/
+/-- Both sides of "Critical load" carry the same physical dimension. -/
+theorem eq6_pcr_dim : d_P_cr = (Dim.mul d_sigma_cr d_A) := by decide
+
+/-! ## 7. Amplified bow
 
     delta = e_0/(1 - P/P_E)
 -/
 /-- Both sides of "Amplified bow" carry the same physical dimension. -/
-theorem eq6_dl_dim : d_delta = (Dim.div d_e_0 Dim.one) := by decide
-theorem eq6_dl_term1 : Dim.one = (Dim.div d_P d_P_E) := by decide
+theorem eq7_dl_dim : d_delta = (Dim.div d_e_0 Dim.one) := by decide
+theorem eq7_dl_term1 : Dim.one = (Dim.div d_P d_P_E) := by decide
 /-- The denominator `P_E` stays away from its singular set whenever the quantities are positive. -/
-theorem eq6_dl_reg1 (P_E : ℝ) (hP_E : 0 < P_E) : P_E ≠ 0 := by positivity
+theorem eq7_dl_reg1 (P_E : ℝ) (hP_E : 0 < P_E) : P_E ≠ 0 := by positivity
 /-- Domain condition for `1 - P / P_E`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq6_dl_cond2 (P P_E : ℝ) (hdom : (1 : ℝ) - P / P_E ≠ 0) : (1 : ℝ) - P / P_E ≠ 0 := hdom
+theorem eq7_dl_cond2 (P P_E : ℝ) (hdom : (1 : ℝ) - P / P_E ≠ 0) : (1 : ℝ) - P / P_E ≠ 0 := hdom
 /-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
     which is bounded and smooth for every real b. -/
-theorem eq6_dl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq7_dl_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
-/-! ## 7. Peak stress
+/-! ## 8. Peak stress
 
     sigma_max = P/A + P*delta*c_y/I_b
 -/
 /-- Both sides of "Peak stress" carry the same physical dimension. -/
-theorem eq7_sm_dim : d_sigma_max = (Dim.div d_P d_A) := by decide
-theorem eq7_sm_term1 : (Dim.div d_P d_A) = (Dim.div (Dim.mul (Dim.mul d_P d_delta) d_c_y) d_I_b) := by decide
+theorem eq8_sm_dim : d_sigma_max = (Dim.div d_P d_A) := by decide
+theorem eq8_sm_term1 : (Dim.div d_P d_A) = (Dim.div (Dim.mul (Dim.mul d_P d_delta) d_c_y) d_I_b) := by decide
 /-- The denominator `A` stays away from its singular set whenever the quantities are positive. -/
-theorem eq7_sm_reg1 (A : ℝ) (hA : 0 < A) : A ≠ 0 := by positivity
+theorem eq8_sm_reg1 (A : ℝ) (hA : 0 < A) : A ≠ 0 := by positivity
 /-- The denominator `I_b` stays away from its singular set whenever the quantities are positive. -/
-theorem eq7_sm_reg2 (I_b : ℝ) (hI_b : 0 < I_b) : I_b ≠ 0 := by positivity
+theorem eq8_sm_reg2 (I_b : ℝ) (hI_b : 0 < I_b) : I_b ≠ 0 := by positivity
 
 end Bespoke

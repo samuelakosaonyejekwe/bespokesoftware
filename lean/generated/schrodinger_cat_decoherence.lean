@@ -89,6 +89,8 @@ theorem bounded_rate_no_blowup (x : ℝ → ℝ) (F T : ℝ) (hT : 0 ≤ T)
 def d_length : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩
 def d_Gamma : Dim := ⟨0, 0, -12, 0, 0, 0, 0⟩  -- Decoherence rate [1/s]
 def d_Lambda_a : Dim := ⟨0, -24, -12, 0, 0, 0, 0⟩  -- Localisation rate from gas collisions [1/(m^2 s)]
+def d_Lambda_d : Dim := ⟨0, -24, -12, 0, 0, 0, 0⟩  -- Photon localisation rate of a sphere small compared with the thermal wavelength [1/(m^2 s)]
+def d_Lambda_g : Dim := ⟨0, -24, -12, 0, 0, 0, 0⟩  -- Photon localisation rate of a sphere large compared with the thermal wavelength [1/(m^2 s)]
 def d_Lambda_p : Dim := ⟨0, -24, -12, 0, 0, 0, 0⟩  -- Localisation rate from thermal photons [1/(m^2 s)]
 def d_T : Dim := ⟨0, 0, 0, 0, 12, 0, 0⟩  -- Temperature of gas and radiation [K]
 def d_a : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Radius of the object [um]
@@ -96,13 +98,16 @@ def d_c : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Speed of light [m/s]
 def d_dx : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Separation between the two branches of the superposition [nm]
 def d_hbar : Dim := ⟨12, 24, -12, 0, 0, 0, 0⟩  -- Reduced Planck constant [J s]
 def d_k_B : Dim := ⟨12, 24, -24, 0, -12, 0, 0⟩  -- Boltzmann constant [J/K]
-def d_l_c : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Coherence length of the scattering environment [m]
+def d_l_air : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Separation at which gas collisions saturate [m]
+def d_l_ph : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Separation at which photon scattering saturates [m]
 def d_m_g : Dim := ⟨12, 0, 0, 0, 0, 0, 0⟩  -- Mass of a gas molecule [u]
 def d_n_g : Dim := ⟨0, -36, 0, 0, 0, 0, 0⟩  -- Number density of the gas [1/m^3]
 def d_p : Dim := ⟨12, -12, -24, 0, 0, 0, 0⟩  -- Gas pressure [Pa]
 def d_rho_c : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Off-diagonal element of the density matrix [1]
 def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Time [s]
 def d_tau_D : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Decoherence time [s]
+def d_zeta_3 : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Riemann zeta function at 3 [1]
+def d_zeta_5 : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Riemann zeta function at 5 [1]
 def d_zeta_9 : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Riemann zeta function at 9 [1]
 
 /-! ## 1. Decay of the interference term
@@ -134,38 +139,109 @@ theorem eq3_la_reg2 (m_g : ℝ) (hm_g : 0 < m_g) : 0 ≤ (2 : ℝ) * Real.pi * m
 /-- The denominator `2` stays away from its singular set whenever the quantities are positive. -/
 theorem eq3_la_reg3  : (2 : ℝ) ≠ 0 := by positivity
 
-/-! ## 4. Localisation rate from thermal photons
+/-! ## 4. Riemann zeta function at 9
 
-    Lambda_p = 8*40320*zeta_9*c*a^6/(9*pi)*(k_B*T/(hbar*c))^9
+    zeta_9 = 1.0020083928
+-/
+/-- Both sides of "Riemann zeta function at 9" carry the same physical dimension. -/
+theorem eq4_z9_dim : d_zeta_9 = Dim.one := by decide
+
+/-! ## 5. Riemann zeta function at 5
+
+    zeta_5 = 1.0369277551
+-/
+/-- Both sides of "Riemann zeta function at 5" carry the same physical dimension. -/
+theorem eq5_z5_dim : d_zeta_5 = Dim.one := by decide
+
+/-! ## 6. Photon localisation rate, small sphere
+
+    Lambda_d = 8*40320*zeta_9*c*a^6/(9*pi)*(k_B*T/(hbar*c))^9
+-/
+/-- Both sides of "Photon localisation rate, small sphere" carry the same physical dimension. -/
+theorem eq6_ld_dim : d_Lambda_d = (Dim.mul (Dim.div (Dim.mul (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_zeta_9) d_c) (Dim.pow d_a 6 1)) (Dim.mul Dim.one Dim.one)) (Dim.pow (Dim.div (Dim.mul d_k_B d_T) (Dim.mul d_hbar d_c)) 9 1)) := by decide
+/-- The denominator `9 * pi` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_ld_reg1  : (9 : ℝ) * Real.pi ≠ 0 := by positivity
+/-- The denominator `hbar * c` stays away from its singular set whenever the quantities are positive. -/
+theorem eq6_ld_reg2 (hbar c : ℝ) (hhbar : 0 < hbar) (hc : 0 < c) : hbar * c ≠ 0 := by positivity
+
+/-! ## 7. Photon localisation rate, large sphere
+
+    Lambda_g = 8*zeta_5*c*a^2/pi*(k_B*T/(hbar*c))^5
+-/
+/-- Both sides of "Photon localisation rate, large sphere" carry the same physical dimension. -/
+theorem eq7_lg_dim : d_Lambda_g = (Dim.mul (Dim.div (Dim.mul (Dim.mul (Dim.mul Dim.one d_zeta_5) d_c) (Dim.pow d_a 2 1)) Dim.one) (Dim.pow (Dim.div (Dim.mul d_k_B d_T) (Dim.mul d_hbar d_c)) 5 1)) := by decide
+/-- The denominator `pi` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_lg_reg1  : Real.pi ≠ 0 := by positivity
+/-- The denominator `hbar * c` stays away from its singular set whenever the quantities are positive. -/
+theorem eq7_lg_reg2 (hbar c : ℝ) (hhbar : 0 < hbar) (hc : 0 < c) : hbar * c ≠ 0 := by positivity
+
+/-! ## 8. Localisation rate from thermal photons
+
+    Lambda_p = Lambda_d*Lambda_g/(Lambda_d + Lambda_g)
 -/
 /-- Both sides of "Localisation rate from thermal photons" carry the same physical dimension. -/
-theorem eq4_lp_dim : d_Lambda_p = (Dim.mul (Dim.div (Dim.mul (Dim.mul (Dim.mul (Dim.mul Dim.one Dim.one) d_zeta_9) d_c) (Dim.pow d_a 6 1)) (Dim.mul Dim.one Dim.one)) (Dim.pow (Dim.div (Dim.mul d_k_B d_T) (Dim.mul d_hbar d_c)) 9 1)) := by decide
-/-- The denominator `9 * pi` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_lp_reg1  : (9 : ℝ) * Real.pi ≠ 0 := by positivity
-/-- The denominator `hbar * c` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_lp_reg2 (hbar c : ℝ) (hhbar : 0 < hbar) (hc : 0 < c) : hbar * c ≠ 0 := by positivity
+theorem eq8_lp_dim : d_Lambda_p = (Dim.div (Dim.mul d_Lambda_d d_Lambda_g) d_Lambda_d) := by decide
+theorem eq8_lp_term1 : d_Lambda_d = d_Lambda_g := by decide
+/-- The denominator `Lambda_d + Lambda_g` stays away from its singular set whenever the quantities are positive. -/
+theorem eq8_lp_reg1 (Lambda_d Lambda_g : ℝ) (hLambda_d : 0 < Lambda_d) (hLambda_g : 0 < Lambda_g) : Lambda_d + Lambda_g ≠ 0 := by positivity
 
-/-! ## 5. Decoherence rate with saturation
+/-! ## 9. Separation at which gas collisions saturate
 
-    Gamma = (Lambda_a + Lambda_p)*dx^2/(1 + dx^2/l_c^2)
+    l_air = hbar*sqrt(3/(4*m_g*k_B*T))
+-/
+/-- Both sides of "Separation at which gas collisions saturate" carry the same physical dimension. -/
+theorem eq9_lair_dim : d_l_air = (Dim.mul d_hbar (Dim.pow (Dim.div Dim.one (Dim.mul (Dim.mul (Dim.mul Dim.one d_m_g) d_k_B) d_T)) 1 2)) := by decide
+/-- The denominator `4 * m_g * k_B * T` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_lair_reg1 (m_g k_B T : ℝ) (hm_g : 0 < m_g) (hk_B : 0 < k_B) (hT : 0 < T) : (4 : ℝ) * m_g * k_B * T ≠ 0 := by positivity
+/-- The argument `3 / (4 * m_g * k_B * T)` stays away from its singular set whenever the quantities are positive. -/
+theorem eq9_lair_reg2 (m_g k_B T : ℝ) (hm_g : 0 < m_g) (hk_B : 0 < k_B) (hT : 0 < T) : 0 ≤ (3 : ℝ) / ((4 : ℝ) * m_g * k_B * T) := by positivity
+
+/-! ## 10. Riemann zeta function at 3
+
+    zeta_3 = 1.2020569032
+-/
+/-- Both sides of "Riemann zeta function at 3" carry the same physical dimension. -/
+theorem eq10_z3_dim : d_zeta_3 = Dim.one := by decide
+
+/-! ## 11. Separation at which photon scattering saturates
+
+    l_ph = sqrt(zeta_3/(4*zeta_5))*hbar*c/(k_B*T)
+-/
+/-- Both sides of "Separation at which photon scattering saturates" carry the same physical dimension. -/
+theorem eq11_lph_dim : d_l_ph = (Dim.div (Dim.mul (Dim.mul (Dim.pow (Dim.div d_zeta_3 (Dim.mul Dim.one d_zeta_5)) 1 2) d_hbar) d_c) (Dim.mul d_k_B d_T)) := by decide
+/-- Domain condition for `4 * zeta_5`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq11_lph_cond1 (zeta_5 : ℝ) (hdom : (4 : ℝ) * zeta_5 ≠ 0) : (4 : ℝ) * zeta_5 ≠ 0 := hdom
+/-- Domain condition for `zeta_3 / (4 * zeta_5)`: a condition on the solution; stated here as an explicit hypothesis. -/
+theorem eq11_lph_cond2 (zeta_3 zeta_5 : ℝ) (hdom : 0 ≤ zeta_3 / ((4 : ℝ) * zeta_5)) : 0 ≤ zeta_3 / ((4 : ℝ) * zeta_5) := hdom
+/-- The denominator `k_B * T` stays away from its singular set whenever the quantities are positive. -/
+theorem eq11_lph_reg3 (k_B T : ℝ) (hk_B : 0 < k_B) (hT : 0 < T) : k_B * T ≠ 0 := by positivity
+
+/-! ## 12. Decoherence rate with saturation
+
+    Gamma = Lambda_a*dx^2/(1 + dx^2/l_air^2) + Lambda_p*dx^2/(1 + dx^2/l_ph^2)
 -/
 /-- Both sides of "Decoherence rate with saturation" carry the same physical dimension. -/
-theorem eq5_gam_dim : d_Gamma = (Dim.div (Dim.mul d_Lambda_a (Dim.pow d_dx 2 1)) Dim.one) := by decide
-theorem eq5_gam_term1 : d_Lambda_a = d_Lambda_p := by decide
-theorem eq5_gam_term2 : Dim.one = (Dim.div (Dim.pow d_dx 2 1) (Dim.pow d_l_c 2 1)) := by decide
-/-- Domain condition for `l_c^2`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_gam_cond1 (l_c : ℝ) (hdom : l_c ^ 2 ≠ 0) : l_c ^ 2 ≠ 0 := hdom
-/-- Domain condition for `1 + dx^2 / l_c^2`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq5_gam_cond2 (dx l_c : ℝ) (hdom : (1 : ℝ) + dx ^ 2 / l_c ^ 2 ≠ 0) : (1 : ℝ) + dx ^ 2 / l_c ^ 2 ≠ 0 := hdom
+theorem eq12_gam_dim : d_Gamma = (Dim.div (Dim.mul d_Lambda_a (Dim.pow d_dx 2 1)) Dim.one) := by decide
+theorem eq12_gam_term1 : Dim.one = (Dim.div (Dim.pow d_dx 2 1) (Dim.pow d_l_air 2 1)) := by decide
+theorem eq12_gam_term2 : Dim.one = (Dim.div (Dim.pow d_dx 2 1) (Dim.pow d_l_ph 2 1)) := by decide
+theorem eq12_gam_term3 : (Dim.div (Dim.mul d_Lambda_a (Dim.pow d_dx 2 1)) Dim.one) = (Dim.div (Dim.mul d_Lambda_p (Dim.pow d_dx 2 1)) Dim.one) := by decide
+/-- The denominator `l_air^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq12_gam_reg1 (l_air : ℝ) (hl_air : 0 < l_air) : l_air ^ 2 ≠ 0 := by positivity
+/-- The denominator `1 + dx^2 / l_air^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq12_gam_reg2 (dx l_air : ℝ) (hdx : 0 < dx) (hl_air : 0 < l_air) : (1 : ℝ) + dx ^ 2 / l_air ^ 2 ≠ 0 := by positivity
+/-- The denominator `l_ph^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq12_gam_reg3 (l_ph : ℝ) (hl_ph : 0 < l_ph) : l_ph ^ 2 ≠ 0 := by positivity
+/-- The denominator `1 + dx^2 / l_ph^2` stays away from its singular set whenever the quantities are positive. -/
+theorem eq12_gam_reg4 (dx l_ph : ℝ) (hdx : 0 < dx) (hl_ph : 0 < l_ph) : (1 : ℝ) + dx ^ 2 / l_ph ^ 2 ≠ 0 := by positivity
 
-/-! ## 6. Decoherence time
+/-! ## 13. Decoherence time
 
     tau_D = 1/Gamma
 -/
 /-- Both sides of "Decoherence time" carry the same physical dimension. -/
-theorem eq6_tau_dim : d_tau_D = (Dim.div Dim.one d_Gamma) := by decide
+theorem eq13_tau_dim : d_tau_D = (Dim.div Dim.one d_Gamma) := by decide
 /-- The denominator `Gamma` stays away from its singular set whenever the quantities are positive. -/
-theorem eq6_tau_reg1 (Gamma : ℝ) (hGamma : 0 < Gamma) : Gamma ≠ 0 := by positivity
+theorem eq13_tau_reg1 (Gamma : ℝ) (hGamma : 0 < Gamma) : Gamma ≠ 0 := by positivity
 
 /-! ## Logical structure of the argument -/
 

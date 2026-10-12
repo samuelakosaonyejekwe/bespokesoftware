@@ -92,7 +92,7 @@ def d_R_n : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Nose radius [m]
 def d_T_w : Dim := ⟨0, 0, 0, 0, 12, 0, 0⟩  -- Radiative-equilibrium wall temperature [K]
 def d_V : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Speed [m/s]
 def d_V_E : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Entry speed [km/s]
-def d_a_max : Dim := ⟨0, 12, -24, 0, 0, 0, 0⟩  -- Peak deceleration [m/s^2]
+def d_a_AE : Dim := ⟨0, 12, -24, 0, 0, 0, 0⟩  -- Peak deceleration from the Allen–Eggers solution [m/s^2]
 def d_beta : Dim := ⟨12, -24, 0, 0, 0, 0, 0⟩  -- Ballistic coefficient m/(C_D A) [kg/m^2]
 def d_eps_w : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Surface emissivity [1]
 def d_gamma : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Flight-path angle below the horizontal [rad]
@@ -104,7 +104,7 @@ def d_rho_0 : Dim := ⟨12, -36, 0, 0, 0, 0, 0⟩  -- Reference surface density 
 def d_sigma_SB : Dim := ⟨12, 0, -36, 0, -48, 0, 0⟩  -- Stefan–Boltzmann constant [W/(m^2 K^4)]
 def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Time [s]
 def d_z : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Altitude [m]
-def d_z_a : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Altitude of peak deceleration [m]
+def d_z_AE : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Altitude of peak deceleration from the Allen–Eggers solution [m]
 
 /-! ## 1. Atmospheric density
 
@@ -151,23 +151,23 @@ theorem eq5_ae_term2 : (Dim.div (Dim.mul d_rho d_H) (Dim.mul (Dim.mul Dim.one d_
 /-- Domain condition for `2 * beta * sin(gamma_E)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/
 theorem eq5_ae_cond1 (beta gamma_E : ℝ) (hdom : (2 : ℝ) * beta * Real.sin gamma_E ≠ 0) : (2 : ℝ) * beta * Real.sin gamma_E ≠ 0 := hdom
 
-/-! ## 6. Peak deceleration
+/-! ## 6. Peak deceleration (Allen–Eggers)
 
-    a_max = V_E^2*sin(gamma_E)/(2*exp(1)*H)
+    a_AE = V_E^2*sin(gamma_E)/(2*exp(1)*H)
 -/
-/-- Both sides of "Peak deceleration" carry the same physical dimension. -/
-theorem eq6_amax_dim : d_a_max = (Dim.div (Dim.mul (Dim.pow d_V_E 2 1) Dim.one) (Dim.mul (Dim.mul Dim.one Dim.one) d_H)) := by decide
+/-- Both sides of "Peak deceleration (Allen–Eggers)" carry the same physical dimension. -/
+theorem eq6_amax_dim : d_a_AE = (Dim.div (Dim.mul (Dim.pow d_V_E 2 1) Dim.one) (Dim.mul (Dim.mul Dim.one Dim.one) d_H)) := by decide
 theorem eq6_amax_term1 : d_gamma_E = Dim.one := by decide
 theorem eq6_amax_term2 : Dim.one = Dim.one := by decide
 /-- The denominator `2 * exp(1) * H` stays away from its singular set whenever the quantities are positive. -/
 theorem eq6_amax_reg1 (H : ℝ) (hH : 0 < H) : (2 : ℝ) * Real.exp (1 : ℝ) * H ≠ 0 := by positivity
 
-/-! ## 7. Altitude of peak deceleration
+/-! ## 7. Altitude of peak deceleration (Allen–Eggers)
 
-    z_a = H*ln(rho_0*H/(beta*sin(gamma_E)))
+    z_AE = H*ln(rho_0*H/(beta*sin(gamma_E)))
 -/
-/-- Both sides of "Altitude of peak deceleration" carry the same physical dimension. -/
-theorem eq7_za_dim : d_z_a = (Dim.mul d_H Dim.one) := by decide
+/-- Both sides of "Altitude of peak deceleration (Allen–Eggers)" carry the same physical dimension. -/
+theorem eq7_za_dim : d_z_AE = (Dim.mul d_H Dim.one) := by decide
 theorem eq7_za_term1 : d_gamma_E = Dim.one := by decide
 theorem eq7_za_term2 : (Dim.div (Dim.mul d_rho_0 d_H) (Dim.mul d_beta Dim.one)) = Dim.one := by decide
 /-- Domain condition for `beta * sin(gamma_E)`: established on the declared ranges by interval arithmetic; stated here as an explicit hypothesis. -/

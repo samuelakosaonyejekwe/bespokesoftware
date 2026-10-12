@@ -96,8 +96,8 @@ def d_s_w : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Shock speed [m/s]
 def d_t : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Time [s]
 def d_t_b : Dim := ⟨0, 0, 12, 0, 0, 0, 0⟩  -- Breaking time [s]
 def d_u : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Velocity [m/s]
-def d_u_L : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Velocity ahead of... left state [m/s]
-def d_u_R : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Right state [m/s]
+def d_u_L : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Velocity of the left state, behind the shock [m/s]
+def d_u_R : Dim := ⟨0, 12, -12, 0, 0, 0, 0⟩  -- Velocity of the right state, ahead of the shock [m/s]
 def d_x : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Position [m]
 
 /-! ## 1. Burgers equation, conservation form

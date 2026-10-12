@@ -67,34 +67,38 @@ const twin = {
     asm('instant', 'Departure, turnaround and arrival are instantaneous changes of velocity.', { why: 'Isolates the kinematic effect', alt: 'Every speed change takes place at the finite constant proper acceleration a_p (hyperbolic motion), with coasting in between if the distance allows.' }),
     asm('earth_inertial', 'The stay-at-home twin is inertial: the gravity and orbital motion of the Earth are neglected.', { why: 'These effects are parts in 10⁸', alt: 'The home clock rate is reduced by the gravitational potentials of the Earth and Sun and by the Earth\'s orbital speed (weak-field expression).' }),
   ],
-  symbols: { gamma: ['Lorentz factor', '1'], T: ['Trip duration in the home frame', 's'], tau_t: ['Proper time of the travelling twin', 's'], tau_h: ['Proper time of the stay-at-home twin', 's'], tau: ['Proper time', 's'], t: ['Home-frame coordinate time', 's'], x: ['Home-frame position', 'm'], f_r: ['Received signal rate', '1/s'], tau_a: ['Proper time of one acceleration phase', 's'], x_a: ['Distance covered in one acceleration phase', 'm'], tau_lab: ['Dilated lifetime in the home frame', 's'], Phi_E: ['Magnitude of the gravitational potential at the home clock', 'J/kg'], v_E: ['Orbital speed of the Earth', 'm/s'], N_r: ['Signals received over the trip', '1'] },
-  equations: a => [
+  symbols: { gamma: ['Lorentz factor', '1'], T: ['Trip duration in the home frame', 's'], tau_t: ['Proper time of the travelling twin', 's'], tau_h: ['Proper time of the stay-at-home twin', 's'], tau: ['Proper time', 's'], t: ['Home-frame coordinate time', 's'], x: ['Home-frame position', 'm'], f_r: ['Received signal rate', '1/s'], tau_a: ['Proper time of one acceleration phase', 's'], x_a: ['Distance covered in one acceleration phase', 'm'], tau_lab: ['Dilated lifetime in the home frame', 's'], v_p: ['Cruise speed reached', 'm/s'], Phi_E: ['Magnitude of the gravitational potential at the home clock', 'J/kg'], v_E: ['Orbital speed of the Earth', 'm/s'], N_r: ['Signals received over the trip', '1'] },
+  equations: a => { const vs = a.instant ? 'v' : 'v_p'; return [
     a.relativistic
       ? eq('interval', 'Proper time along a worldline', 'c^2*d(tau,t)^2', 'c^2 - d(x,t)^2', { kind: 'law', origin: 'Invariance of the spacetime interval (Einstein 1905; Minkowski 1908)' })
       : eq('interval', 'Absolute time', 'd(tau,t)', '1', { kind: 'hypothesis', origin: 'Newtonian kinematics, retained only for contrast; refuted by experiment' }),
-    ...(a.relativistic ? [eq('gamma', 'Lorentz factor', 'gamma', '1/sqrt(1 - v^2/c^2)', { kind: 'definition' })] : []),
+    ...(a.relativistic ? [a.instant ? eq('gamma', 'Lorentz factor', 'gamma', '1/sqrt(1 - v^2/c^2)', { kind: 'definition' })
+      : eq('gamma', 'Lorentz factor at cruise', 'gamma', 'min(1/sqrt(1 - v^2/c^2), 1 + a_p*L/(2*c^2))', { kind: 'derived', origin: 'Hyperbolic motion over half of one leg', note: 'Accelerating to the mid-point of a leg and decelerating over the rest reaches a Lorentz factor of 1 + a_p L/(2c²) at most; a requested cruise speed above that cannot be reached and the peak value is used.' })] : []),
+    ...(a.instant ? [] : [a.relativistic
+      ? eq('vp', 'Cruise speed reached', 'v_p', 'c*sqrt(1 - 1/gamma^2)', { kind: 'derived', origin: 'Inverse of the Lorentz factor', note: 'Equal to the requested cruise speed unless the distance is too short to reach it.' })
+      : eq('vp', 'Cruise speed reached', 'v_p', 'min(v, sqrt(a_p*L))', { kind: 'derived', origin: 'Uniform acceleration over half of one leg', note: 'Accelerating to the mid-point of a leg and decelerating over the rest reaches √(a_p L) at most.' })]),
     a.instant
       ? eq('T', 'Home-frame trip duration', 'T', '2*L/v', { kind: 'derived', origin: 'Uniform motion out and back', needs: ['instant'] })
-      : eq('T', 'Home-frame trip duration with four acceleration phases', 'T', a.relativistic ? '2*(L - 2*x_a)/v + 4*gamma*v/a_p' : '2*(L - 2*x_a)/v + 4*v/a_p', { kind: 'derived', origin: a.relativistic ? 'Hyperbolic motion joined to uniform coasting' : 'Uniform acceleration joined to uniform coasting' }),
+      : eq('T', 'Home-frame trip duration with four acceleration phases', 'T', a.relativistic ? '2*(L - 2*x_a)/v_p + 4*gamma*v_p/a_p' : '2*(L - 2*x_a)/v_p + 4*v_p/a_p', { kind: 'derived', origin: a.relativistic ? 'Hyperbolic motion joined to uniform coasting' : 'Uniform acceleration joined to uniform coasting' }),
     ...(a.instant ? [] : a.relativistic ? [
-      eq('taua', 'Proper time of one acceleration phase', 'tau_a', 'c/(2*a_p)*ln((1 + v/c)/(1 - v/c))', { kind: 'derived', origin: 'Rapidity grows linearly with proper time at constant proper acceleration' }),
+      eq('taua', 'Proper time of one acceleration phase', 'tau_a', 'c/(2*a_p)*ln((1 + v_p/c)/(1 - v_p/c))', { kind: 'derived', origin: 'Rapidity grows linearly with proper time at constant proper acceleration' }),
       eq('xa', 'Distance covered while accelerating', 'x_a', 'c^2/a_p*(gamma - 1)', { kind: 'derived', origin: 'Hyperbolic motion' }),
     ] : [
-      eq('xa', 'Distance covered while accelerating', 'x_a', 'v^2/(2*a_p)', { kind: 'derived', origin: 'Uniformly accelerated motion' }),
+      eq('xa', 'Distance covered while accelerating', 'x_a', 'v_p^2/(2*a_p)', { kind: 'derived', origin: 'Uniformly accelerated motion' }),
     ]),
     a.relativistic
       ? (a.instant ? eq('taut', 'Traveller\'s elapsed proper time', 'tau_t', 'T/gamma', { kind: 'derived', origin: 'Integral of the interval along the two straight legs', needs: ['relativistic', 'instant'] })
-        : eq('taut', 'Traveller\'s elapsed proper time', 'tau_t', '2*(L - 2*x_a)/(gamma*v) + 4*tau_a', { kind: 'derived', origin: 'Integral of the interval along coasting and accelerated segments', needs: ['relativistic'] }))
+        : eq('taut', 'Traveller\'s elapsed proper time', 'tau_t', '2*(L - 2*x_a)/(gamma*v_p) + 4*tau_a', { kind: 'derived', origin: 'Integral of the interval along coasting and accelerated segments', needs: ['relativistic'] }))
       : eq('taut', 'Traveller\'s elapsed time', 'tau_t', 'T', { kind: 'hypothesis', origin: 'Absolute time' }),
     a.earth_inertial
       ? eq('tauh', 'Home twin\'s elapsed proper time', 'tau_h', 'T', { kind: 'derived', origin: 'Inertial clock at rest in the home frame', needs: ['earth_inertial'] })
       : eq('tauh', 'Home twin\'s elapsed proper time', 'tau_h', 'T*(1 - Phi_E/c^2 - v_E^2/(2*c^2))', { kind: 'derived', origin: 'Weak-field clock rate in a gravitational potential (Einstein 1911; Schwarzschild metric to first order)' }),
     ...(a.relativistic ? [
-      eq('doppler', 'Received signal rate while receding', 'f_r', 'f_s*sqrt((1 - v/c)/(1 + v/c))', { kind: 'derived', origin: 'Relativistic longitudinal Doppler effect' }),
+      eq('doppler', 'Received signal rate while receding', 'f_r', `f_s*sqrt((1 - ${vs}/c)/(1 + ${vs}/c))`, { kind: 'derived', origin: 'Relativistic longitudinal Doppler effect' }),
       eq('life', 'Dilated lifetime of a moving particle', 'tau_lab', 'gamma*tau_0', { kind: 'derived', origin: 'Time dilation' }),
-    ] : [eq('doppler', 'Received signal rate while receding', 'f_r', 'f_s/(1 + v/c)', { kind: 'derived', origin: 'Classical Doppler effect for a receding source' })]),
+    ] : [eq('doppler', 'Received signal rate while receding', 'f_r', `f_s/(1 + ${vs}/c)`, { kind: 'derived', origin: 'Classical Doppler effect for a receding source' })]),
     eq('count', 'Signals received equal signals sent', 'N_r', 'f_s*tau_h', { kind: 'law', origin: 'Every signal emitted is eventually received: counting is frame-independent' }),
-  ],
+  ]; },
   derivation: a => [
     { text: 'Each clock measures the invariant interval along its own worldline. In the home frame the travelling clock moves at speed v, so its rate is reduced by the Lorentz factor.', tex: '\\mathrm{d}\\tau = \\sqrt{1 - v^2/c^2}\\;\\mathrm{d}t = \\mathrm{d}t/\\gamma' },
     { text: a.instant ? 'With instantaneous speed changes the home-frame duration is the distance out and back divided by the speed, and the traveller\'s proper time is shorter by the factor γ.' : 'Each speed change is hyperbolic motion at proper acceleration a_p. Rapidity increases linearly with proper time, which gives the proper time, coordinate time and distance of each acceleration phase.', tex: a.instant ? 'T = \\frac{2L}{v},\\qquad \\tau_t = \\frac{2L}{\\gamma v}' : '\\tau_a = \\frac{c}{a_p}\\,\\mathrm{artanh}\\frac{v}{c},\\quad t_a = \\frac{\\gamma v}{a_p},\\quad x_a = \\frac{c^2}{a_p}(\\gamma-1)' },
@@ -128,7 +132,7 @@ const twin = {
     }
     return {
       scalars: [
-        scalar('gamma', 'Lorentz factor at cruise', gam, '1'), scalar('beta', 'Cruise speed as a fraction of c', beta, '1'),
+        scalar('gamma', 'Lorentz factor at cruise', gam, '1'), scalar('beta', 'Cruise speed as a fraction of c', beta, '1'), scalar('v_p', 'Cruise speed reached', beta * c, 'm/s'),
         scalar('T', 'Trip duration in the home frame', w.T, 's', { show: 'yr' }),
         scalar('tau_h', 'Stay-at-home twin ages by', tauH, 's', { show: 'yr' }), scalar('tau_t', 'Travelling twin ages by', tauT, 's', { show: 'yr' }),
         scalar('d_age', 'Age difference at reunion', tauH - tauT, 's', { show: 'yr', note: tauH > tauT ? 'the traveller is younger' : 'no difference' }),

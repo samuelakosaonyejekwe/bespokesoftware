@@ -92,56 +92,63 @@ def d_P_st : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Probability of winning by stay
 def d_P_sw : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Probability of winning by switching to one remaining door [1]
 def d_k_open : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Doors opened by the host [1]
 def d_n_d : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Number of doors [1]
+def d_n_left : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Other doors left closed [1]
 def d_n_trials : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Simulated games [1]
 def d_sigma_mc : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Standard error of the simulated frequency [1]
 
-/-! ## 1. Winning by staying
+/-! ## 1. Other doors left closed
+
+    n_left = n_d - min(k_open, n_d - 2) - 1
+-/
+/-- Both sides of "Other doors left closed" carry the same physical dimension. -/
+theorem eq1_left_dim : d_n_left = d_n_d := by decide
+theorem eq1_left_term1 : d_n_d = Dim.one := by decide
+theorem eq1_left_term2 : d_k_open = d_n_d := by decide
+theorem eq1_left_term3 : d_n_d = d_k_open := by decide
+theorem eq1_left_term4 : d_n_d = Dim.one := by decide
+
+/-! ## 2. Winning by staying
 
     P_st = 1/n_d
 -/
 /-- Both sides of "Winning by staying" carry the same physical dimension. -/
-theorem eq1_stay_dim : d_P_st = (Dim.div Dim.one d_n_d) := by decide
+theorem eq2_stay_dim : d_P_st = (Dim.div Dim.one d_n_d) := by decide
 /-- The denominator `n_d` stays away from its singular set whenever the quantities are positive. -/
-theorem eq1_stay_reg1 (n_d : ℝ) (hn_d : 0 < n_d) : n_d ≠ 0 := by positivity
+theorem eq2_stay_reg1 (n_d : ℝ) (hn_d : 0 < n_d) : n_d ≠ 0 := by positivity
 
-/-! ## 2. Winning by switching to one of the remaining doors
+/-! ## 3. Winning by switching to one of the remaining doors
 
-    P_sw = (n_d - 1)/(n_d*(n_d - k_open - 1))
+    P_sw = (n_d - 1)/(n_d*n_left)
 -/
 /-- Both sides of "Winning by switching to one of the remaining doors" carry the same physical dimension. -/
-theorem eq2_switch_dim : d_P_sw = (Dim.div d_n_d (Dim.mul d_n_d d_n_d)) := by decide
-theorem eq2_switch_term1 : d_n_d = Dim.one := by decide
-theorem eq2_switch_term2 : d_n_d = d_k_open := by decide
-theorem eq2_switch_term3 : d_n_d = Dim.one := by decide
-/-- Domain condition for `n_d * (n_d - k_open - 1)`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq2_switch_cond1 (n_d k_open : ℝ) (hdom : n_d * (n_d - k_open - (1 : ℝ)) ≠ 0) : n_d * (n_d - k_open - (1 : ℝ)) ≠ 0 := hdom
-/-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
-    which is bounded and smooth for every real b. -/
-theorem eq2_switch_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq3_switch_dim : d_P_sw = (Dim.div d_n_d (Dim.mul d_n_d d_n_left)) := by decide
+theorem eq3_switch_term1 : d_n_d = Dim.one := by decide
+/-- The denominator `n_d * n_left` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_switch_reg1 (n_d n_left : ℝ) (hn_d : 0 < n_d) (hn_left : 0 < n_left) : n_d * n_left ≠ 0 := by positivity
 
-/-! ## 3. Advantage of switching
+/-! ## 4. Advantage of switching
 
     A_sw = P_sw/P_st
 -/
 /-- Both sides of "Advantage of switching" carry the same physical dimension. -/
-theorem eq3_adv_dim : d_A_sw = (Dim.div d_P_sw d_P_st) := by decide
+theorem eq4_adv_dim : d_A_sw = (Dim.div d_P_sw d_P_st) := by decide
 /-- The denominator `P_st` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_adv_reg1 (P_st : ℝ) (hP_st : 0 < P_st) : P_st ≠ 0 := by positivity
+theorem eq4_adv_reg1 (P_st : ℝ) (hP_st : 0 < P_st) : P_st ≠ 0 := by positivity
 
-/-! ## 4. Standard error of a simulated frequency
+/-! ## 5. Standard error of a simulated frequency
 
     sigma_mc = sqrt(P_sw*(1 - P_sw)/n_trials)
 -/
 /-- Both sides of "Standard error of a simulated frequency" carry the same physical dimension. -/
-theorem eq4_se_dim : d_sigma_mc = (Dim.pow (Dim.div (Dim.mul d_P_sw Dim.one) d_n_trials) 1 2) := by decide
-theorem eq4_se_term1 : Dim.one = d_P_sw := by decide
+theorem eq5_se_dim : d_sigma_mc = (Dim.pow (Dim.div (Dim.mul d_P_sw Dim.one) d_n_trials) 1 2) := by decide
+theorem eq5_se_term1 : Dim.one = d_P_sw := by decide
 /-- The denominator `n_trials` stays away from its singular set whenever the quantities are positive. -/
-theorem eq4_se_reg1 (n_trials : ℝ) (hn_trials : 0 < n_trials) : n_trials ≠ 0 := by positivity
+theorem eq5_se_reg1 (n_trials : ℝ) (hn_trials : 0 < n_trials) : n_trials ≠ 0 := by positivity
 /-- Domain condition for `P_sw * (1 - P_sw) / n_trials`: a condition on the solution; stated here as an explicit hypothesis. -/
-theorem eq4_se_cond2 (P_sw n_trials : ℝ) (hdom : 0 ≤ P_sw * ((1 : ℝ) - P_sw) / n_trials) : 0 ≤ P_sw * ((1 : ℝ) - P_sw) / n_trials := hdom
+theorem eq5_se_cond2 (P_sw n_trials : ℝ) (hdom : 0 ≤ P_sw * ((1 : ℝ) - P_sw) / n_trials) : 0 ≤ P_sw * ((1 : ℝ) - P_sw) / n_trials := hdom
 /-- The regularised form of this equation replaces each singular quotient a / b by a * b / (b ^ 2 + ε ^ 2),
     which is bounded and smooth for every real b. -/
-theorem eq4_se_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
+theorem eq5_se_soft (a b ε : ℝ) (hε : 0 < ε) : |a * b / (b ^ 2 + ε ^ 2)| ≤ |a| / (2 * ε) := soft_recip_bounded a b ε hε
 
 /-! ## Logical structure of the argument -/
 

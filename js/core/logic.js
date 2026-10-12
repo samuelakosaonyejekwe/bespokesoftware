@@ -83,6 +83,23 @@ export function show(f) {
   }
   return '?';
 }
+/** The formula in plain English, each letter replaced by the statement it stands for. */
+export function words(f, text = {}) {
+  f = F(f);
+  const say = n => { const t = String(text[n] || '').trim().replace(/[.;]+$/, ''); return t ? `“${t}”` : n; };
+  const grp = g => (g.t === 'var' || g.t === 'const' || g.t === 'not' ? words(g, text) : `(${words(g, text)})`);
+  switch (f.t) {
+    case 'const': return f.v ? 'something always true' : 'a contradiction';
+    case 'var': return say(f.n);
+    case 'not': return f.a.t === 'var' ? `it is not the case that ${say(f.a.n)}` : `it is not the case that ${grp(f.a)}`;
+    case 'and': return `${grp(f.a)} and ${grp(f.b)}`;
+    case 'or': return `${grp(f.a)} or ${grp(f.b)} (or both)`;
+    case 'xor': return `either ${grp(f.a)} or ${grp(f.b)}, but not both`;
+    case 'imp': return `if ${grp(f.a)}, then ${grp(f.b)}`;
+    case 'iff': return `${grp(f.a)} exactly when ${grp(f.b)}`;
+  }
+  return '?';
+}
 export function showTex(f) {
   return show(f).replace(/¬/g, '\\lnot ').replace(/∧/g, '\\land').replace(/∨/g, '\\lor').replace(/→/g, '\\rightarrow').replace(/↔/g, '\\leftrightarrow').replace(/⊕/g, '\\oplus').replace(/⊤/g, '\\top').replace(/⊥/g, '\\bot').replace(/_/g, '\\_');
 }
@@ -194,7 +211,7 @@ export function fromText(text) {
     let negated = false;
     const mNeg = /^(it is not the case that|it is false that|not)\s+(.*)$/i.exec(s);
     if (mNeg) { negated = true; s = mNeg[2]; }
-    const POS = [[/\b(is|are|was|were) not\b/i, '$1'], [/\b(is|are|was|were)n't\b/i, '$1'], [/\b(has|have|had) not\b/i, '$1'], [/\b(has|have|had)n't\b/i, '$1'], [/\b(does|do|did) not\b\s*/i, ''], [/\b(does|do|did)n't\b\s*/i, ''],
+    const POS = [[/\b(is|are|was|were) not\b/i, '$1'], [/\b(is|are|was|were)n't\b/i, '$1'], [/\b(has|have|had) not\b/i, '$1'], [/\b(has|have|had)n't\b/i, '$1'], [/\b(?:does not|doesn't)\s+(\w+?)(s?)\b/i, '$1s'], [/\b(does|do|did) not\b\s*/i, ''], [/\b(does|do|did)n't\b\s*/i, ''],
       [/\bcannot\b|\bcan't\b/i, 'can'], [/\bwill not\b|\bwon't\b/i, 'will'], [/\bnever\b\s*/i, ''], [/\bno longer\b\s*/i, ''], [/\bnot\b\s*/i, '']];
     for (const [re, rep] of POS) if (re.test(s)) { negated = !negated; s = s.replace(re, rep); break; }
     const key = norm(s);
@@ -208,6 +225,13 @@ export function fromText(text) {
     let m;
     if ((m = /^(.+?)\s+if and only if\s+(.+)$/i.exec(s)) || (m = /^(.+?)\s+iff\s+(.+)$/i.exec(s))) { const a = clause(m[1]), b = clause(m[2]); return a && b ? `(${a}) <-> (${b})` : null; }
     if ((m = /^if\s+(.+?),?\s+then\s+(.+)$/i.exec(s)) || (m = /^if\s+(.+?),\s*(.+)$/i.exec(s)) || (m = /^(?:when|whenever|suppose|assuming)\s+(.+?),\s*(?:then\s+)?(.+)$/i.exec(s))) { const a = clause(m[1]), b = clause(m[2]); return a && b ? `(${a}) -> (${b})` : null; }
+    // "if A B" written with neither a comma nor "then": split where a new statement begins, preferring a statement already met
+    if (/^if\s+/i.test(s)) {
+      const body = s.replace(/^if\s+/i, ''), cuts = [...body.matchAll(/\s+(?=(?:the|a|an|it|they|he|she|we|you|this|that|these|those|there|then)\s)/gi)].map(x => [body.slice(0, x.index), body.slice(x.index).trim().replace(/^then\s+/i, '')]).filter(([a]) => a.split(' ').length >= 2 && /\b(is|are|was|were|has|have|had|does|do|did|can|cannot|will|must|[a-z]+s|[a-z]+ed)\b/i.test(a));
+      const known = t => { let k = t.replace(/^(it is not the case that|it is false that|not)\s+/i, ''); for (const [re, rep] of [[/\b(is|are|was|were|has|have|had) not\b/i, '$1'], [/\b(does|do|did) not\b\s*/i, ''], [/\bcannot\b/i, 'can'], [/\bnot\b\s*/i, '']]) if (re.test(k)) { k = k.replace(re, rep); break; } return atomsMap.has(norm(k)); };
+      const cut = cuts.find(([a, b]) => known(a) && known(b)) || cuts.find(([a]) => known(a)) || cuts.find(([, b]) => known(b)) || (cuts.length === 1 ? cuts[0] : null);
+      if (cut) { const a = clause(cut[0]), b = clause(cut[1]); return a && b ? `(${a}) -> (${b})` : null; }
+    }
     if ((m = /^(.+?)\s+only if\s+(.+)$/i.exec(s))) { const a = clause(m[1]), b = clause(m[2]); return a && b ? `(${a}) -> (${b})` : null; }
     if ((m = /^(.+?)\s+(?:if|whenever|provided that)\s+(.+)$/i.exec(s))) { const a = clause(m[1]), b = clause(m[2]); return a && b ? `(${b}) -> (${a})` : null; }
     if ((m = /^(.+?)\s+unless\s+(.+)$/i.exec(s))) { const a = clause(m[1]), b = clause(m[2]); return a && b ? `~(${b}) -> (${a})` : null; }

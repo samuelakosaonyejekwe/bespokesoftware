@@ -127,16 +127,19 @@ theorem eq2_half_cond5 (r_rep N_p : ℝ) (hdom : r_rep * Real.log ((1 : ℝ) - (
 
 /-! ## 3. Expected time until no original part remains
 
-    t_all = N_p*(ln(N_p) + 0.5772)/r_rep
+    t_all = N_p*(ln(N_p) + 0.5772156649 + 1/(2*N_p))/r_rep
 -/
 /-- Both sides of "Expected time until no original part remains" carry the same physical dimension. -/
 theorem eq3_all_dim : d_t_all = (Dim.div (Dim.mul d_N_p Dim.one) d_r_rep) := by decide
 theorem eq3_all_term1 : d_N_p = Dim.one := by decide
 theorem eq3_all_term2 : Dim.one = Dim.one := by decide
+theorem eq3_all_term3 : Dim.one = (Dim.div Dim.one (Dim.mul Dim.one d_N_p)) := by decide
 /-- The argument `N_p` stays away from its singular set whenever the quantities are positive. -/
 theorem eq3_all_reg1 (N_p : ℝ) (hN_p : 0 < N_p) : 0 < N_p := by positivity
+/-- The denominator `2 * N_p` stays away from its singular set whenever the quantities are positive. -/
+theorem eq3_all_reg2 (N_p : ℝ) (hN_p : 0 < N_p) : (2 : ℝ) * N_p ≠ 0 := by positivity
 /-- The denominator `r_rep` stays away from its singular set whenever the quantities are positive. -/
-theorem eq3_all_reg2 (r_rep : ℝ) (hr_rep : 0 < r_rep) : r_rep ≠ 0 := by positivity
+theorem eq3_all_reg3 (r_rep : ℝ) (hr_rep : 0 < r_rep) : r_rep ≠ 0 := by positivity
 
 /-! ## 4. Share of the original matter in the reassembled ship
 
