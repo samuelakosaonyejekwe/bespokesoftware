@@ -1,0 +1,25 @@
+{
+  "name": "Bespoke — Thought-Experiment and Engineering Simulation Studio",
+  "short_name": "Bespoke",
+  "description": "Turn an idea into a structured scientific investigation with derived and machine-checked equations, simulations, alternative worlds and reverse engineering. Works offline.",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0a0f1c",
+  "theme_color": "#0a0f1c",
+  "categories": ["education", "productivity", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Thought experiment", "short_name": "Thought", "url": "./index.html#/m1", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Engineering simulation", "short_name": "Engineering", "url": "./index.html#/m2", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Reverse engineering", "short_name": "Reverse", "url": "./index.html#/re", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

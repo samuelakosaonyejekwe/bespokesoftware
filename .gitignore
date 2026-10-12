@@ -1,0 +1,4 @@
+node_modules/
+lean/.lake/
+*.log
+.DS_Store

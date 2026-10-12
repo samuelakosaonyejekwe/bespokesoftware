@@ -1,0 +1,14 @@
+{
+  "name": "bespoke-simulation-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Thought-experiment and engineering simulation studio",
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "serve": "node tools/serve.mjs",
+    "lean:gen": "node tools/gen-lean.mjs",
+    "bundle": "node tools/bundle.mjs"
+  },
+  "license": "UNLICENSED"
+}

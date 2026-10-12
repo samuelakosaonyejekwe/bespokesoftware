@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Bespoke — Thought-Experiment and Engineering Simulation Studio</title>
+<meta name="description" content="Turn an idea into a structured scientific investigation: governing equations derived and machine-checked, simulations, alternative worlds, reverse engineering and reproducible exports. Works offline.">
+<meta name="theme-color" content="#0a0f1c">
+<meta name="color-scheme" content="dark light">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bespoke">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="vendor/katex/katex.min.css" media="print" id="katex-css">
+<link rel="modulepreload" href="js/app.js">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top" role="banner">
+  <button class="navarrow back" id="nav-back" aria-label="Go back" title="Back (Alt + ←)" disabled><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+  <button class="navarrow fwd" id="nav-fwd" aria-label="Go forward" title="Forward (Alt + →)" disabled><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+  <a class="brand" href="#/" aria-label="Home">
+    <svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4cc9f0"/><stop offset=".5" stop-color="#7b8cff"/><stop offset="1" stop-color="#f72585"/></linearGradient></defs><g fill="none" stroke="url(#bg)" stroke-width="30" stroke-linecap="round"><ellipse cx="256" cy="256" rx="200" ry="78"/><ellipse cx="256" cy="256" rx="200" ry="78" transform="rotate(60 256 256)"/><ellipse cx="256" cy="256" rx="200" ry="78" transform="rotate(120 256 256)"/></g><circle cx="256" cy="256" r="42" fill="url(#bg)"/></svg>
+    <span><b>BESPOKE</b></span>
+  </a>
+  <div class="crumb" id="crumb" aria-live="polite"></div>
+  <span class="pill net" id="net" title="Network status"><i></i><span>Online</span></span>
+  <button class="iconbtn install" id="install" hidden title="Install this application on your device"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg><span class="hide-sm">Install</span></button>
+  <button class="iconbtn" id="theme" aria-label="Switch between dark and light appearance" title="Appearance"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+</header>
+<main id="main" tabindex="-1"><div class="card"><span class="busy"></span> Loading…</div></main>
+<nav class="botnav" aria-label="Primary">
+  <a href="#/" data-nav="home"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home</a>
+  <a href="#/m1" data-nav="m1"><svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.800 1-2.500A6 6 0 0 0 12 3z"/></svg>Thought</a>
+  <a href="#/m2" data-nav="m2"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.900 4.900l2.100 2.100m10 10l2.100 2.100M4.900 19.100L7 17m10-10l2.100-2.100"/></svg>Engineering</a>
+  <a href="#/re" data-nav="re"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.700M3 4v5h5"/></svg>Reverse</a>
+  <a href="#/sources" data-nav="sources"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>Live data</a>
+</nav>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<noscript><div class="card" style="margin:1rem">This application needs JavaScript to run its solvers on your device.</div></noscript>
+<script src="vendor/katex/katex.min.js" defer></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

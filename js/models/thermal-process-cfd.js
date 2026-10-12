@@ -1,0 +1,1481 @@
+// Thermodynamics and heat transfer, process and desalination engineering, computational fluid dynamics
+// and nuclear engineering.
+import { inp, asm, eq, scalar, line, field, anim, check, bench, svg, S, lab, N, C, R } from './kit.js';
+
+const g = 9.80665;
+const val = (r, s) => r.scalars.find(q => q.sym === s).value;
+/** The environment connector reports salinity in g/kg; inputs declared in g/kg arrive as a mass fraction. Accept either. */
+const massFrac = s => (s > 1 ? s / 1000 : s);
+const erfc = x => 1 - erfFn(x);
+/** Error function, Abramowitz & Stegun 7.1.26 (absolute error below 1.5e-7). */
+function erfFn(x) {
+  const s = Math.sign(x), z = Math.abs(x), t = 1 / (1 + 0.3275911 * z);
+  return s * (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z));
+}
+
+// ------------------------------------------------------------------ transient conduction in a slab
+/** Fourier-series solution for a wall heated at ξ = 0 with an adiabatic plane at ξ = 1. Returns (T − T_inf)/(T_i − T_inf). */
+function slabRoots(Bi, terms = 40) {
+  const z = [];
+  for (let n = 1; n <= terms; n++) z.push(Number.isFinite(Bi) ? N.bisect(q => q * Math.sin(q) - Bi * Math.cos(q), (n - 1) * Math.PI + 1e-12, (n - 0.5) * Math.PI - 1e-12, 1e-13) : (n - 0.5) * Math.PI);
+  return z;
+}
+function slabSeries(Bi, Fo, xi, roots = slabRoots(Bi)) {
+  let s = 0;
+  for (const z of roots) {
+    if (z * z * Fo > 45) break;
+    s += 4 * Math.sin(z) / (2 * z + Math.sin(2 * z)) * Math.exp(-z * z * Fo) * Math.cos(z * (1 - xi));
+  }
+  return s;
+}
+
+const conduction = {
+  id: 'transient-conduction-1d',
+  title: 'Transient heat conduction in a slab',
+  module: 2, klass: 'I', domains: ['thermal'],
+  keywords: ['transient conduction', 'heat conduction', 'slab', 'plane wall', 'biot number', 'fourier number', 'heisler', 'quenching', 'thermal diffusivity', 'heating time', 'cool-down', 'unsteady conduction', 'heat equation', 'conduction'],
+  summary: 'Temperature history through a slab whose surface is suddenly exposed to a fluid or held at a fixed temperature, solved with the one-dimensional heat equation.',
+  background: [
+    'When the surface of a solid is suddenly exposed to a different temperature, heat diffuses inward at a rate set by the thermal diffusivity α = k/(ρ c_p). Two dimensionless groups organise the problem: the Fourier number α t/L², which measures elapsed time against the diffusion time, and the Biot number h L/k, which compares the resistance of the solid with that of the surface film.',
+    'For a wall with one adiabatic face and constant properties the exact solution is an infinite series in cosines whose eigenvalues satisfy ζ tan ζ = Bi. The first term dominates once the Fourier number exceeds about 0.2, which is the basis of the Heisler charts. At very small Biot number the solid is nearly isothermal and the lumped-capacitance model applies.',
+  ],
+  phenomena: ['Heat diffusion', 'Surface convection', 'Thermal penetration', 'Approach to steady state'],
+  laws: ['energy', 'fourier'],
+  refs: ['Carslaw, H. S. & Jaeger, J. C. (1959). Conduction of Heat in Solids, 2nd ed., Oxford University Press.', 'Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S. (2007). Fundamentals of Heat and Mass Transfer, 6th ed., Wiley.', 'Heisler, M. P. (1947). Temperature charts for induction and constant-temperature heating. Trans. ASME 69, 227–236.', 'Crank, J. & Nicolson, P. (1947). A practical method for numerical evaluation of solutions of partial differential equations of the heat-conduction type. Proc. Cambridge Phil. Soc. 43, 50–67.'],
+  inputs: [
+    inp('L', 'Slab thickness (heated face to back face)', 'mm', 50, { min: 1, max: 1000, kind: 'geometry', aliases: ['thickness', 'thick', 'slab', 'wall'] }),
+    inp('k', 'Thermal conductivity', 'W/(m K)', 16, { min: 0.05, max: 400, kind: 'fluid', aliases: ['conductivity'], src: 'Austenitic stainless steel near 100 °C' }),
+    inp('rho', 'Density', 'kg/m^3', 7900, { min: 100, max: 20000, kind: 'fluid', aliases: ['density'] }),
+    inp('cp', 'Specific heat capacity', 'J/(kg K)', 500, { min: 100, max: 5000, kind: 'fluid', aliases: ['specific heat', 'heat capacity'] }),
+    inp('T_i', 'Initial temperature', '°C', 20, { min: -200, max: 1500, aliases: ['initial temperature', 'initially'] }),
+    inp('T_inf', 'Fluid (or imposed surface) temperature', '°C', 200, { min: -200, max: 1500, aliases: ['fluid temperature', 'surface temperature', 'ambient temperature', 'furnace'] }),
+    inp('h', 'Surface heat-transfer coefficient', 'W/(m^2 K)', 500, { min: 1, max: 20000, aliases: ['heat transfer coefficient', 'film coefficient', 'convection coefficient'] }),
+    inp('q_gen', 'Volumetric heat generation (used when the source is switched on)', 'kW/m^3', 200, { min: 0, max: 1e5, aliases: ['heat generation', 'source'] }),
+    inp('t_end', 'Elapsed time', 's', 600, { min: 1, max: 1e6, aliases: ['time', 'after', 'duration'] }),
+    inp('n_x', 'Number of grid points', '1', 81, { min: 21, max: 401, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('convective', 'The heated face exchanges heat with a fluid through a constant film coefficient.', { why: 'Usual engineering boundary condition', alt: 'The heated face is held at the imposed temperature (infinite Biot number).' }),
+    asm('insulated', 'The back face is adiabatic (or is a plane of symmetry).', { why: 'Half of a wall heated on both sides, or an insulated backing', alt: 'The back face is held at the initial temperature.' }),
+    asm('no_source', 'There is no internal heat generation.', { why: 'Passive solid', alt: 'A uniform volumetric source q_gen is added to the heat equation.' }),
+    asm('const_props', 'Conductivity, density and specific heat are constant.', { why: 'Moderate temperature range', alt: 'Not resolved here: a warning is issued and the temperature swing is reported so the user can judge the error.' }),
+  ],
+  symbols: { T: ['Temperature', 'K'], t: ['Time', 's'], x: ['Distance from the heated face', 'm'], alpha: ['Thermal diffusivity', 'm^2/s'], Bi: ['Biot number', '1'], Fo: ['Fourier number', '1'], tau_d: ['Diffusion time', 's'], q_s: ['Surface heat flux', 'W/m^2'] },
+  equations: a => [
+    eq('heat', 'Heat equation', 'rho*cp*pd(T,t)', a.no_source ? 'k*pd2(T,x)' : 'k*pd2(T,x) + q_gen', { kind: 'law', origin: 'First law of thermodynamics with Fourier’s law', needs: ['const_props'] }),
+    a.convective
+      ? eq('bc0', 'Heated-face condition', '-k*pd(T,x)', 'h*(T_inf - T)', { kind: 'boundary', origin: 'Newton’s law of cooling at x = 0', needs: ['convective'] })
+      : eq('bc0', 'Heated-face condition', 'T', 'T_inf', { kind: 'boundary', origin: 'Imposed temperature at x = 0' }),
+    a.insulated
+      ? eq('bcL', 'Back-face condition', 'k*pd(T,x)', '0*q_s', { kind: 'boundary', origin: 'Adiabatic surface at x = L', needs: ['insulated'] })
+      : eq('bcL', 'Back-face condition', 'T', 'T_i', { kind: 'boundary', origin: 'Imposed temperature at x = L' }),
+    eq('alpha', 'Thermal diffusivity', 'alpha', 'k/(rho*cp)', { kind: 'definition' }),
+    eq('bi', 'Biot number', 'Bi', 'h*L/k', { kind: 'definition' }),
+    eq('fo', 'Fourier number', 'Fo', 'alpha*t_end/L^2', { kind: 'definition' }),
+    eq('qs', 'Surface heat flux', 'q_s', a.convective ? 'h*(T_inf - T)' : '-k*pd(T,x)', { kind: 'law', origin: a.convective ? 'Newton’s law of cooling' : 'Fourier’s law' }),
+  ],
+  derivation: a => [
+    { text: 'Apply the first law to a slice of thickness dx: the rate of energy storage equals the net conduction into the slice' + (a.no_source ? '.' : ' plus the heat generated within it.'), tex: '\\rho c_p\\,\\frac{\\partial T}{\\partial t}\\,\\mathrm{d}x = q(x) - q(x+\\mathrm{d}x)' + (a.no_source ? '' : ' + \\dot q\\,\\mathrm{d}x') },
+    { text: 'Fourier’s law relates the flux to the temperature gradient, giving the heat equation.', tex: '\\frac{\\partial T}{\\partial t} = \\alpha\\,\\frac{\\partial^2 T}{\\partial x^2}' + (a.no_source ? '' : ' + \\frac{\\dot q}{\\rho c_p}') + ',\\qquad \\alpha = \\frac{k}{\\rho c_p}' },
+    { text: 'Scaling distance by L and time by L²/α leaves two parameters, the Fourier and Biot numbers.', tex: '\\mathrm{Fo} = \\frac{\\alpha t}{L^2},\\qquad \\mathrm{Bi} = \\frac{hL}{k}' },
+    { text: 'Separation of variables for an adiabatic back face gives a cosine series; ξ = x/L is measured from the heated face.', tex: '\\frac{T-T_\\infty}{T_i-T_\\infty} = \\sum_{n=1}^{\\infty}\\frac{4\\sin\\zeta_n}{2\\zeta_n+\\sin 2\\zeta_n}\\,e^{-\\zeta_n^2\\mathrm{Fo}}\\cos\\big(\\zeta_n(1-\\xi)\\big),\\qquad \\zeta_n\\tan\\zeta_n = \\mathrm{Bi}' },
+    { text: 'At early times the wall behaves as a semi-infinite solid; for an imposed surface temperature the profile is a complementary error function.', tex: '\\frac{T-T_i}{T_\\infty-T_i} = \\operatorname{erfc}\\!\\left(\\frac{x}{2\\sqrt{\\alpha t}}\\right)' },
+  ],
+  solve(v, a) {
+    const nx = Math.max(11, Math.round(v.n_x)), L = v.L, dx = L / (nx - 1), alpha = v.k / (v.rho * v.cp);
+    const Bi = v.h * L / v.k, Fo = alpha * v.t_end / (L * L), tauD = L * L / alpha;
+    // beyond roughly eight relaxation times the profile is steady; do not waste steps integrating a steady state
+    const tauEq = tauD * (0.5 + (a.convective ? 1 / Bi : 0)), tSim = Math.min(v.t_end, 8 * tauEq);
+    const src = a.no_source ? 0 : v.q_gen / (v.rho * v.cp), source = src ? () => src : undefined;
+    const right = a.insulated ? { type: 'neumann', value: 0 } : { type: 'dirichlet', value: v.T_i };
+    const x = N.linspace(0, L, nx), w = x.map((_, i) => (i === 0 || i === nx - 1 ? 0.5 : 1) * dx);
+    const meanOf = arr => arr.reduce((s, q, i) => s + q * w[i], 0) / L;
+    let u = new Array(nx).fill(v.T_i), qIn = 0, snaps = [], times = [];
+    if (a.convective) {
+      // Crank–Nicolson with the film coefficient built into the energy balance of the wall half-cell (N.diffusion1D
+      // offers only Dirichlet and prescribed-gradient ends, so the Robin row is assembled here and solved with N.tridiag)
+      const nt = 400, dt = tSim / nt, r = alpha * dt / (dx * dx), bc = v.h * dx / v.k;
+      const lo = new Array(nx).fill(-r / 2), di = new Array(nx).fill(1 + r), up = new Array(nx).fill(-r / 2), d = new Array(nx);
+      lo[0] = 0; di[0] = 1 + r + r * bc; up[0] = -r;
+      if (a.insulated) { lo[nx - 1] = -r; up[nx - 1] = 0; } else { lo[nx - 1] = 0; di[nx - 1] = 1; up[nx - 1] = 0; }
+      for (let n = 0; n < nt; n++) {
+        if (n % 10 === 0) { snaps.push(u.slice()); times.push(n * dt); }
+        for (let i = 1; i < nx - 1; i++) d[i] = u[i] + r / 2 * (u[i + 1] - 2 * u[i] + u[i - 1]) + src * dt;
+        d[0] = u[0] + r * (u[1] - u[0]) + r * bc * (2 * v.T_inf - u[0]) + src * dt;
+        d[nx - 1] = a.insulated ? u[nx - 1] + r * (u[nx - 2] - u[nx - 1]) + src * dt : v.T_i;
+        const un = N.tridiag(lo, di, up, d);
+        qIn += v.h * dt * (v.T_inf - 0.5 * (u[0] + un[0]));
+        u = un;
+      }
+      snaps.push(u.slice()); times.push(tSim);
+    } else {
+      const st = N.diffusion1D({ D: alpha, L, nx, tEnd: tSim, nt: 800, u0: v.T_i, frames: 40, left: { type: 'dirichlet', value: v.T_inf }, right, source });
+      snaps = st.snaps; times = st.times; u = st.final;
+    }
+    const frames = snaps.map(q => q.map(z => z - 273.15));
+    const hist = { t: times, s: frames.map(q => q[0]), b: frames.map(q => q[nx - 1]), m: frames.map(q => meanOf(q)) };
+    const Tm = meanOf(u), stored = v.rho * v.cp * L * (Tm - v.T_i);
+    const qs = a.convective ? v.h * (v.T_inf - u[0]) : -v.k * (-3 * u[0] + 4 * u[1] - u[2]) / (2 * dx);
+    const exactOK = a.insulated && a.no_source;
+    const FoSim = alpha * tSim / (L * L);
+    const roots = exactOK ? slabRoots(a.convective ? Bi : Infinity) : null;
+    const exact = exactOK ? x.map(xx => v.T_inf + (v.T_i - v.T_inf) * slabSeries(a.convective ? Bi : Infinity, FoSim, xx / L, roots) - 273.15) : null;
+    const pick = [0.05, 0.2, 0.5, 1].map(f => Math.min(frames.length - 1, Math.round(f * (frames.length - 1))));
+    const warnings = [];
+    if (!a.const_props) warnings.push(`Variable properties are not resolved. The temperature swing is ${lab(Math.abs(v.T_inf - v.T_i), 'K')}; if conductivity or specific heat change by more than a few per cent over that range, treat the result as approximate.`);
+    if (tSim < v.t_end) warnings.push('The elapsed time is many diffusion times: the profile shown is the steady state reached well before the requested time.');
+    if (a.convective && Bi < 0.1) warnings.push('Biot number below 0.1: the slab is nearly isothermal and a lumped-capacitance model would be adequate.');
+    const balance = a.convective && a.insulated ? (stored - qIn - (a.no_source ? 0 : v.q_gen * L * tSim)) / Math.max(Math.abs(stored), Math.abs(qIn), 1) : 0;
+    return {
+      scalars: [
+        scalar('alpha', 'Thermal diffusivity', alpha, 'm^2/s'), scalar('Bi', 'Biot number', Bi, '1', { note: a.convective ? '' : 'not used: surface temperature imposed' }), scalar('Fo', 'Fourier number', Fo, '1'),
+        scalar('tau_d', 'Diffusion time L²/α', tauD, 's'), scalar('T_s', 'Heated-face temperature', u[0], 'K', { show: '°C' }),
+        scalar('T_b', 'Back-face temperature', u[nx - 1], 'K', { show: '°C' }), scalar('T_m', 'Mean temperature', Tm, 'K', { show: '°C' }),
+        scalar('q_s', 'Heat flux into the heated face', qs, 'W/m^2', { show: 'kW/m^2' }), scalar('E_st', 'Energy stored per unit face area', stored, 'J/m^2', { show: 'MJ/m^2' }),
+        scalar('delta_p', 'Thermal penetration depth √(π α t)', Math.sqrt(Math.PI * alpha * v.t_end), 'm', { show: 'mm' }),
+      ],
+      series: [
+        line('profiles', 'Temperature profiles', 'Distance from heated face', 'mm', x.map(q => q * 1000), [...pick.map(i => ({ label: `t = ${lab(times[i], 's')}`, data: frames[i] })), ...(exact ? [{ label: 'Exact series, final time', data: exact, dash: true }] : [])], 'Temperature', '°C'),
+        line('history', 'Temperature history', 'Time', 's', hist.t, [{ label: 'Heated face', data: hist.s }, { label: 'Back face', data: hist.b }, { label: 'Mean', data: hist.m, dash: true }], 'Temperature', '°C'),
+      ],
+      anims: [anim('T-anim', 'Temperature through the slab', 'Distance from heated face', 'mm', x.map(q => q * 1000), frames, times, 'Temperature', '°C')],
+      checks: [check('Energy balance residual', balance, 2e-2, 'Stored energy against time-integrated surface heat input (evaluated when the back face is adiabatic and the face is convective)')],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const alpha = v.k / (v.rho * v.cp), Bi = v.h * v.L / v.k, out = [];
+    const base = { convective: true, insulated: true, no_source: true, const_props: true };
+    const t1 = 0.5 * v.L * v.L / alpha;
+    const r1 = this.solve({ ...v, t_end: t1 }, base);
+    out.push(bench('Back-face temperature at Fo = 0.5 vs Fourier series', (val(r1, 'T_b') - v.T_inf) / (v.T_i - v.T_inf), slabSeries(Bi, 0.5, 1), 'Carslaw & Jaeger (1959), plane wall with convection', 5e-3));
+    const r2 = this.solve({ ...v, t_end: t1 }, { ...base, convective: false });
+    out.push(bench('Mean temperature rise at Fo = 0.5, imposed surface temperature', (val(r2, 'T_m') - v.T_i) / (v.T_inf - v.T_i), 1 - 8 / Math.PI ** 2 * [0, 1, 2, 3, 4].reduce((s, n) => s + Math.exp(-((2 * n + 1) ** 2) * Math.PI ** 2 * 0.5 / 4) / (2 * n + 1) ** 2, 0), 'Exact series for the mean temperature', 5e-3));
+    const r3 = this.solve({ ...v, t_end: 0.02 * v.L * v.L / alpha, n_x: 201 }, { ...base, convective: false });
+    const i = 20, xq = i * v.L / 200;
+    out.push(bench('Early-time profile vs semi-infinite erfc solution', (r3.series[0].y[3].data[i] + 273.15 - v.T_i) / (v.T_inf - v.T_i), erfc(xq / (2 * Math.sqrt(alpha * 0.02 * v.L * v.L / alpha))), 'Semi-infinite solid, Carslaw & Jaeger (1959)', 1e-2));
+    return out;
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(250, 70, 160, 220, 'd-body', 2)}
+      ${a.convective ? [0, 1, 2, 3].map(i => S.arrow(150, 100 + i * 54, 240, 100 + i * 54, 'd-arrow d-heat')).join('') : S.line(250, 70, 250, 290, 'd-line d-heat')}
+      ${S.text(140, 60, a.convective ? `fluid ${lab(v.T_inf - 273.15, '°C')}, h = ${lab(v.h, 'W/m²K')}` : `face held at ${lab(v.T_inf - 273.15, '°C')}`)}
+      ${S.path('M250 90 Q300 240 410 262', 'd-line d-heat')} ${S.text(330, 180, 'T(x, t)')}
+      ${a.insulated ? S.path('M414 70 L414 290', 'd-ground') : ''} ${S.text(500, 180, a.insulated ? 'adiabatic' : `held at ${lab(v.T_i - 273.15, '°C')}`)}
+      ${S.dim(250, 320, 410, 320, `L = ${lab(v.L * 1000, 'mm')}`)}
+      ${S.arrow(250, 50, 300, 50)} ${S.text(312, 54, 'x')}
+    `);
+  },
+  experiment: {
+    objective: 'Record the temperature history at several depths in a slab after a step change in surface conditions and compare with the heat-equation prediction.',
+    apparatus: ['Flat plate of known material, edges insulated so conduction is one-dimensional', 'Stirred constant-temperature bath or air stream to impose the step', 'Insulating backing on the rear face'],
+    instruments: [{ name: 'Fine-wire thermocouples (type K, 0.25 mm) at four depths', measures: 'Local temperature', range: '−50 to 400 °C', resolution: '±0.5 K, response below 0.1 s' }, { name: 'Data logger', measures: 'Temperature against time', range: '—', resolution: '10 Hz' }, { name: 'Heat-flux gauge on the heated face', measures: 'Surface flux', range: '0–200 kW/m²', resolution: '±3 %' }],
+    procedure: ['Equilibrate the plate at the initial temperature.', 'Immerse it rapidly in the bath and log temperatures until they are within 1 % of the bath temperature.', 'Plot ln[(T − T∞)/(T_i − T∞)] against time; the late-time slope gives ζ₁²α/L².', 'Repeat with a different stirring rate to change the Biot number.'],
+    controls: ['Repeat with a plate of twice the thickness: times should scale with L² at fixed Biot number.', 'Check thermocouple lag in a step test in the bath alone.'],
+    signatures: ['Late-time decay exponential with a single time constant', 'Collapse of data from different thicknesses when plotted against Fourier number', 'Early-time penetration depth growing as √t'],
+    safety: ['Hot liquid and surfaces: gloves and face shield', 'Avoid water baths above 90 °C; use oil with a lid'],
+  },
+  falsify: ['Late-time temperature decay that is not exponential when properties and film coefficient are constant.', 'Characteristic times that do not scale with the square of the thickness at fixed Biot number.'],
+  alternatives: [{ name: 'Lumped capacitance', text: 'For Bi < 0.1 the solid is treated as isothermal: (T − T∞)/(T_i − T∞) = exp(−h t/(ρ c_p L)).' }, { name: 'Semi-infinite solid', text: 'For Fo < 0.05 the back face is not felt and the similarity solution in x/√(αt) applies.' }, { name: 'Hyperbolic (Cattaneo) conduction', text: 'Adds a relaxation time so that heat propagates at finite speed; relevant only at picosecond scales or cryogenic temperatures.' }],
+  hazards: [{ hazard: 'Thermal shock cracking', cause: 'Steep surface gradient at high Biot number in brittle materials', mitigation: 'Limit the quench severity or pre-heat' }, { hazard: 'Burns', cause: 'Contact with hot surfaces', mitigation: 'Guarding and insulation' }],
+  standards: ['ISO 22007 (determination of thermal conductivity and diffusivity of plastics)', 'ASTM E1461 (thermal diffusivity by the flash method)', 'EN ISO 10456 (design thermal values of building materials)'],
+  limits: 'One-dimensional conduction in a homogeneous solid with constant properties and a constant film coefficient. Not valid with phase change, strongly temperature-dependent properties, or significant radiation exchange.',
+  numerics: { method: 'Crank–Nicolson in time, second-order central differences in space; the convective face is a half-cell energy balance', order: 2, stability: 'Unconditionally stable', resolution: 'n_x' },
+  optimise: { objective: 'T_b', sense: 'max', vars: ['h'], note: 'Raising the film coefficient speeds heating only until the Biot number is large; beyond that conduction controls.' },
+  inverse: { series: 'history', curve: 1, fit: ['k', 'h'] },
+  extensions: ['Temperature-dependent conductivity and specific heat', 'Radiative exchange at the surface', 'Phase change with a moving front (Stefan problem)', 'Cylindrical and spherical geometries'],
+};
+
+// ------------------------------------------------------------------ heat exchanger, effectiveness–NTU
+const effect = (ntu, cr, counter) => {
+  if (!counter) return (1 - Math.exp(-ntu * (1 + cr))) / (1 + cr);
+  if (Math.abs(1 - cr) < 1e-9) return ntu / (1 + ntu);
+  const e = Math.exp(-ntu * (1 - cr));
+  return (1 - e) / (1 - cr * e);
+};
+const lmtd = (d1, d2) => (Math.abs(d1 - d2) < 1e-9 * Math.max(Math.abs(d1), Math.abs(d2), 1e-30) ? 0.5 * (d1 + d2) : (d1 - d2) / Math.log(d1 / d2));
+
+const exchanger = {
+  id: 'heat-exchanger-ntu',
+  title: 'Heat exchanger rating by the effectiveness–NTU method',
+  module: 2, klass: 'I', domains: ['thermal', 'chemical'],
+  keywords: ['heat exchanger', 'ntu', 'effectiveness', 'lmtd', 'log mean temperature', 'counterflow', 'parallel flow', 'fouling', 'shell and tube', 'duty', 'outlet temperature', 'condenser', 'exchanger'],
+  summary: 'Outlet temperatures, duty and effectiveness of a counterflow or parallel-flow heat exchanger of known area, with fouling and a log-mean-temperature cross-check.',
+  background: [
+    'A heat exchanger of given area and overall coefficient transfers a fraction ε of the maximum duty that thermodynamics allows, C_min (T_h,in − T_c,in). The effectiveness depends only on the number of transfer units NTU = UA/C_min, the capacity-rate ratio and the flow arrangement. The method avoids the iteration that the log-mean-temperature-difference approach needs when outlet temperatures are unknown; the two are algebraically equivalent.',
+    'Deposits on the heat-transfer surfaces add a thermal resistance in series with the clean coefficient. Counterflow gives the highest effectiveness for a given NTU and is the only simple arrangement in which the cold outlet can be hotter than the hot outlet.',
+  ],
+  phenomena: ['Convective heat transfer between two streams', 'Fouling resistance', 'Temperature pinch', 'Entropy generation by heat transfer across a finite temperature difference'],
+  laws: ['energy', 'second', 'fourier'],
+  refs: ['Kays, W. M. & London, A. L. (1984). Compact Heat Exchangers, 3rd ed., McGraw-Hill.', 'Incropera, F. P., DeWitt, D. P., Bergman, T. L. & Lavine, A. S. (2007). Fundamentals of Heat and Mass Transfer, 6th ed., Wiley.', 'Shah, R. K. & Sekulić, D. P. (2003). Fundamentals of Heat Exchanger Design, Wiley.'],
+  inputs: [
+    inp('m_h', 'Hot-stream mass flow rate', 'kg/s', 2.5, { min: 0.01, max: 500, aliases: ['hot flow', 'hot stream'] }),
+    inp('cp_h', 'Hot-stream specific heat', 'J/(kg K)', 2100, { min: 500, max: 15000, kind: 'fluid', aliases: ['hot specific heat'], src: 'Light oil' }),
+    inp('T_hi', 'Hot-stream inlet temperature', '°C', 120, { min: 30, max: 600, aliases: ['hot inlet', 'hot temperature'] }),
+    inp('m_c', 'Cold-stream mass flow rate', 'kg/s', 3, { min: 0.01, max: 500, aliases: ['cold flow', 'cold stream', 'cooling water'] }),
+    inp('cp_c', 'Cold-stream specific heat', 'J/(kg K)', 4180, { min: 500, max: 15000, kind: 'fluid', aliases: ['cold specific heat'], src: 'Water' }),
+    inp('T_ci', 'Cold-stream inlet temperature', '°C', 20, { min: -40, max: 25, aliases: ['cold inlet', 'cold temperature'] }),
+    inp('U', 'Clean overall heat-transfer coefficient', 'W/(m^2 K)', 500, { min: 5, max: 10000, aliases: ['overall coefficient', 'u-value', 'u value'] }),
+    inp('A', 'Heat-transfer area', 'm^2', 25, { min: 0.05, max: 5000, kind: 'geometry', aliases: ['area', 'surface'] }),
+    inp('R_f', 'Total fouling resistance', 'm^2 K/W', 0.0002, { min: 0, max: 0.005, aliases: ['fouling', 'fouling factor'], src: 'Order of magnitude for treated cooling water plus light hydrocarbon (TEMA tables)' }),
+  ],
+  assumptions: [
+    asm('counterflow', 'The streams flow in opposite directions (pure counterflow).', { why: 'Highest effectiveness for a given area', alt: 'The streams flow in the same direction (parallel flow).' }),
+    asm('fouled', 'Fouling adds a series resistance R_f to the clean coefficient.', { why: 'Design for end-of-run performance', alt: 'Surfaces are clean: the clean coefficient applies.' }),
+    asm('sensible', 'Both streams change temperature without phase change.', { why: 'Liquid–liquid service', alt: 'The hot stream condenses at constant temperature (capacity-rate ratio zero).' }),
+    asm('adiabatic', 'No heat is exchanged with the surroundings.', { why: 'Insulated shell', alt: 'Five per cent of the heat given up by the hot stream is lost to the surroundings and does not reach the cold stream.' }),
+  ],
+  symbols: { C_h: ['Hot capacity rate', 'W/K'], C_c: ['Cold capacity rate', 'W/K'], C_min: ['Smaller capacity rate', 'W/K'], C_r: ['Capacity-rate ratio', '1'], U_f: ['Service overall coefficient', 'W/(m^2 K)'], NTU: ['Number of transfer units', '1'], eps: ['Effectiveness', '1'], Q: ['Duty', 'W'], T_ho: ['Hot outlet temperature', 'K'], T_co: ['Cold outlet temperature', 'K'], dT_lm: ['Log-mean temperature difference', 'K'], dT_1: ['Terminal temperature difference, end 1', 'K'], dT_2: ['Terminal temperature difference, end 2', 'K'], f_loss: ['Fraction of duty lost', '1'], S_gen: ['Entropy generation rate', 'W/K'] },
+  equations: a => [
+    eq('ch', 'Hot capacity rate', 'C_h', 'm_h*cp_h', { kind: 'definition' }),
+    eq('cc', 'Cold capacity rate', 'C_c', 'm_c*cp_c', { kind: 'definition' }),
+    a.sensible ? eq('cr', 'Capacity-rate ratio', 'C_r', 'C_min/max(C_h, C_c)', { kind: 'definition', needs: ['sensible'] }) : eq('cr', 'Capacity-rate ratio', 'C_r', '0', { kind: 'closure', origin: 'Isothermal condensation: infinite capacity rate on the hot side' }),
+    a.fouled ? eq('uf', 'Service coefficient', '1/U_f', '1/U + R_f', { kind: 'law', origin: 'Thermal resistances in series', needs: ['fouled'] }) : eq('uf', 'Service coefficient', 'U_f', 'U', { kind: 'closure', origin: 'Clean surfaces' }),
+    eq('ntu', 'Number of transfer units', 'NTU', 'U_f*A/C_min', { kind: 'definition' }),
+    a.counterflow
+      ? eq('eps', 'Counterflow effectiveness', 'eps', '(1 - exp(-NTU*(1 - C_r)))/(1 - C_r*exp(-NTU*(1 - C_r)))', { kind: 'derived', origin: 'Integration of the two stream energy balances', needs: ['counterflow'] })
+      : eq('eps', 'Parallel-flow effectiveness', 'eps', '(1 - exp(-NTU*(1 + C_r)))/(1 + C_r)', { kind: 'derived', origin: 'Integration of the two stream energy balances' }),
+    eq('q', 'Duty', 'Q', 'eps*C_min*(T_hi - T_ci)', { kind: 'law', origin: 'First law; definition of effectiveness' }),
+    eq('tco', 'Cold outlet temperature', 'T_co', a.adiabatic ? 'T_ci + Q/C_c' : 'T_ci + (1 - f_loss)*Q/C_c', { kind: 'law', origin: 'Cold-stream energy balance', needs: a.adiabatic ? ['adiabatic'] : [] }),
+    ...(a.sensible ? [eq('tho', 'Hot outlet temperature', 'T_ho', 'T_hi - Q/C_h', { kind: 'law', origin: 'Hot-stream energy balance' })] : []),
+    eq('lmtd', 'Log-mean temperature difference', 'dT_lm', '(dT_1 - dT_2)/ln(dT_1/dT_2)', { kind: 'derived', origin: 'Integration of the local rate equation' }),
+    eq('rate', 'Rate equation (cross-check)', 'Q', 'U_f*A*dT_lm', { kind: 'law', origin: 'Newton’s law of cooling integrated over the area' }),
+  ],
+  derivation: a => [
+    { text: 'Energy balances on a differential area dA relate the change of each stream temperature to the local heat flow.', tex: '\\mathrm{d}q = -C_h\\,\\mathrm{d}T_h = \\pm C_c\\,\\mathrm{d}T_c = U\\,(T_h - T_c)\\,\\mathrm{d}A' },
+    { text: 'Subtracting the two balances gives a first-order equation for the local temperature difference, which decays (or grows) exponentially with area.', tex: '\\frac{\\mathrm{d}(T_h-T_c)}{T_h-T_c} = -U\\left(\\frac{1}{C_h} ' + (a.counterflow ? '-' : '+') + ' \\frac{1}{C_c}\\right)\\mathrm{d}A' },
+    { text: 'Integrating over the whole area and eliminating the outlet temperatures with the overall balances gives the effectiveness.', tex: a.counterflow ? '\\varepsilon = \\frac{1-e^{-\\mathrm{NTU}(1-C_r)}}{1-C_r\\,e^{-\\mathrm{NTU}(1-C_r)}}' : '\\varepsilon = \\frac{1-e^{-\\mathrm{NTU}(1+C_r)}}{1+C_r}' },
+    { text: 'The same integration written in terms of the terminal differences is the log-mean form; the two must agree.', tex: 'Q = U A\\,\\Delta T_{lm},\\qquad \\Delta T_{lm} = \\frac{\\Delta T_1-\\Delta T_2}{\\ln(\\Delta T_1/\\Delta T_2)}' },
+    { text: 'Fouling layers act as resistances in series with the clean wall and films.', tex: '\\frac{1}{U_f} = \\frac{1}{U} + R_f' },
+  ],
+  solve(v, a) {
+    const Ch = v.m_h * v.cp_h, Cc = v.m_c * v.cp_c, invCh = a.sensible ? 1 / Ch : 0;
+    const Cmin = a.sensible ? Math.min(Ch, Cc) : Cc, Cr = a.sensible ? Cmin / Math.max(Ch, Cc) : 0;
+    const Uf = a.fouled ? 1 / (1 / v.U + v.R_f) : v.U, ntu = Uf * v.A / Cmin, counter = a.counterflow;
+    const eps = effect(ntu, Cr, counter), Qmax = Cmin * (v.T_hi - v.T_ci), Q = eps * Qmax;
+    const fl = a.adiabatic ? 0 : 0.05;
+    const Tho = v.T_hi - Q * invCh, Tco = v.T_ci + Q / Cc, TcoNet = v.T_ci + (1 - fl) * Q / Cc;
+    const d1 = counter ? v.T_hi - Tco : v.T_hi - v.T_ci, d2 = counter ? Tho - v.T_ci : Tho - Tco;
+    const dTlm = lmtd(d1, d2), Qlm = Uf * v.A * dTlm;
+    // profiles from the hot inlet (s = 0) to the hot outlet (s = 1)
+    const s = N.linspace(0, 1, 101), m = Uf * v.A * (invCh + (counter ? -1 : 1) / Cc);
+    const Th = s.map(q => v.T_hi - d1 * invCh * (Math.abs(m) < 1e-12 ? Uf * v.A * q : Uf * v.A * (1 - Math.exp(-m * q)) / m));
+    const Tc = s.map((q, i) => Th[i] - d1 * Math.exp(-m * q));
+    const Sgen = (a.sensible ? Ch * Math.log(Tho / v.T_hi) : -Q / v.T_hi) + Cc * Math.log(Tco / v.T_ci);
+    const nn = N.logspace(0.05, 10, 60);
+    const warnings = [];
+    if (Math.min(d1, d2) < 3) warnings.push('A terminal temperature difference is below 3 K: the exchanger is pinched and extra area buys almost no extra duty.');
+    if (!a.adiabatic) warnings.push('Heat loss is applied as a fixed 5 % of the hot-side duty; the cold outlet temperature reported is after that loss.');
+    return {
+      scalars: [
+        scalar('C_h', 'Hot capacity rate', a.sensible ? Ch : Infinity, 'W/K', { text: a.sensible ? undefined : 'Unbounded (condensing)' }), scalar('C_c', 'Cold capacity rate', Cc, 'W/K'),
+        scalar('C_r', 'Capacity-rate ratio', Cr, '1'), scalar('U_f', 'Service overall coefficient', Uf, 'W/(m^2 K)'), scalar('NTU', 'Number of transfer units', ntu, '1'),
+        scalar('eps', 'Effectiveness', eps, '1', { show: '%' }), scalar('Q', 'Duty given up by the hot stream', Q, 'W', { show: 'kW' }), scalar('Q_max', 'Maximum possible duty', Qmax, 'W', { show: 'kW' }),
+        scalar('T_ho', 'Hot outlet temperature', Tho, 'K', { show: '°C' }), scalar('T_co', 'Cold outlet temperature', TcoNet, 'K', { show: '°C' }),
+        scalar('dT_lm', 'Log-mean temperature difference', dTlm, 'K'), scalar('dT_min', 'Smallest terminal temperature difference', Math.min(d1, d2), 'K'),
+        scalar('S_gen', 'Entropy generation rate', Sgen, 'W/K'), scalar('dU', 'Loss of coefficient to fouling', 1 - Uf / v.U, '1', { show: '%' }),
+      ],
+      series: [
+        line('profile', 'Stream temperatures along the exchanger', 'Fraction of area from the hot inlet', '–', s, [{ label: 'Hot stream', data: Th.map(q => q - 273.15) }, { label: 'Cold stream', data: Tc.map(q => q - 273.15) }], 'Temperature', '°C'),
+        line('eps-ntu', 'Effectiveness against NTU at this capacity-rate ratio', 'NTU', '–', nn, [{ label: 'Counterflow', data: nn.map(q => effect(q, Cr, true)) }, { label: 'Parallel flow', data: nn.map(q => effect(q, Cr, false)), dash: true }], 'Effectiveness', '–', { logx: true, marker: [ntu, eps] }),
+      ],
+      checks: [
+        check('LMTD cross-check residual', (Qlm - Q) / Q, 1e-8, 'Duty from U·A·ΔT_lm against duty from ε·C_min·ΔT_max'),
+        check('Second law: entropy generation not negative', Math.min(Sgen, 0), 1e-9, 'Heat flows from hot to cold only'),
+        check('Profile end-point consistency', (Th[100] - Tho) / (v.T_hi - v.T_ci), 1e-9, 'Integrated hot-stream profile reaches the outlet temperature from the overall balance'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const b = { counterflow: true, fouled: false, sensible: true, adiabatic: true };
+    const one = { ...v, m_h: 1, cp_h: 1000, m_c: 1, cp_c: 1000, U: 100, A: 10 };
+    return [
+      bench('Balanced counterflow at NTU = 1', val(this.solve(one, b), 'eps'), 0.5, 'ε = NTU/(1 + NTU)', 1e-12),
+      bench('Balanced parallel flow at NTU = 1', val(this.solve(one, { ...b, counterflow: false }), 'eps'), (1 - Math.exp(-2)) / 2, 'ε = (1 − e^{−2NTU})/2', 1e-12),
+      bench('Condenser (C_r = 0) at NTU = 1', val(this.solve(one, { ...b, sensible: false }), 'eps'), 1 - Math.exp(-1), 'ε = 1 − e^{−NTU}', 1e-12),
+      bench('Duty from the log-mean form at the current inputs', (() => { const r = this.solve(v, a); return val(r, 'U_f') * v.A * val(r, 'dT_lm'); })(), val(this.solve(v, a), 'Q'), 'Equivalence of the LMTD and ε–NTU methods', 1e-8),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(120, 120, 400, 110, 'd-body', 8)} ${S.rect(90, 155, 460, 40, 'd-liquid', 4)}
+      ${S.arrow(40, 175, 88, 175, 'd-arrow d-heat')} ${S.arrow(552, 175, 600, 175, 'd-arrow d-heat')}
+      ${S.text(60, 160, `hot in ${lab(v.T_hi - 273.15, '°C')}`, 'd-text d-small')} ${S.text(585, 160, 'hot out', 'd-text d-small')}
+      ${a.counterflow ? S.arrow(480, 60, 480, 118) + S.arrow(160, 232, 160, 290) : S.arrow(160, 60, 160, 118) + S.arrow(480, 232, 480, 290)}
+      ${S.text(a.counterflow ? 480 : 160, 50, `cold in ${lab(v.T_ci - 273.15, '°C')}`)} ${S.text(a.counterflow ? 160 : 480, 310, 'cold out')}
+      ${[0, 1, 2, 3, 4].map(i => S.arrow(180 + i * 70, 158, 180 + i * 70, 132, 'd-arrow d-heat')).join('')}
+      ${S.text(320, 260, `${a.counterflow ? 'counterflow' : 'parallel flow'},  U = ${lab(v.U, 'W/m²K')},  A = ${lab(v.A, 'm²')}`)}
+      ${a.fouled ? S.text(320, 340, `fouling resistance ${lab(v.R_f, 'm²K/W')}`, 'd-text d-small') : ''}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the duty and outlet temperatures of a double-pipe exchanger in both flow arrangements and compare the effectiveness with the ε–NTU prediction.',
+    apparatus: ['Double-pipe or plate heat exchanger with reversible flow connections', 'Hot and cold water circuits with independent flow control', 'Insulation over the outer pipe'],
+    instruments: [{ name: 'Four Pt100 probes with mixing elbows', measures: 'Inlet and outlet temperature of each stream', range: '0–150 °C', resolution: '±0.1 K' }, { name: 'Two Coriolis or electromagnetic flow meters', measures: 'Stream flow rates', range: '0–5 kg/s', resolution: '±0.2 %' }, { name: 'Differential pressure transmitters', measures: 'Pressure drop (fouling indicator)', range: '0–1 bar', resolution: '±0.1 %' }],
+    procedure: ['Establish steady flow and wait until all four temperatures are steady to 0.1 K.', 'Record flows and temperatures; compute the duty from each stream and check that they agree within 3 %.', 'Repeat over a range of flow rates to vary NTU and the capacity-rate ratio.', 'Reverse one stream and repeat.'],
+    controls: ['Energy balance closure between the two streams as a data-quality gate', 'A Wilson-plot series to separate the film coefficients'],
+    signatures: ['Counterflow effectiveness above parallel-flow effectiveness at the same NTU', 'Parallel-flow effectiveness saturating at 1/(1 + C_r)', 'Gradual fall of the service coefficient with running time as fouling builds'],
+    safety: ['Hot water above 60 °C: lagging and guarding', 'Relief valve on any circuit that can be isolated and heated'],
+  },
+  falsify: ['Measured effectiveness above the counterflow value at the same NTU and capacity-rate ratio (within uncertainty).', 'Stream energy balances that do not close for an insulated exchanger.'],
+  alternatives: [{ name: 'LMTD method with correction factor F', text: 'Preferred for sizing multi-pass shell-and-tube units when all four terminal temperatures are specified.' }, { name: 'Cell or finite-volume models', text: 'Needed when the overall coefficient varies strongly along the exchanger or with phase change over part of the area.' }, { name: 'P–NTU charts', text: 'The same theory expressed per stream, convenient for shell-and-tube configurations.' }],
+  hazards: [{ hazard: 'Tube rupture and overpressure of the low-pressure side', cause: 'Corrosion, vibration or thermal fatigue', mitigation: 'Relief sized for tube rupture; material selection' }, { hazard: 'Thermal stress', cause: 'Large differential expansion between shell and tubes', mitigation: 'Expansion joint or floating head' }],
+  standards: ['TEMA Standards (Tubular Exchanger Manufacturers Association)', 'API Standard 660 (shell-and-tube heat exchangers)', 'ASME Boiler and Pressure Vessel Code, Section VIII'],
+  limits: 'Constant overall coefficient and specific heats, pure counterflow or parallel flow, steady state. Multi-pass and cross-flow arrangements need their own effectiveness relations.',
+  numerics: { method: 'Closed-form effectiveness relations and analytical temperature profiles' },
+  optimise: { objective: 'Q', sense: 'max', vars: ['A', 'm_c'], note: 'Duty rises with area with diminishing returns as the pinch closes; in practice minimise total annual cost.' },
+  inverse: { series: 'profile', curve: 0, fit: ['U', 'R_f'] },
+  extensions: ['Multi-pass shell-and-tube and cross-flow effectiveness relations', 'Film coefficients from Dittus–Boelter or Gnielinski correlations', 'Fouling growth with time and cleaning-cycle optimisation'],
+};
+
+// ------------------------------------------------------------------ simple two-phase working-fluid model
+// Incompressible liquid (constant c_l, v_l) and ideal-gas vapour (constant c_p). Saturation follows from equality of the
+// Gibbs energies of the two phases, so the model is a single consistent fundamental relation and cannot violate the second law.
+const WORKING_FLUIDS = {
+  water: { name: 'Water', M: 0.018015, Tref: 373.15, pref: 101325, hfg0: 2.257e6, cl: 4186, cpv: 2000, vl: 1.04e-3, Tcrit: 647.1 },
+  pentane: { name: 'n-Pentane', M: 0.07215, Tref: 309.2, pref: 101325, hfg0: 3.576e5, cl: 2317, cpv: 1667, vl: 1.6e-3, Tcrit: 469.7 },
+  r134a: { name: 'R134a', M: 0.10203, Tref: 247.08, pref: 101325, hfg0: 2.170e5, cl: 1340, cpv: 850, vl: 7.7e-4, Tcrit: 374.2 },
+  ammonia: { name: 'Ammonia', M: 0.017031, Tref: 239.82, pref: 101325, hfg0: 1.369e6, cl: 4600, cpv: 2200, vl: 1.47e-3, Tcrit: 405.4 },
+};
+function fluidModel(f) {
+  const Rs = C.R_u / f.M, h0 = f.hfg0 + f.vl * f.pref, s0 = f.hfg0 / f.Tref;
+  const hl = (T, p) => f.cl * (T - f.Tref) + f.vl * p, sl = T => f.cl * Math.log(T / f.Tref);
+  const hv = T => f.cpv * (T - f.Tref) + h0, sv = (T, p) => f.cpv * Math.log(T / f.Tref) - Rs * Math.log(p / f.pref) + s0;
+  const psat = T => {
+    let p = f.pref;
+    for (let i = 0; i < 40; i++) {
+      const pn = f.pref * Math.exp((hl(T, p) - T * sl(T) - hv(T) + T * (f.cpv * Math.log(T / f.Tref) + s0)) / (Rs * T));
+      if (Math.abs(pn - p) < 1e-13 * p) { p = pn; break; }
+      p = pn;
+    }
+    return p;
+  };
+  /** State reached at saturation temperature Ts (pressure ps) with entropy s: wet mixture or superheated vapour. */
+  const atEntropy = (s, Ts, ps) => {
+    const sg = sv(Ts, ps), sf = sl(Ts);
+    if (s <= sg) { const x = (s - sf) / (sg - sf); return { T: Ts, x, h: hl(Ts, ps) + x * (hv(Ts) - hl(Ts, ps)), s }; }
+    const T = Ts * Math.exp((s - sg) / f.cpv); return { T, x: 1, h: hv(T), s, superheated: true };
+  };
+  /** State at pressure ps (saturation temperature Ts) with enthalpy h. */
+  const atEnthalpy = (h, Ts, ps) => {
+    const hf = hl(Ts, ps), hg = hv(Ts);
+    if (h <= hg) { const x = (h - hf) / (hg - hf); return { T: Ts, x, h, s: sl(Ts) + x * (sv(Ts, ps) - sl(Ts)) }; }
+    const T = f.Tref + (h - h0) / f.cpv; return { T, x: 1, h, s: sv(T, ps), superheated: true };
+  };
+  return { ...f, Rs, hl, sl, hv, sv, psat, atEntropy, atEnthalpy };
+}
+const FM = Object.fromEntries(Object.entries(WORKING_FLUIDS).map(([k, f]) => [k, fluidModel(f)]));
+/** Saturation dome as a closed parametric curve in the T–s plane. */
+function dome(F, Tlo, Thi, n = 40) {
+  const Ts = N.linspace(Tlo, Thi, n), sL = Ts.map(F.sl), sV = Ts.map(T => F.sv(T, F.psat(T)));
+  return { s: [...sL, ...sV.slice().reverse()], T: [...Ts, ...Ts.slice().reverse()] };
+}
+
+// ------------------------------------------------------------------ Rankine / organic Rankine cycle
+function rankineCycle(F, Tb, dTsh, Tc, etaT, etaP, pumpFactor) {
+  const pb = F.psat(Tb), pc = F.psat(Tc), T3 = Tb + dTsh, pp = pb * pumpFactor;
+  const h1 = F.hl(Tc, pc), s1 = F.sl(Tc), wp = F.vl * (pp - pc) / etaP, h2 = h1 + wp, T2 = Tc + (wp - F.vl * (pp - pc)) / F.cl;
+  const h3 = F.hv(T3), s3 = F.sv(T3, pb), st4s = F.atEntropy(s3, Tc, pc), wt = etaT * (h3 - st4s.h), st4 = F.atEnthalpy(h3 - wt, Tc, pc);
+  const qin = h3 - h2, qout = st4.h - h1, eta = (wt - wp) / qin;
+  return { pb, pc, pp, T2, T3, h1, h2, h3, s1, s3, st4s, st4, wt, wp, qin, qout, eta };
+}
+
+const rankine = {
+  id: 'rankine-cycle',
+  title: 'Rankine and organic Rankine power cycle',
+  module: 2, klass: 'I', domains: ['thermal', 'mechanical'],
+  keywords: ['rankine cycle', 'rankine', 'steam cycle', 'steam turbine', 'organic rankine', 'orc', 'binary cycle', 'binary power', 'power plant', 'thermal efficiency', 'carnot', 'back work ratio', 'boiler', 'condenser', 'geothermal'],
+  summary: 'Thermal efficiency, net work and back-work ratio of an ideal or non-ideal Rankine cycle on water or an organic working fluid, compared with the Carnot limit.',
+  background: [
+    'The Rankine cycle is the basis of steam and binary (organic) power plants. Liquid is pumped to high pressure, evaporated and optionally superheated by the heat source, expanded through a turbine and condensed. Because the liquid is nearly incompressible the pump absorbs only a small fraction of the turbine output, which is the practical advantage of a condensing cycle over a gas cycle.',
+    'The second law limits any engine working between a source at T_H and a sink at T_L to the Carnot efficiency 1 − T_L/T_H. A Rankine cycle falls below that limit even with ideal machines because much of the heat is added at temperatures below the peak temperature. Organic fluids with low boiling points allow useful pressures at source temperatures of 80–200 °C, as in geothermal binary plants.',
+    'Fluid properties here come from a deliberately simple model: an incompressible liquid and an ideal-gas vapour with constant specific heats, with the saturation line obtained from equality of the Gibbs energies. It reproduces trends and magnitudes but not steam-table accuracy, particularly near the critical point.',
+  ],
+  phenomena: ['Evaporation and condensation', 'Isentropic and irreversible expansion', 'Heat addition at varying temperature', 'Moisture at turbine exhaust'],
+  laws: ['energy', 'second', 'ideal_gas', 'mass'],
+  refs: ['Moran, M. J., Shapiro, H. N., Boettner, D. D. & Bailey, M. B. (2014). Fundamentals of Engineering Thermodynamics, 8th ed., Wiley.', 'Çengel, Y. A. & Boles, M. A. (2015). Thermodynamics: An Engineering Approach, 8th ed., McGraw-Hill.', 'DiPippo, R. (2016). Geothermal Power Plants, 4th ed., Butterworth-Heinemann.', 'Wagner, W. & Pruß, A. (2002). The IAPWS formulation 1995 for the thermodynamic properties of ordinary water substance. J. Phys. Chem. Ref. Data 31, 387–535.'],
+  inputs: [
+    inp('T_b', 'Evaporation (boiler saturation) temperature', '°C', 285, { min: 80, max: 360, aliases: ['boiler temperature', 'evaporation temperature', 'evaporator temperature', 'saturation temperature'] }),
+    inp('dT_sh', 'Superheat above saturation', 'K', 215, { min: 0, max: 350, aliases: ['superheat'] }),
+    inp('T_c', 'Condensing temperature', '°C', 40, { min: 15, max: 60, aliases: ['condenser temperature', 'condensing temperature', 'sink temperature'] }),
+    inp('eta_t', 'Turbine isentropic efficiency', '1', 0.87, { min: 0.4, max: 1, aliases: ['turbine efficiency', 'isentropic efficiency'] }),
+    inp('eta_p', 'Pump isentropic efficiency', '1', 0.8, { min: 0.3, max: 1, aliases: ['pump efficiency'] }),
+    inp('P_net', 'Net power output', 'MW', 50, { min: 0.01, max: 2000, aliases: ['net power', 'power output', 'capacity'] }),
+    inp('dT_app', 'Approach temperature difference to source and sink', 'K', 15, { min: 0, max: 100, aliases: ['approach', 'pinch'] }),
+  ],
+  assumptions: [
+    asm('water', 'The working fluid is water.', { why: 'Conventional steam plant', alt: 'The working fluid is n-pentane, as in a geothermal binary (organic Rankine) plant.' }),
+    asm('real_machines', 'Turbine and pump have the stated isentropic efficiencies.', { why: 'Realistic machines', alt: 'Turbine and pump are isentropic (the ideal Rankine cycle).' }),
+    asm('no_dp', 'There are no pressure losses in the boiler, condenser or piping.', { why: 'Small against the cycle pressure ratio', alt: 'The pump must deliver 10 % above turbine-inlet pressure to overcome boiler and piping losses.' }),
+    asm('ideal_ht', 'The heat source is at the peak cycle temperature and the sink at the condensing temperature.', { why: 'Isolates internal irreversibility', alt: 'Source and sink are separated from the cycle by the approach temperature difference; the Carnot limit is then evaluated between the reservoirs.' }),
+    asm('simple_props', 'Properties follow an incompressible-liquid, ideal-gas-vapour model with constant specific heats.', { why: 'Closed-form and thermodynamically consistent', alt: 'No alternative property model is built in: a warning recommends steam tables or a reference equation of state for design work.' }),
+  ],
+  symbols: { p_b: ['Boiler pressure', 'Pa'], p_c: ['Condenser pressure', 'Pa'], p_p: ['Pump delivery pressure', 'Pa'], v_l: ['Liquid specific volume', 'm^3/kg'], w_p: ['Pump work', 'J/kg'], w_t: ['Turbine work', 'J/kg'], h_1: ['Enthalpy, condenser outlet', 'J/kg'], h_2: ['Enthalpy, pump outlet', 'J/kg'], h_3: ['Enthalpy, turbine inlet', 'J/kg'], h_4: ['Enthalpy, turbine outlet', 'J/kg'], h_4s: ['Enthalpy after isentropic expansion', 'J/kg'], s_3: ['Entropy, turbine inlet', 'J/(kg K)'], s_4s: ['Entropy after isentropic expansion', 'J/(kg K)'], q_in: ['Heat added', 'J/kg'], q_out: ['Heat rejected', 'J/kg'], eta: ['Thermal efficiency', '1'], eta_C: ['Carnot efficiency', '1'], T_H: ['Source temperature', 'K'], T_L: ['Sink temperature', 'K'], bwr: ['Back-work ratio', '1'], mdot: ['Working-fluid mass flow rate', 'kg/s'], p_sat: ['Saturation pressure', 'Pa'], T: ['Temperature', 'K'], h_fg: ['Enthalpy of vaporisation', 'J/kg'], R_s: ['Specific gas constant', 'J/(kg K)'] },
+  equations: a => [
+    eq('cc', 'Clausius–Clapeyron relation', 'd(p_sat,T)', 'h_fg*p_sat/(R_s*T^2)', { kind: 'law', origin: 'Phase equilibrium with ideal-gas vapour and negligible liquid volume', needs: ['simple_props'] }),
+    ...(a.no_dp ? [eq('pp', 'Pump delivery pressure', 'p_p', 'p_b', { kind: 'closure', needs: ['no_dp'] })] : [eq('pp', 'Pump delivery pressure', 'p_p', '1.1*p_b', { kind: 'closure', origin: 'Allowance for boiler and piping pressure loss' })]),
+    a.real_machines ? eq('wp', 'Pump work', 'w_p', 'v_l*(p_p - p_c)/eta_p', { kind: 'law', origin: 'First law for an incompressible liquid', needs: ['real_machines'] }) : eq('wp', 'Pump work', 'w_p', 'v_l*(p_p - p_c)', { kind: 'law', origin: 'Isentropic compression of an incompressible liquid' }),
+    eq('h2', 'Pump outlet enthalpy', 'h_2', 'h_1 + w_p', { kind: 'law', origin: 'First law, adiabatic pump' }),
+    eq('s', 'Isentropic expansion', 's_4s', 's_3', { kind: 'law', origin: 'Second law for a reversible adiabatic process' }),
+    a.real_machines ? eq('wt', 'Turbine work', 'w_t', 'eta_t*(h_3 - h_4s)', { kind: 'law', origin: 'First law with the definition of isentropic efficiency', needs: ['real_machines'] }) : eq('wt', 'Turbine work', 'w_t', 'h_3 - h_4s', { kind: 'law', origin: 'First law, isentropic turbine' }),
+    eq('qin', 'Heat added', 'q_in', 'h_3 - h_2', { kind: 'law', origin: 'First law, boiler' }),
+    eq('qout', 'Heat rejected', 'q_out', 'h_4 - h_1', { kind: 'law', origin: 'First law, condenser' }),
+    eq('eta', 'Thermal efficiency', 'eta', '(w_t - w_p)/q_in', { kind: 'definition' }),
+    eq('carnot', 'Carnot limit', 'eta_C', '1 - T_L/T_H', { kind: 'law', origin: 'Second law of thermodynamics' }),
+    eq('bwr', 'Back-work ratio', 'bwr', 'w_p/w_t', { kind: 'definition' }),
+    eq('m', 'Mass flow rate', 'mdot', 'P_net/(w_t - w_p)', { kind: 'derived', origin: 'Definition of net specific work' }),
+  ],
+  derivation: a => [
+    { text: 'Each component is a steady-flow device. Neglecting kinetic and potential energy, the first law for each reduces to an enthalpy difference.', tex: 'q - w = h_{out} - h_{in}' },
+    { text: 'The liquid is nearly incompressible, so the pump work is the specific volume times the pressure rise' + (a.real_machines ? ', divided by the pump efficiency.' : '.'), tex: a.real_machines ? 'w_p = \\frac{v_l\\,(p_p - p_c)}{\\eta_p}' : 'w_p = v_l\\,(p_p - p_c)' },
+    { text: 'An ideal turbine is isentropic; a real one delivers a fraction η_t of the isentropic enthalpy drop.', tex: 'w_t = ' + (a.real_machines ? '\\eta_t\\,' : '') + '(h_3 - h_{4s}),\\qquad s_{4s} = s_3' },
+    { text: 'The efficiency is net work over heat added. Applying the first law around the loop shows it also equals 1 − q_out/q_in.', tex: '\\eta = \\frac{w_t - w_p}{q_{in}} = 1 - \\frac{q_{out}}{q_{in}}' },
+    { text: 'The Clausius inequality for the cycle, with all heat added below T_H and rejected above T_L, bounds the efficiency.', tex: '\\oint\\frac{\\delta q}{T} \\le 0 \;\\Rightarrow\; \\eta \\le 1 - \\frac{T_L}{T_H}' },
+    { text: 'The saturation line of the property model follows from equal Gibbs energies of liquid and vapour, which for an ideal-gas vapour and small liquid volume is the Clausius–Clapeyron relation.', tex: '\\frac{\\mathrm{d}p_{sat}}{\\mathrm{d}T} = \\frac{h_{fg}\\,p_{sat}}{R_s T^2}' },
+  ],
+  solve(v, a) {
+    const F = a.water ? FM.water : FM.pentane;
+    const etaT = a.real_machines ? v.eta_t : 1, etaP = a.real_machines ? v.eta_p : 1, pf = a.no_dp ? 1 : 1.1;
+    const cy = rankineCycle(F, v.T_b, v.dT_sh, v.T_c, etaT, etaP, pf);
+    const TH = cy.T3 + (a.ideal_ht ? 0 : v.dT_app), TL = v.T_c - (a.ideal_ht ? 0 : v.dT_app);
+    const etaC = 1 - TL / TH, wnet = cy.wt - cy.wp, mdot = v.P_net / wnet;
+    const sgen = cy.qout / TL - cy.qin / TH;
+    const d = dome(F, v.T_c - 15, v.T_b + 25);
+    const sup = N.linspace(v.T_b, cy.T3, 12);
+    const cs = [cy.s1, F.sl(cy.T2), F.sl(v.T_b), ...sup.map(T => F.sv(T, cy.pb)), cy.st4.s, ...(cy.st4.superheated ? [F.sv(v.T_c, cy.pc)] : []), cy.s1];
+    const cT = [v.T_c, cy.T2, v.T_b, ...sup, cy.st4.T, ...(cy.st4.superheated ? [v.T_c] : []), v.T_c];
+    const Tbs = N.linspace(Math.max(v.T_c + 25, 333.15), 633.15, 40);
+    const sweep = Tbs.map(T => rankineCycle(F, T, v.dT_sh, v.T_c, etaT, etaP, pf).eta);
+    const warnings = [];
+    if (v.T_b > 0.9 * F.Tcrit) warnings.push(`The evaporation temperature is ${v.T_b > F.Tcrit ? 'above' : 'within 10 % of'} the critical temperature of ${F.name.toLowerCase()} (${lab(F.Tcrit - 273.15, '°C')}). The simple property model has no critical point; results here are an extrapolation.`);
+    if (!cy.st4.superheated && cy.st4.x < 0.88) warnings.push(`Turbine exhaust quality is ${lab(cy.st4.x, '', 2)}: moisture above about 12 % erodes the last-stage blades. Raise the superheat or add reheat.`);
+    if (!a.simple_props) warnings.push('No reference equation of state is built in. For design work use the IAPWS-IF97 steam tables or a Helmholtz-energy equation of state; the simple model typically misses condenser pressure by a few per cent and high-pressure enthalpies by more.');
+    return {
+      scalars: [
+        scalar('p_b', 'Boiler pressure', cy.pb, 'Pa', { show: 'bar' }), scalar('p_c', 'Condenser pressure', cy.pc, 'Pa', { show: 'kPa' }),
+        scalar('T_3', 'Turbine inlet temperature', cy.T3, 'K', { show: '°C' }), scalar('w_t', 'Turbine specific work', cy.wt, 'J/kg', { show: 'kJ/kg' }),
+        scalar('w_p', 'Pump specific work', cy.wp, 'J/kg', { show: 'kJ/kg' }), scalar('w_net', 'Net specific work', wnet, 'J/kg', { show: 'kJ/kg' }),
+        scalar('q_in', 'Heat added', cy.qin, 'J/kg', { show: 'kJ/kg' }), scalar('q_out', 'Heat rejected', cy.qout, 'J/kg', { show: 'kJ/kg' }),
+        scalar('eta', 'Thermal efficiency', cy.eta, '1', { show: '%' }), scalar('eta_C', 'Carnot efficiency between source and sink', etaC, '1', { show: '%' }),
+        scalar('eta_II', 'Second-law efficiency η/η_Carnot', cy.eta / etaC, '1', { show: '%' }), scalar('bwr', 'Back-work ratio', cy.wp / cy.wt, '1', { show: '%' }),
+        scalar('x_4', 'Turbine exhaust quality', cy.st4.x, '1', { text: cy.st4.superheated ? `Superheated, ${lab(cy.st4.T - 273.15, '°C')}` : undefined }),
+        scalar('mdot', 'Working-fluid mass flow rate', mdot, 'kg/s'), scalar('Q_in', 'Heat input rate', mdot * cy.qin, 'W', { show: 'MW' }), scalar('Q_out', 'Heat rejection rate', mdot * cy.qout, 'W', { show: 'MW' }),
+        scalar('s_gen', 'Entropy generated per kilogram of working fluid', sgen, 'J/(kg K)'),
+      ],
+      series: [
+        line('ts', 'Temperature–entropy diagram', 'Specific entropy', 'kJ/(kg K)', d.s.map(q => q / 1000), [{ label: 'Saturation dome', data: d.T.map(q => q - 273.15), dash: true }], 'Temperature', '°C', { overlay: [{ label: 'Cycle 1–2–3–4', x: cs.map(q => q / 1000), y: cT.map(q => q - 273.15) }], note: 'Entropy is measured from saturated liquid at the normal boiling point.' }),
+        line('eta-sweep', 'Efficiency against evaporation temperature', 'Evaporation temperature', '°C', Tbs.map(q => q - 273.15), [{ label: 'Cycle', data: sweep }, { label: 'Carnot limit', data: Tbs.map(T => 1 - TL / (T + v.dT_sh + (a.ideal_ht ? 0 : v.dT_app))), dash: true }], 'Efficiency', '–'),
+      ],
+      checks: [
+        check('First law around the cycle', (cy.qin - cy.qout - wnet) / cy.qin, 1e-10, 'Net heat equals net work'),
+        check('Second law: efficiency does not exceed the Carnot limit', Math.max(cy.eta - etaC, 0), 0, `η = ${lab(cy.eta * 100, '%')} against η_Carnot = ${lab(etaC * 100, '%')}`),
+        check('Entropy generation not negative', Math.min(sgen, 0), 0, 'q_out/T_L − q_in/T_H ≥ 0'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const F = FM.water, T = 450, dT = 0.01, p = F.psat(T);
+    const slope = (F.psat(T + dT) - F.psat(T - dT)) / (2 * dT), clap = (F.hv(T) - F.hl(T, p)) / (T * (F.Rs * T / p - F.vl));
+    const near = rankineCycle(F, 400.5, 0, 400, 1, 1, 1);
+    return [
+      bench('Saturation slope vs the Clapeyron equation', slope, clap, 'dp/dT = h_fg/[T (v_g − v_l)], exact for any consistent property model', 1e-6),
+      bench('Cycle efficiency over Carnot as the temperature difference tends to zero', near.eta / (1 - 400 / 400.5), 1, 'Reversible limit: all heat exchanged at essentially two temperatures', 5e-3),
+      bench('Ideal pump work', rankineCycle(F, 500, 0, 300, 1, 1, 1).wp, F.vl * (F.psat(500) - F.psat(300)), 'w_p = v_l Δp', 1e-12),
+    ];
+  },
+  validation: [
+    { name: 'Saturation pressure of water at 40 °C', ref: 'IAPWS-IF97 steam tables: p_sat(40 °C) = 7.38 kPa', note: 'Tests the simple property model only; a few per cent error is expected.', cases: [{ label: '40 °C', inputs: { T_c: 313.15 }, observable: 'p_c', observed: 7384, sigma: 400 }] },
+  ],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(70, 60, 130, 70, 'd-body')} ${S.text(135, 100, 'boiler')}
+      ${S.path('M440 70 L520 50 L520 150 L440 130 Z', 'd-body')} ${S.text(480, 104, 'turbine')}
+      ${S.rect(410, 240, 140, 60, 'd-body')} ${S.text(480, 275, 'condenser')}
+      ${S.circle(135, 270, 26)} ${S.text(135, 275, 'pump')}
+      ${S.path('M200 80 L440 80', 'd-pipe')} ${S.path('M500 146 L500 240', 'd-pipe')} ${S.path('M410 270 L161 270', 'd-pipe')} ${S.path('M135 244 L135 130', 'd-pipe')}
+      ${S.arrow(300, 66, 360, 66)} ${S.text(320, 56, `3: ${lab(v.T_b + v.dT_sh - 273.15, '°C')}`)}
+      ${S.text(540, 200, '4', 'd-text')} ${S.text(290, 262, `1: ${lab(v.T_c - 273.15, '°C')}`)} ${S.text(120, 190, '2', 'd-text')}
+      ${S.arrow(30, 95, 68, 95, 'd-arrow d-heat')} ${S.text(34, 82, 'Q in', 'd-text d-small')}
+      ${S.arrow(552, 270, 600, 270, 'd-arrow d-heat')} ${S.text(590, 258, 'Q out', 'd-text d-small')}
+      ${S.arrow(522, 100, 590, 100)} ${S.text(575, 90, 'W', 'd-text d-small')}
+      ${S.text(320, 340, `working fluid: ${a.water ? 'water' : 'n-pentane'}`, 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the heat input, heat rejection and shaft power of a small Rankine or organic Rankine rig and compare the efficiency with the cycle prediction and the Carnot limit.',
+    apparatus: ['Electrically heated evaporator with superheater', 'Small turbine or scroll expander coupled to a dynamometer or generator', 'Water-cooled condenser and feed pump', 'Lagged pipework'],
+    instruments: [{ name: 'Pressure transducers at the four state points', measures: 'Cycle pressures', range: '0–100 bar', resolution: '±0.1 %' }, { name: 'Pt100 probes at the four state points', measures: 'Cycle temperatures', range: '0–550 °C', resolution: '±0.2 K' }, { name: 'Coriolis flow meter on the liquid line', measures: 'Working-fluid flow', range: '0–1 kg/s', resolution: '±0.1 %' }, { name: 'Torque and speed transducer', measures: 'Shaft power', range: '0–50 kW', resolution: '±0.5 %' }, { name: 'Cooling-water flow and temperature rise', measures: 'Heat rejected', range: '—', resolution: '±2 %' }],
+    procedure: ['Bring the rig to steady state at a fixed evaporation pressure and superheat.', 'Record all pressures, temperatures, flow, electrical heat input and shaft power.', 'Close the energy balance: heat in minus heat out against shaft power plus measured losses.', 'Repeat at several evaporation temperatures and condenser temperatures.'],
+    controls: ['Energy-balance closure within 3 % before accepting a point', 'Electrical heater calibration with the loop bypassed'],
+    signatures: ['Efficiency rising with evaporation temperature and falling with condenser temperature', 'Back-work ratio of order one per cent for water, several per cent for organic fluids', 'Efficiency always below 1 − T_L/T_H'],
+    safety: ['Pressure system: relief valves, written scheme of examination', 'Steam and hot-surface burns', 'Flammable organic fluids: leak detection, ventilation and ignition control'],
+  },
+  falsify: ['A measured efficiency above the Carnot value for the measured source and sink temperatures.', 'An energy balance that fails to close by more than the measurement uncertainty.'],
+  alternatives: [{ name: 'Reheat and regenerative cycles', text: 'Reheat limits exhaust moisture; feed-water heating raises the mean temperature of heat addition and the efficiency.' }, { name: 'Supercritical cycles', text: 'Above the critical pressure there is no boiling plateau; a real-fluid equation of state is essential.' }, { name: 'Kalina cycle', text: 'An ammonia–water mixture boils over a temperature range, matching a sensible heat source more closely than a pure fluid.' }],
+  hazards: [{ hazard: 'Loss of containment of high-pressure steam', cause: 'Tube failure, overpressure', mitigation: 'Relief valves, inspection, water-chemistry control' }, { hazard: 'Turbine overspeed', cause: 'Loss of load', mitigation: 'Independent overspeed trip' }, { hazard: 'Fire and explosion with organic fluids', cause: 'Leak of flammable vapour', mitigation: 'Hazardous-area classification, gas detection' }],
+  standards: ['ASME Boiler and Pressure Vessel Code, Section I (power boilers)', 'ASME PTC 6 (steam turbine performance test code)', 'EN 12952 (water-tube boilers)', 'IAPWS-IF97 (industrial formulation for water and steam properties)'],
+  limits: 'Simple subcritical cycle without reheat or regeneration. The property model assumes ideal-gas vapour and constant specific heats; it is qualitative above roughly 60 % of the critical pressure and invalid near the critical point.',
+  numerics: { method: 'Closed-form state-point evaluation; fixed-point iteration for the saturation pressure' },
+  optimise: { objective: 'eta', sense: 'max', vars: ['T_b', 'dT_sh'], note: 'Efficiency rises monotonically with peak temperature; material limits set the practical optimum.' },
+  inverse: { series: 'eta-sweep', curve: 0, fit: ['eta_t'] },
+  extensions: ['Reheat and open or closed feed-water heaters', 'Real-fluid properties from a reference equation of state', 'Heat-source matching and pinch analysis for binary plants', 'Part-load turbine performance'],
+};
+
+// ------------------------------------------------------------------ vapour-compression refrigeration
+function vcCycle(F, Te, Tk, etaC, expander) {
+  const pe = F.psat(Te), pk = F.psat(Tk);
+  const h1 = F.hv(Te), s1 = F.sv(Te, pe), st2s = F.atEntropy(s1, Tk, pk), wc = (st2s.h - h1) / etaC, st2 = F.atEnthalpy(h1 + wc, Tk, pk);
+  const h3 = F.hl(Tk, pk), s3 = F.sl(Tk), st4 = expander ? F.atEntropy(s3, Te, pe) : F.atEnthalpy(h3, Te, pe);
+  const wx = h3 - st4.h, qL = h1 - st4.h, qH = st2.h - h3, w = wc - wx;
+  return { pe, pk, h1, s1, st2, st2s, h3, s3, st4, wc, wx, w, qL, qH, cop: qL / w };
+}
+
+const refrigeration = {
+  id: 'refrigeration-cycle',
+  title: 'Vapour-compression refrigeration cycle',
+  module: 2, klass: 'I', domains: ['thermal'],
+  keywords: ['refrigeration cycle', 'vapour compression', 'vapor compression', 'refrigeration', 'refrigerator', 'heat pump', 'cop', 'coefficient of performance', 'compressor', 'evaporator', 'condenser', 'cascade', 'chiller', 'r134a', 'ammonia'],
+  summary: 'Coefficient of performance, compressor power and state points of a single-stage or cascade vapour-compression cycle, compared with the Carnot limit.',
+  background: [
+    'A vapour-compression refrigerator moves heat from a cold space to warmer surroundings by evaporating a refrigerant at low pressure, compressing the vapour, condensing it at high pressure and throttling the liquid back to the evaporator. Its coefficient of performance (COP) is the heat removed per unit of work supplied.',
+    'The second law bounds the COP of any refrigerator working between T_L and T_H by the Carnot value T_L/(T_H − T_L). Real cycles fall short because of compressor losses, the superheat of the compressor discharge and the irreversible throttling process. When the temperature lift is large, two cycles in cascade each work over a smaller pressure ratio and recover part of that loss.',
+  ],
+  phenomena: ['Evaporation at low pressure', 'Compression of vapour', 'Desuperheating and condensation', 'Throttling (Joule–Thomson expansion with flashing)'],
+  laws: ['energy', 'second', 'ideal_gas'],
+  refs: ['Moran, M. J., Shapiro, H. N., Boettner, D. D. & Bailey, M. B. (2014). Fundamentals of Engineering Thermodynamics, 8th ed., Wiley.', 'Stoecker, W. F. & Jones, J. W. (1982). Refrigeration and Air Conditioning, 2nd ed., McGraw-Hill.', 'ASHRAE (2021). ASHRAE Handbook — Fundamentals. American Society of Heating, Refrigerating and Air-Conditioning Engineers.'],
+  inputs: [
+    inp('T_e', 'Evaporating temperature', '°C', -10, { min: -40, max: 10, aliases: ['evaporator temperature', 'evaporating temperature', 'cold temperature'] }),
+    inp('T_k', 'Condensing temperature', '°C', 40, { min: 25, max: 70, aliases: ['condenser temperature', 'condensing temperature', 'hot temperature'] }),
+    inp('eta_c', 'Compressor isentropic efficiency', '1', 0.75, { min: 0.4, max: 1, aliases: ['compressor efficiency', 'isentropic efficiency'] }),
+    inp('Q_L', 'Cooling capacity', 'kW', 10, { min: 0.05, max: 5000, aliases: ['cooling capacity', 'refrigeration capacity', 'cooling load', 'duty'] }),
+    inp('dT_casc', 'Temperature difference in the cascade heat exchanger', 'K', 5, { min: 1, max: 15, aliases: ['cascade approach'] }),
+  ],
+  assumptions: [
+    asm('r134a', 'The refrigerant is R134a.', { why: 'Common medium-temperature refrigerant', alt: 'The refrigerant is ammonia (R717).' }),
+    asm('single_stage', 'The cycle has a single stage of compression.', { why: 'Moderate temperature lift', alt: 'Two cycles in cascade share the lift, meeting in a heat exchanger at the geometric-mean temperature.' }),
+    asm('real_comp', 'The compressor has the stated isentropic efficiency.', { why: 'Realistic machine', alt: 'Compression is isentropic.' }),
+    asm('throttle', 'Expansion is through a throttling valve at constant enthalpy.', { why: 'Universal practice: cheap and reliable', alt: 'An ideal isentropic expander replaces the valve and its work offsets the compressor work.' }),
+  ],
+  symbols: { p_e: ['Evaporating pressure', 'Pa'], p_k: ['Condensing pressure', 'Pa'], h_1: ['Enthalpy, compressor suction', 'J/kg'], h_2: ['Enthalpy, compressor discharge', 'J/kg'], h_2s: ['Enthalpy after isentropic compression', 'J/kg'], h_3: ['Enthalpy, condenser outlet', 'J/kg'], h_4: ['Enthalpy, evaporator inlet', 'J/kg'], s_3: ['Entropy, condenser outlet', 'J/(kg K)'], s_4: ['Entropy, evaporator inlet', 'J/(kg K)'], w_c: ['Compressor work', 'J/kg'], w_x: ['Expander work', 'J/kg'], q_L: ['Refrigerating effect', 'J/kg'], q_H: ['Heat rejected', 'J/kg'], COP: ['Coefficient of performance', '1'], COP_C: ['Carnot coefficient of performance', '1'], COP_lo: ['COP of the low stage', '1'], COP_hi: ['COP of the high stage', '1'], mdot: ['Refrigerant mass flow rate', 'kg/s'], T_m: ['Cascade intermediate temperature', 'K'] },
+  equations: a => [
+    a.real_comp ? eq('wc', 'Compressor work', 'w_c', '(h_2s - h_1)/eta_c', { kind: 'law', origin: 'First law with the definition of isentropic efficiency', needs: ['real_comp'] }) : eq('wc', 'Compressor work', 'w_c', 'h_2s - h_1', { kind: 'law', origin: 'First law, isentropic compressor' }),
+    eq('h2', 'Discharge enthalpy', 'h_2', 'h_1 + w_c', { kind: 'law', origin: 'First law, adiabatic compressor' }),
+    a.throttle ? eq('exp', 'Throttling', 'h_4', 'h_3', { kind: 'law', origin: 'First law for an adiabatic valve with no work', needs: ['throttle'] }) : eq('exp', 'Isentropic expansion', 's_4', 's_3', { kind: 'law', origin: 'Second law for a reversible adiabatic expander' }),
+    ...(a.throttle ? [] : [eq('wx', 'Expander work', 'w_x', 'h_3 - h_4', { kind: 'law', origin: 'First law, adiabatic expander' })]),
+    eq('ql', 'Refrigerating effect', 'q_L', 'h_1 - h_4', { kind: 'law', origin: 'First law, evaporator' }),
+    eq('qh', 'Heat rejected', 'q_H', 'h_2 - h_3', { kind: 'law', origin: 'First law, condenser' }),
+    ...(a.single_stage
+      ? [eq('cop', 'Coefficient of performance', 'COP', a.throttle ? 'q_L/w_c' : 'q_L/(w_c - w_x)', { kind: 'definition', needs: ['single_stage'] })]
+      : [eq('tm', 'Cascade intermediate temperature', 'T_m', 'sqrt(T_e*T_k)', { kind: 'closure', origin: 'Equal temperature ratio per stage' }), eq('cop', 'Cascade coefficient of performance', 'COP', '1/(1/COP_lo + (1 + 1/COP_lo)/COP_hi)', { kind: 'derived', origin: 'Energy balance across the cascade heat exchanger' })]),
+    eq('carnot', 'Carnot limit', 'COP_C', 'T_e/(T_k - T_e)', { kind: 'law', origin: 'Second law of thermodynamics' }),
+    eq('m', 'Refrigerant flow', 'mdot', 'Q_L/q_L', { kind: 'derived' }),
+  ],
+  derivation: a => [
+    { text: 'The evaporator absorbs heat at T_e; the first law gives the refrigerating effect as the enthalpy rise of the refrigerant.', tex: 'q_L = h_1 - h_4' },
+    { text: 'The compressor raises the vapour from p_e to p_k. An ideal machine is isentropic; a real one needs more work in the ratio of its isentropic efficiency.', tex: 'w_c = \\frac{h_{2s}-h_1}{\\eta_c}' },
+    { text: a.throttle ? 'Throttling is adiabatic and does no work, so enthalpy is conserved; part of the liquid flashes and that part does no useful cooling.' : 'An isentropic expander recovers work from the liquid, lowering both the net work and the flash fraction.', tex: a.throttle ? 'h_4 = h_3' : 's_4 = s_3,\\quad w_x = h_3 - h_4' },
+    { text: 'The coefficient of performance is the ratio of heat removed to net work.', tex: '\\mathrm{COP} = \\frac{q_L}{w}' },
+    ...(a.single_stage ? [] : [{ text: 'In a cascade the low stage rejects q_L(1 + 1/COP_lo) to the high stage, which needs work in proportion.', tex: '\\mathrm{COP} = \\left[\\frac{1}{\\mathrm{COP}_{lo}} + \\frac{1 + 1/\\mathrm{COP}_{lo}}{\\mathrm{COP}_{hi}}\\right]^{-1}' }]),
+    { text: 'For a cyclic device exchanging heat only at T_L and T_H the Clausius inequality gives the Carnot bound.', tex: '\\frac{q_L}{T_L} - \\frac{q_H}{T_H} \\le 0 \;\\Rightarrow\; \\mathrm{COP} \\le \\frac{T_L}{T_H - T_L}' },
+  ],
+  solve(v, a) {
+    const F = a.r134a ? FM.r134a : FM.ammonia, etaC = a.real_comp ? v.eta_c : 1, ex = !a.throttle;
+    const one = vcCycle(F, v.T_e, v.T_k, etaC, ex);
+    const copOf = (Te, Tk) => {
+      if (a.single_stage) return vcCycle(F, Te, Tk, etaC, ex).cop;
+      const Tm = Math.sqrt(Te * Tk), lo = vcCycle(F, Te, Tm + v.dT_casc / 2, etaC, ex).cop, hi = vcCycle(F, Tm - v.dT_casc / 2, Tk, etaC, ex).cop;
+      return 1 / (1 / lo + (1 + 1 / lo) / hi);
+    };
+    const Tm = Math.sqrt(v.T_e * v.T_k);
+    const lo = a.single_stage ? one : vcCycle(F, v.T_e, Tm + v.dT_casc / 2, etaC, ex), hi = a.single_stage ? null : vcCycle(F, Tm - v.dT_casc / 2, v.T_k, etaC, ex);
+    const cop = copOf(v.T_e, v.T_k), copC = v.T_e / (v.T_k - v.T_e), W = v.Q_L / cop, mdot = v.Q_L / lo.qL;
+    const mHi = hi ? mdot * lo.qH / hi.qL : 0, QH = hi ? mHi * hi.qH : mdot * lo.qH;
+    const d = dome(F, v.T_e - 15, v.T_k + 20);
+    const path = (c, Te, Tk) => {
+      const des = c.st2.superheated ? N.linspace(c.st2.T, Tk, 8) : [Tk];
+      return { s: [c.s1, ...des.map((T, i) => (c.st2.superheated ? F.sv(T, c.pk) : c.st2.s)), c.s3, c.st4.s, c.s1], T: [Te, ...des, Tk, Te, Te] };
+    };
+    const p1 = path(lo, v.T_e, a.single_stage ? v.T_k : Tm + v.dT_casc / 2), p2 = hi ? path(hi, Tm - v.dT_casc / 2, v.T_k) : null;
+    const Tes = N.linspace(233.15, Math.min(283.15, v.T_k - 12), 40);
+    const warnings = [];
+    if (lo.pe < 101325) warnings.push(`The evaporating pressure (${lab(lo.pe / 1000, 'kPa')}) is below atmospheric: air and moisture can leak into the low side.`);
+    if (lo.st2.T > 393.15 || (hi && hi.st2.T > 393.15)) warnings.push('Compressor discharge temperature exceeds 120 °C: oil breakdown is likely. Consider two stages or a different refrigerant.');
+    if (v.T_k > 0.9 * F.Tcrit) warnings.push('The condensing temperature approaches the critical temperature; the simple property model is unreliable there.');
+    return {
+      scalars: [
+        scalar('p_e', 'Evaporating pressure', lo.pe, 'Pa', { show: 'bar' }), scalar('p_k', 'Condensing pressure', (hi || lo).pk, 'Pa', { show: 'bar' }),
+        scalar('r_p', a.single_stage ? 'Pressure ratio' : 'Pressure ratio of the low stage', lo.pk / lo.pe, '1'),
+        scalar('T_2', 'Compressor discharge temperature' + (a.single_stage ? '' : ' (high stage)'), (hi || lo).st2.T, 'K', { show: '°C' }),
+        scalar('x_4', 'Flash-gas fraction at evaporator inlet', lo.st4.x, '1', { show: '%' }),
+        scalar('q_L', 'Refrigerating effect', lo.qL, 'J/kg', { show: 'kJ/kg' }), scalar('w_c', 'Compressor specific work' + (a.single_stage ? '' : ' (low stage)'), lo.wc, 'J/kg', { show: 'kJ/kg' }),
+        scalar('COP', 'Coefficient of performance', cop, '1'), scalar('COP_C', 'Carnot coefficient of performance', copC, '1'), scalar('eta_II', 'Second-law efficiency COP/COP_Carnot', cop / copC, '1', { show: '%' }),
+        scalar('W', 'Net power input', W, 'W', { show: 'kW' }), scalar('Q_H', 'Heat rejected', QH, 'W', { show: 'kW' }), scalar('mdot', 'Refrigerant mass flow rate' + (a.single_stage ? '' : ' (low stage)'), mdot, 'kg/s'),
+        scalar('COP_hp', 'Heating COP if used as a heat pump', QH / W, '1'),
+      ],
+      series: [
+        line('cop-sweep', 'COP against evaporating temperature', 'Evaporating temperature', '°C', Tes.map(q => q - 273.15), [{ label: a.single_stage ? 'Cycle' : 'Cascade cycle', data: Tes.map(T => copOf(T, v.T_k)) }, { label: 'Carnot limit', data: Tes.map(T => T / (v.T_k - T)), dash: true }], 'COP', '–'),
+        line('ts', 'Temperature–entropy diagram', 'Specific entropy', 'kJ/(kg K)', d.s.map(q => q / 1000), [{ label: 'Saturation dome', data: d.T.map(q => q - 273.15), dash: true }], 'Temperature', '°C', { overlay: [{ label: a.single_stage ? 'Cycle 1–2–3–4' : 'Low stage', x: p1.s.map(q => q / 1000), y: p1.T.map(q => q - 273.15) }, ...(p2 ? [{ label: 'High stage', x: p2.s.map(q => q / 1000), y: p2.T.map(q => q - 273.15) }] : [])] }),
+      ],
+      checks: [
+        check('First law: heat rejected equals heat absorbed plus work', (QH - v.Q_L - W) / QH, 1e-10, 'Q_H = Q_L + W'),
+        check('Second law: COP does not exceed the Carnot COP', Math.max(cop - copC, 0), 0, `COP = ${lab(cop)} against COP_Carnot = ${lab(copC)}`),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const F = FM.r134a, T = 270, dT = 0.01, p = F.psat(T);
+    const near = vcCycle(F, 280, 280.5, 1, true);
+    return [
+      bench('Saturation slope vs the Clapeyron equation', (F.psat(T + dT) - F.psat(T - dT)) / (2 * dT), (F.hv(T) - F.hl(T, p)) / (T * (F.Rs * T / p - F.vl)), 'dp/dT = h_fg/[T (v_g − v_l)]', 1e-6),
+      bench('Reversible cycle COP over Carnot as the lift tends to zero', near.cop / (280 / 0.5), 1, 'Reversible limit with isentropic compressor and expander', 5e-3),
+      bench('Normal boiling point of the refrigerant model', F.psat(247.08), 101325, 'Reference state of the property model', 1e-10),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(220, 50, 200, 50, 'd-body')} ${S.text(320, 80, `condenser ${lab(v.T_k - 273.15, '°C')}`)}
+      ${S.rect(220, 250, 200, 50, 'd-body')} ${S.text(320, 280, `evaporator ${lab(v.T_e - 273.15, '°C')}`)}
+      ${S.circle(500, 175, 30)} ${S.text(500, 180, 'comp.')}
+      ${S.path('M120 160 L150 190 L120 190 L150 160 Z', 'd-body')} ${S.text(135, 215, a.throttle ? 'valve' : 'expander', 'd-text d-small')}
+      ${S.path('M420 275 L500 275 L500 205', 'd-pipe')} ${S.path('M500 145 L500 75 L420 75', 'd-pipe')} ${S.path('M220 75 L135 75 L135 160', 'd-pipe')} ${S.path('M135 190 L135 275 L220 275', 'd-pipe')}
+      ${S.text(515, 262, '1')} ${S.text(515, 96, '2')} ${S.text(120, 96, '3')} ${S.text(120, 262, '4')}
+      ${[0, 1, 2].map(i => S.arrow(270 + i * 50, 48, 270 + i * 50, 14, 'd-arrow d-heat')).join('')} ${S.text(450, 30, 'Q_H')}
+      ${[0, 1, 2].map(i => S.arrow(270 + i * 50, 340, 270 + i * 50, 304, 'd-arrow d-heat')).join('')} ${S.text(450, 330, 'Q_L')}
+      ${S.arrow(590, 175, 534, 175)} ${S.text(585, 162, 'W')}
+      ${S.text(320, 180, `${a.r134a ? 'R134a' : 'ammonia'}${a.single_stage ? '' : ', cascade'}`, 'd-text d-small')}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the cooling capacity, compressor power and state points of a refrigeration test rig and compare the COP with the cycle prediction and the Carnot limit.',
+    apparatus: ['Instrumented vapour-compression rig with electrically heated evaporator (calorimeter)', 'Water-cooled condenser with metered flow', 'Variable-speed compressor', 'Sight glasses before the expansion device'],
+    instruments: [{ name: 'Pressure transducers at suction and discharge', measures: 'Evaporating and condensing pressure', range: '0–30 bar', resolution: '±0.25 %' }, { name: 'Thermocouples or Pt100 at the four state points', measures: 'Refrigerant temperatures', range: '−50 to 150 °C', resolution: '±0.3 K' }, { name: 'Coriolis flow meter in the liquid line', measures: 'Refrigerant flow', range: '0–0.2 kg/s', resolution: '±0.2 %' }, { name: 'Power analyser', measures: 'Compressor electrical input', range: '0–10 kW', resolution: '±0.5 %' }],
+    procedure: ['Run to steady state at a set evaporating and condensing pressure.', 'Record pressures, temperatures, flow, evaporator heater power and compressor power.', 'Compute the COP from the heater power and compressor shaft power; cross-check with the refrigerant-side enthalpy balance.', 'Repeat over a range of evaporating temperatures.'],
+    controls: ['Condenser-side heat balance as an independent check of Q_L + W', 'Check for liquid at the valve inlet through the sight glass'],
+    signatures: ['COP falling as the temperature lift increases', 'COP below T_L/(T_H − T_L) at every point', 'Discharge temperature rising with pressure ratio'],
+    safety: ['Refrigerant release: ventilation and leak detection', 'Ammonia is toxic and mildly flammable: gas detection and emergency ventilation', 'High-pressure cut-out and relief valve on the high side'],
+  },
+  falsify: ['A measured COP above the Carnot value for the measured evaporating and condensing temperatures.', 'Heat rejected not equal to heat absorbed plus work within the measurement uncertainty.'],
+  alternatives: [{ name: 'Absorption refrigeration', text: 'Uses heat instead of shaft work to drive the cycle, with a lower COP based on heat input.' }, { name: 'Transcritical CO₂ cycle', text: 'Heat rejection takes place above the critical pressure in a gas cooler; the COP then depends on an optimum high-side pressure.' }, { name: 'Two-stage compression with flash intercooling', text: 'A single refrigerant with an economiser between stages; simpler than a cascade when one fluid spans the whole lift.' }],
+  hazards: [{ hazard: 'Refrigerant release', cause: 'Leak or relief-valve discharge', mitigation: 'Leak detection, ventilation, charge limits' }, { hazard: 'Liquid slugging of the compressor', cause: 'Wet suction', mitigation: 'Suction superheat control, accumulator' }, { hazard: 'Overpressure on standstill', cause: 'High ambient temperature with trapped liquid', mitigation: 'Relief devices on every isolable section' }],
+  standards: ['EN 378 (refrigerating systems and heat pumps — safety and environmental requirements)', 'ISO 5149 (refrigerating systems and heat pumps — safety and environmental requirements)', 'ASHRAE Standard 15 (safety standard for refrigeration systems)', 'ISO 817 (refrigerants — designation and safety classification)'],
+  limits: 'Saturated suction and saturated liquid at the condenser outlet, no pressure drops. The property model assumes ideal-gas vapour and constant specific heats; expect errors of several per cent in COP and larger errors near the critical temperature.',
+  numerics: { method: 'Closed-form state-point evaluation; fixed-point iteration for the saturation pressure' },
+  optimise: { objective: 'COP', sense: 'max', vars: ['T_e', 'T_k'], note: 'COP is highest at the smallest lift; the practical limits are the required cold-space temperature and the available heat sink.' },
+  inverse: { series: 'cop-sweep', curve: 0, fit: ['eta_c'] },
+  extensions: ['Suction superheat and liquid subcooling', 'Liquid–suction heat exchanger', 'Real-fluid properties from a reference equation of state', 'Compressor volumetric efficiency and displacement sizing'],
+};
+
+// ------------------------------------------------------------------ compressed-air vehicle
+const AIR = { Rs: 287.05, gamma: 1.4, cp: 1004.7, cv: 717.6, M: 0.0289647, vdwA: 0.1358, vdwB: 3.64e-5 };
+/** Maximum useful work of a tank of gas at ambient temperature discharging to the atmosphere (its exergy). */
+const tankExergy = (p, p0, V) => p * V * Math.log(p / p0) - (p - p0) * V;
+/** Shaft work when tank and expander are both adiabatic and reversible: every parcel leaves at T_0 (p_0/p)^κ. */
+function tankAdiabaticWork(p, p0, V, T0, m) {
+  const kap = (AIR.gamma - 1) / AIR.gamma, Te = T0 * Math.pow(p0 / p, kap);
+  return { W: m * AIR.cv * (T0 - Te) - m * AIR.Rs * Te + p0 * V, Te };
+}
+/** Stored mass from the van der Waals equation for air. */
+function vdwMass(p, T, V) {
+  const f = vm => (p + AIR.vdwA / (vm * vm)) * (vm - AIR.vdwB) - C.R_u * T;
+  const vm = N.findRoot(f, AIR.vdwB * (1 + 1e-9), 10 * C.R_u * T / p + 2 * AIR.vdwB, 1e-13);
+  return V / vm * AIR.M;
+}
+
+const airCar = {
+  id: 'compressed-air-vehicle',
+  title: 'Vehicle driven by stored compressed air',
+  module: [1, 2], klass: ['I', 'II'], domains: ['mechanical', 'thermal'],
+  keywords: ['compressed air vehicle', 'compressed air car', 'air car', 'air powered', 'air-powered', 'pneumatic vehicle', 'compressed air', 'air engine', 'air tank', 'self-recharging', 'recompress', 'runs on air', 'pneumatic motor', 'range', 'top speed'],
+  summary: 'Stored energy, range and top speed of a vehicle whose only on-board energy store is a tank of compressed air, with a thermodynamic audit of the claim that it can recharge itself while driving.',
+  background: [
+    'A compressed-air vehicle carries a pressure vessel charged by an external compressor and expands the air through a piston or vane motor. The most work a tank at ambient temperature can deliver is its exergy, p V ln(p/p₀) − (p − p₀) V, obtained only if the expansion is slow enough to stay isothermal. In a fast, adiabatic expansion the air cools steeply, delivers much less work and can ice the motor.',
+    'Ambient air is the working fluid of such a vehicle, not its energy source. Air at atmospheric pressure and temperature is in equilibrium with the surroundings and has zero exergy: no work can be extracted from it. During an isothermal expansion the motor does draw heat from the surroundings, but only as much as the compressor rejected when the tank was filled; the work originates in the compressor’s energy supply.',
+    'It follows that a vehicle which recompresses its own air while driving cannot sustain itself. Each joule of work taken from the tank returns less than a joule of stored exergy after expander and compressor losses, and even with ideal machines the return is exactly one joule with nothing left to overcome drag and rolling resistance. The first law forbids a net gain; the second law guarantees a net loss.',
+  ],
+  phenomena: ['Isothermal and adiabatic gas expansion', 'Cooling on expansion', 'Aerodynamic drag', 'Rolling resistance', 'Irreversibility of compression and expansion'],
+  laws: ['energy', 'second', 'ideal_gas', 'newton2'],
+  refs: ['Moran, M. J., Shapiro, H. N., Boettner, D. D. & Bailey, M. B. (2014). Fundamentals of Engineering Thermodynamics, 8th ed., Wiley.', 'Creutzig, F., Papson, A., Schipper, L. & Kammen, D. M. (2009). Economic and environmental evaluation of compressed-air cars. Environmental Research Letters 4, 044011.', 'Bossel, U. (2005). Thermodynamic analysis of compressed air vehicle propulsion. European Fuel Cell Forum report.', 'MacKay, D. J. C. (2009). Sustainable Energy — Without the Hot Air. UIT Cambridge.', 'Gillespie, T. D. (1992). Fundamentals of Vehicle Dynamics. SAE International.'],
+  inputs: [
+    inp('V_tank', 'Tank volume', 'L', 300, { min: 50, max: 2000, kind: 'geometry', aliases: ['tank volume', 'tank', 'litre', 'litres'] }),
+    inp('p_tank', 'Tank pressure when full', 'bar', 300, { min: 20, max: 450, aliases: ['tank pressure', 'storage pressure', 'pressure'] }),
+    inp('p_0', 'Atmospheric pressure', 'bar', 1.01325, { min: 0.6, max: 1.1, kind: 'environment', env: 'air_pressure', aliases: ['atmospheric pressure', 'ambient pressure'] }),
+    inp('T_0', 'Ambient temperature', '°C', 20, { min: -30, max: 50, kind: 'environment', env: 'air_temp', aliases: ['ambient temperature', 'air temperature'] }),
+    inp('rho_air', 'Ambient air density', 'kg/m^3', 1.2, { min: 0.7, max: 1.5, kind: 'environment', env: 'air_density', aliases: ['air density'] }),
+    inp('eta_exp', 'Expander efficiency, tank exergy to wheels', '1', 0.55, { min: 0.1, max: 0.95, aliases: ['expander efficiency', 'motor efficiency', 'engine efficiency'], src: 'Typical of piston air motors including drivetrain; Creutzig et al. (2009)' }),
+    inp('eta_comp', 'Compressor efficiency, work to stored exergy', '1', 0.6, { min: 0.2, max: 0.95, aliases: ['compressor efficiency', 'compression efficiency'], src: 'Multi-stage intercooled compressor to 300 bar, typical 50–65 %' }),
+    inp('m_veh', 'Vehicle mass including occupants', 'kg', 900, { min: 200, max: 3000, kind: 'geometry', aliases: ['mass', 'weight', 'vehicle mass'] }),
+    inp('CdA', 'Drag area C_d·A', 'm^2', 0.6, { min: 0.2, max: 2, kind: 'geometry', aliases: ['drag area', 'cda'] }),
+    inp('C_rr', 'Rolling-resistance coefficient', '1', 0.01, { min: 0.004, max: 0.03, aliases: ['rolling resistance'] }),
+    inp('v_c', 'Cruise speed', 'kph', 60, { min: 10, max: 150, aliases: ['cruise speed', 'speed', 'cruising'] }),
+    inp('P_max', 'Rated motor power at the wheels', 'kW', 25, { min: 2, max: 200, aliases: ['motor power', 'rated power', 'engine power'] }),
+    inp('phi', 'Fraction of wheel power diverted to an on-board compressor (self-recharging case)', '1', 0.3, { min: 0, max: 0.95, aliases: ['recompression fraction'] }),
+  ],
+  assumptions: [
+    asm('isothermal', 'Expansion is isothermal: heat exchangers keep the air at ambient temperature.', { why: 'Upper bound on work; approached with multi-stage expansion and reheating', alt: 'Tank and expander are adiabatic: the air cools as it expands and delivers less work.' }),
+    asm('ideal_gas', 'Air in the tank is an ideal gas.', { why: 'Simple and adequate below about 100 bar', alt: 'Stored mass comes from the van der Waals equation; stored work is scaled in proportion to mass.' }),
+    asm('external_recharge', 'The tank is recharged only from an external compressor while the vehicle is stationary.', { why: 'The only arrangement that works', alt: 'An on-board compressor driven from the wheels recompresses air while driving (the self-recharging claim).' }),
+    asm('steady_cruise', 'Range is evaluated at constant speed on a level road.', { why: 'Standard comparison basis', alt: 'A stop every 500 m with no energy recovery adds the kinetic energy lost in each stop.' }),
+  ],
+  symbols: { X: ['Tank exergy (maximum work)', 'J'], W_gas: ['Gross isothermal expansion work', 'J'], W_ad: ['Adiabatic expansion work', 'J'], m_air: ['Mass of stored air', 'kg'], R_s: ['Specific gas constant of air', 'J/(kg K)'], c_v: ['Specific heat of air at constant volume', 'J/(kg K)'], T_e: ['Exhaust temperature after adiabatic expansion', 'K'], E_w: ['Work delivered at the wheels', 'J'], F_r: ['Road load', 'N'], R_range: ['Range', 'm'], v_top: ['Top speed', 'm/s'], E_in: ['External energy to recharge', 'J'], W_loop: ['Net work of an expand–recompress loop', 'J'], d_stop: ['Distance between stops', 'm'], Z: ['Compressibility factor', '1'] },
+  equations: a => [
+    eq('mass', 'Stored mass', 'm_air', a.ideal_gas ? 'p_tank*V_tank/(R_s*T_0)' : 'p_tank*V_tank/(Z*R_s*T_0)', { kind: 'closure', origin: a.ideal_gas ? 'Ideal-gas equation of state' : 'van der Waals equation of state, expressed through Z', needs: a.ideal_gas ? ['ideal_gas'] : [] }),
+    eq('gross', 'Gross isothermal expansion work', 'W_gas', 'p_tank*V_tank*ln(p_tank/p_0)', { kind: 'derived', origin: 'Integral of p dV at constant temperature' }),
+    eq('exergy', 'Tank exergy', 'X', 'p_tank*V_tank*ln(p_tank/p_0) - (p_tank - p_0)*V_tank', { kind: 'law', origin: 'First and second laws: maximum work relative to the atmosphere' }),
+    ...(a.isothermal ? [eq('ew', 'Work at the wheels', 'E_w', 'eta_exp*X', { kind: 'definition', needs: ['isothermal'] })] : [
+      eq('te', 'Adiabatic exhaust temperature', 'T_e', 'T_0*(p_0/p_tank)^0.2857', { kind: 'law', origin: 'Isentropic relation for air, (γ − 1)/γ = 0.2857' }),
+      eq('wad', 'Adiabatic expansion work', 'W_ad', 'm_air*c_v*(T_0 - T_e) - m_air*R_s*T_e + p_0*V_tank', { kind: 'law', origin: 'First law for the tank contents expanding to atmospheric pressure' }),
+      eq('ew', 'Work at the wheels', 'E_w', 'eta_exp*W_ad', { kind: 'definition' })]),
+    eq('road', 'Road load', 'F_r', a.steady_cruise ? '0.5*rho_air*CdA*v_c^2 + C_rr*m_veh*g' : '0.5*rho_air*CdA*v_c^2 + C_rr*m_veh*g + 0.5*m_veh*v_c^2/d_stop', { kind: 'law', origin: 'Force balance at constant speed' + (a.steady_cruise ? '' : ' plus kinetic energy dissipated per stop'), needs: a.steady_cruise ? ['steady_cruise'] : [] }),
+    eq('range', 'Range', 'R_range', a.external_recharge ? 'E_w/F_r' : '(1 - phi)*E_w/(F_r*(1 - eta_exp*eta_comp*phi))', { kind: 'derived', origin: a.external_recharge ? 'Work equals force times distance' : 'Energy balance with a fraction of wheel work returned to the tank through the compressor' }),
+    eq('top', 'Top speed', 'P_max', '(0.5*rho_air*CdA*v_top^2 + C_rr*m_veh*g)*v_top', { kind: 'law', origin: 'Power balance at the wheels' }),
+    eq('ein', 'External recharge energy', 'E_in', 'X/eta_comp', { kind: 'definition' }),
+    eq('loop', 'Net work of an expand–recompress loop', 'W_loop', 'eta_exp*X - X/eta_comp', { kind: 'law', origin: 'First and second laws applied to the closed loop' }),
+  ],
+  derivation: a => [
+    { text: 'Let the tank bleed down slowly at ambient temperature while each parcel expands isothermally from the current tank pressure to atmospheric pressure. Summing the parcel work gives the exergy of the tank.', tex: 'X = V\\!\\int_{p_0}^{p}\\ln\\frac{p\'}{p_0}\\,\\mathrm{d}p\' = pV\\ln\\frac{p}{p_0} - (p-p_0)V' },
+    { text: 'The first term is the work done by the gas; the second is the part spent pushing back the atmosphere, which is not available at the shaft.', tex: 'W_{gas} = pV\\ln\\frac{p}{p_0}' },
+    ...(a.isothermal ? [] : [{ text: 'If no heat enters, every parcel expands isentropically and leaves at T_e. An energy balance on the original tank contents gives the shaft work.', tex: 'T_e = T_0\\left(\\frac{p_0}{p}\\right)^{(\\gamma-1)/\\gamma},\\qquad W_{ad} = m c_v (T_0 - T_e) - m R T_e + p_0 V' }]),
+    { text: 'At constant speed the motor works against aerodynamic drag and rolling resistance; the range is the wheel work divided by that force.', tex: 'F_r = \\tfrac12\\rho\\,C_dA\\,v^2 + C_{rr}\\,m g,\\qquad R = \\frac{\\eta_{exp} X}{F_r}' },
+    { text: 'Now close the loop. Expanding the tank yields η_exp X at the shaft; restoring the tank needs X/η_comp. The net work of the loop is never positive, and is strictly negative for real machines.', tex: 'W_{loop} = X\\left(\\eta_{exp} - \\frac{1}{\\eta_{comp}}\\right) \\le 0' },
+    { text: 'If a fraction φ of the wheel work drives an on-board compressor, the range becomes shorter, not longer, because η_exp η_comp < 1.', tex: 'R(\\varphi) = \\frac{(1-\\varphi)\\,\\eta_{exp}X}{F_r\\,(1-\\eta_{exp}\\eta_{comp}\\varphi)} \\le R(0)' },
+  ],
+  solve(v, a) {
+    const mIdeal = v.p_tank * v.V_tank / (AIR.Rs * v.T_0), m = a.ideal_gas ? mIdeal : vdwMass(v.p_tank, v.T_0, v.V_tank), Z = mIdeal / m;
+    const scale = m / mIdeal, X = tankExergy(v.p_tank, v.p_0, v.V_tank) * scale, Wgas = v.p_tank * v.V_tank * Math.log(v.p_tank / v.p_0) * scale;
+    const ad = tankAdiabaticWork(v.p_tank, v.p_0, v.V_tank, v.T_0, mIdeal), Wad = ad.W * scale;
+    const Wavail = a.isothermal ? X : Wad, Ew = v.eta_exp * Wavail;
+    const dStop = 500, road = u => 0.5 * v.rho_air * v.CdA * u * u + v.C_rr * v.m_veh * g + (a.steady_cruise ? 0 : 0.5 * v.m_veh * u * u / dStop);
+    const loopGain = v.eta_exp * v.eta_comp, self = a.external_recharge ? 1 : (1 - v.phi) / (1 - loopGain * v.phi);
+    const Fr = road(v.v_c), range = self * Ew / Fr, range0 = Ew / Fr, Pc = Fr * v.v_c;
+    const vTop = N.findRoot(u => (0.5 * v.rho_air * v.CdA * u * u + v.C_rr * v.m_veh * g) * u - v.P_max, 0, 400, 1e-12);
+    const Ein = X / v.eta_comp, Wloop = v.eta_exp * X - X / v.eta_comp;
+    const us = N.linspace(10 / 3.6, 150 / 3.6, 50);
+    // adiabatic blow-down history against fraction of mass discharged
+    const fr = N.linspace(0, 1 - Math.pow(v.p_0 / v.p_tank, 1 / AIR.gamma), 60);
+    const pT = fr.map(q => v.p_tank * Math.pow(1 - q, AIR.gamma)), TT = fr.map(q => v.T_0 * Math.pow(1 - q, AIR.gamma - 1));
+    const warnings = [];
+    if (!a.isothermal && ad.Te < 150) warnings.push(`Fully adiabatic expansion would chill the exhaust to ${lab(ad.Te - 273.15, '°C')}, below the temperature at which air liquefies and far below the frost point. Real motors must reheat the air between stages; the adiabatic figure is a lower bound on work, not an operating condition.`);
+    if (!a.external_recharge) warnings.push(`On-board recompression shortens the range from ${lab(range0 / 1000, 'km')} to ${lab(range / 1000, 'km')}. Each joule taken from the tank returns only ${lab(loopGain, 'J', 2)} of stored exergy; the vehicle cannot keep moving indefinitely.`);
+    if (a.ideal_gas && v.p_tank > 1.5e7) warnings.push('Above about 150 bar air departs from ideal-gas behaviour by several per cent; switch off the ideal-gas assumption to see the effect on stored mass.');
+    if (Pc > v.P_max) warnings.push('The cruise speed needs more power than the motor rating; the vehicle cannot hold this speed.');
+    return {
+      scalars: [
+        scalar('m_air', 'Mass of stored air', m, 'kg'), scalar('Z', 'Compressibility factor in the tank', Z, '1'),
+        scalar('W_gas', 'Gross isothermal expansion work p V ln(p/p₀)', Wgas, 'J', { show: 'kWh' }), scalar('X', 'Tank exergy (maximum shaft work)', X, 'J', { show: 'kWh' }),
+        scalar('W_ad', 'Adiabatic expansion work', Wad, 'J', { show: 'kWh' }), scalar('e_m', 'Exergy per kilogram of air', X / m, 'J/kg', { show: 'Wh/kg' }),
+        scalar('E_w', 'Work delivered at the wheels', Ew, 'J', { show: 'kWh' }), scalar('F_r', 'Road load at cruise', Fr, 'N'), scalar('P_c', 'Wheel power at cruise', Pc, 'W', { show: 'kW' }),
+        scalar('R_range', 'Range at cruise speed', range, 'm', { show: 'km' }), scalar('t_run', 'Running time at cruise speed', range / v.v_c, 's', { show: 'min' }),
+        scalar('v_top', 'Top speed on the level', vTop, 'm/s', { show: 'kph' }),
+        scalar('T_e', 'Exhaust temperature', a.isothermal ? v.T_0 : ad.Te, 'K', { show: '°C' }), scalar('T_tank', 'Tank temperature when empty', a.isothermal ? v.T_0 : ad.Te, 'K', { show: '°C' }),
+        scalar('Q_amb', 'Heat drawn from the surroundings during expansion', a.isothermal ? Wgas : 0, 'J', { show: 'kWh', note: 'Equal to the heat rejected by an ideal isothermal compressor when the tank was filled' }),
+        scalar('E_in', 'Energy that must be supplied externally to recharge', Ein, 'J', { show: 'kWh' }), scalar('eta_rt', 'Round-trip efficiency, recharge energy to wheels', Ew / Ein, '1', { show: '%' }),
+        scalar('W_loop', 'Net work of one expand–recompress loop', Wloop, 'J', { show: 'kWh' }), scalar('W_short', 'Shortfall of the self-recharging loop', -Wloop, 'J', { show: 'kWh' }),
+        scalar('g_loop', 'Exergy returned per joule extracted (loop gain)', loopGain, '1'),
+      ],
+      series: [
+        line('range-speed', 'Range against cruise speed', 'Speed', 'km/h', us.map(u => u * 3.6), [{ label: 'Isothermal expansion', data: us.map(u => self * v.eta_exp * X / road(u) / 1000) }, { label: 'Adiabatic expansion', data: us.map(u => self * v.eta_exp * Wad / road(u) / 1000), dash: true }], 'Range', 'km'),
+        line('power-speed', 'Power required against speed', 'Speed', 'km/h', us.map(u => u * 3.6), [{ label: 'Road-load power', data: us.map(u => road(u) * u / 1000) }, { label: 'Rated motor power', data: us.map(() => v.P_max / 1000), dash: true }], 'Power', 'kW'),
+        line('blowdown', 'Adiabatic tank blow-down', 'Fraction of air discharged', '–', fr, [{ label: 'Tank pressure (bar)', data: pT.map(q => q / 1e5) }, { label: 'Tank temperature (K)', data: TT }], 'Pressure, temperature', 'bar, K'),
+        line('self', 'Range against the fraction of wheel power sent to an on-board compressor', 'Diverted fraction', '–', N.linspace(0, 0.95, 40), [{ label: 'Range', data: N.linspace(0, 0.95, 40).map(f => (1 - f) / (1 - loopGain * f) * range0 / 1000) }], 'Range', 'km'),
+      ],
+      checks: [
+        check('First and second law: closed expand–recompress loop yields no net work', Math.max(Wloop, 0), 0, `Net work of the loop is ${lab(Wloop / 3.6e6, 'kWh')}; the shortfall must come from outside`),
+        check('Wheel work does not exceed tank exergy', Math.max(Ew - X, 0), 0, 'η_exp ≤ 1 and adiabatic work ≤ isothermal exergy'),
+        check('Adiabatic work below isothermal exergy', Math.max(Wad - X, 0), 0, 'Without heat from the surroundings less work is available'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const n = 4000, ps = N.linspace(v.p_0, v.p_tank, n), kap = (AIR.gamma - 1) / AIR.gamma;
+    const numIso = v.V_tank * N.trapz(ps, ps.map(q => Math.log(q / v.p_0)));
+    const m0 = v.p_tank * v.V_tank / (AIR.Rs * v.T_0);
+    // parcel-by-parcel adiabatic work: dm leaves at tank state (p_t, T_t) and expands isentropically to p_0
+    const numAd = N.trapz(ps, ps.map(q => { const Tt = v.T_0 * Math.pow(q / v.p_tank, kap), dmdp = m0 / (AIR.gamma * v.p_tank) * Math.pow(q / v.p_tank, 1 / AIR.gamma - 1); return AIR.cp * Tt * (1 - Math.pow(v.p_0 / q, kap)) * dmdp; }));
+    const r = this.solve(v, { ...a, ideal_gas: true }), vt = val(r, 'v_top');
+    return [
+      bench('Tank exergy vs numerical integration of parcel work', tankExergy(v.p_tank, v.p_0, v.V_tank), numIso, 'X = V∫ln(p/p₀)dp', 1e-5),
+      bench('Adiabatic work vs parcel-by-parcel integration', tankAdiabaticWork(v.p_tank, v.p_0, v.V_tank, v.T_0, m0).W, numAd, 'First law for an isentropic blow-down', 1e-4),
+      bench('Top speed satisfies the power balance', (0.5 * v.rho_air * v.CdA * vt * vt + v.C_rr * v.m_veh * g) * vt, v.P_max, 'P = F v', 1e-9),
+      bench('Exergy of 300 L at 300 bar', tankExergy(3e7, 101325, 0.3) / 3.6e6, 11.73, 'Hand calculation: pV[ln(p/p₀) − 1 + p₀/p]', 2e-3),
+    ];
+  },
+  validation: [],
+  logicPreset: {
+    atoms: [{ k: 'E', text: 'The vehicle draws no energy from outside' }, { k: 'L', text: 'Compression and expansion involve losses' }, { k: 'R', text: 'The vehicle recompresses its own air while driving' }, { k: 'M', text: 'The vehicle keeps moving indefinitely' }],
+    premises: ['E & R & L -> ~M', 'E', 'R', 'L'],
+    conclusion: '~M',
+  },
+  diagram(v, a) {
+    return svg(`
+      ${S.path('M90 230 L120 170 L250 150 L330 110 L470 110 L530 170 L570 180 L570 230 Z', 'd-body')}
+      ${S.circle(180, 235, 30)} ${S.circle(480, 235, 30)} ${S.path('M40 266 L600 266', 'd-ground')}
+      ${S.rect(250, 165, 150, 44, 'd-liquid', 20)} ${S.text(325, 192, `${lab(v.V_tank * 1000, 'L')}, ${lab(v.p_tank / 1e5, 'bar')}`, 'd-text d-small')}
+      ${S.rect(430, 165, 60, 40, 'd-body')} ${S.text(460, 190, 'motor', 'd-text d-small')} ${S.path('M400 187 L430 187', 'd-pipe')}
+      ${S.arrow(492, 180, 560, 150)} ${S.text(585, 140, 'exhaust', 'd-text d-small')}
+      ${a.isothermal ? S.arrow(460, 90, 460, 160, 'd-arrow d-heat') + S.text(520, 84, 'heat from surroundings', 'd-text d-small') : ''}
+      ${a.external_recharge ? S.arrow(170, 60, 255, 160) + S.text(160, 50, 'external compressor (stationary)', 'd-text d-small') : S.path('M460 205 Q400 250 325 212', 'd-line d-hazard') + S.text(390, 256, 'on-board recompression', 'd-text d-small')}
+      ${S.arrow(88, 200, 30, 200)} ${S.text(46, 190, 'drag', 'd-text d-small')}
+      ${S.arrow(250, 310, 330, 310)} ${S.text(290, 300, `v = ${lab(v.v_c * 3.6, 'km/h')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the shaft work delivered by a compressed-air motor from a tank of known charge, the electrical energy used to recharge it, and hence the round-trip efficiency.',
+    apparatus: ['Pressure vessel with regulator and air motor on a dynamometer', 'Multi-stage compressor with an electricity meter', 'Optional heat exchanger between regulator and motor'],
+    instruments: [{ name: 'Tank pressure transducer and thermocouple', measures: 'Tank state during blow-down', range: '0–350 bar, −80 to 60 °C', resolution: '±0.25 %, ±1 K' }, { name: 'Dynamometer (torque and speed)', measures: 'Shaft power, integrated to work', range: '0–30 kW', resolution: '±0.5 %' }, { name: 'Thermal mass flow meter on the exhaust', measures: 'Air consumption', range: '0–0.2 kg/s', resolution: '±1 %' }, { name: 'Energy meter on the compressor supply', measures: 'Recharge energy', range: '0–50 kWh', resolution: '±1 %' }],
+    procedure: ['Charge the tank, let it return to ambient temperature and record pressure.', 'Run the motor at constant load until the tank reaches regulator pressure, logging torque, speed, pressures and temperatures.', 'Integrate shaft power to obtain work; compare with the exergy of the charge.', 'Recharge to the starting pressure and record the electricity used.', 'Repeat with a driven compressor coupled to the motor shaft to demonstrate that the tank pressure still falls.'],
+    controls: ['Leak-down test with the motor isolated', 'Repeat at a second discharge rate to separate thermal effects from mechanical losses'],
+    signatures: ['Shaft work always below p V ln(p/p₀) − (p − p₀) V', 'Exhaust and tank temperatures falling during fast discharge', 'Recharge energy several times the shaft work recovered', 'Tank pressure falling monotonically even with on-board recompression'],
+    safety: ['Pressure vessel and fittings rated and inspected for the working pressure; burst energy of a 300 bar tank is comparable to several hundred grams of high explosive', 'Whip restraints on hoses', 'Hearing protection for exhaust noise', 'Cold burns from exhaust and frosted components'],
+  },
+  falsify: ['Shaft work from a tank blow-down exceeding the tank exergy computed from its initial state.', 'A vehicle whose tank pressure does not fall over a closed driving circuit with no external energy input.'],
+  alternatives: [{ name: 'Polytropic expansion with index 1 < n < γ', text: 'Real motors lie between the isothermal and adiabatic limits; multi-stage expansion with inter-stage reheating approaches the isothermal value.' }, { name: 'Hybrid with fuel-fired air heating', text: 'Burning fuel to heat the air before expansion raises the work per kilogram, but the vehicle is then partly fuel-powered.' }, { name: 'Battery-electric storage', text: 'Stores roughly ten times more energy per unit mass and returns 70–90 % of the charging energy to the wheels.' }],
+  hazards: [{ hazard: 'Tank rupture', cause: 'Impact, fatigue or overfilling', mitigation: 'Composite vessels designed to leak before burst, relief devices, periodic inspection' }, { hazard: 'Icing of motor and valves', cause: 'Expansion cooling with humid air', mitigation: 'Dry the charge air; reheat between stages' }, { hazard: 'Noise', cause: 'High-velocity exhaust', mitigation: 'Silencers' }],
+  standards: ['ISO 11439 (high-pressure cylinders for on-board storage of natural gas — analogous vessel requirements)', 'UN ECE Regulation No. 110 (compressed-gas vehicle components)', 'EN 12245 (transportable gas cylinders — fully wrapped composite cylinders)', 'ISO 8573-1 (compressed-air purity classes)'],
+  limits: 'Quasi-steady cruise on a level road. Tank at ambient temperature when full. The isothermal and adiabatic cases bound real behaviour. The van der Waals correction is qualitative above 300 bar.',
+  numerics: { method: 'Closed-form energy relations; bracketed root-finding for top speed and van der Waals molar volume' },
+  optimise: { objective: 'R_range', sense: 'max', vars: ['v_c', 'p_tank'], note: 'Range rises with tank pressure and falls with speed squared once drag dominates.' },
+  inverse: { series: 'range-speed', curve: 0, fit: ['eta_exp', 'CdA'] },
+  extensions: ['Multi-stage expansion with inter-stage heat exchange', 'Regulator throttling loss between tank and motor', 'Driving-cycle simulation with regenerative braking into the tank', 'Life-cycle comparison with battery-electric vehicles'],
+};
+
+// ------------------------------------------------------------------ perpetual-motion / free-energy claim tester
+const VERDICTS = ['Consistent with the first and second laws', 'Violates the second law (exceeds the Carnot limit or needs a single-reservoir engine)', 'Violates the first law (creates energy)', 'Admissible only in the counterfactual world with a relaxed second law'];
+
+const freeEnergy = {
+  id: 'self-powered-cycle-claim',
+  title: 'Test of a self-powered or over-unity device claim',
+  module: 1, klass: ['II', 'III'], domains: ['thermal', 'logic'], hypothetical: true,
+  keywords: ['perpetual motion', 'free energy', 'over-unity', 'overunity', 'self-powered', 'self powered', 'self-sustaining', 'more energy out than in', 'runs forever', 'zero-point', 'carnot limit', 'second law violation', 'energy from nothing', 'perpetuum mobile'],
+  summary: 'Audits a claimed input and output power against conservation of energy and the Carnot limit, and reports the entropy that would have to be destroyed and the hidden input that would reconcile the claim.',
+  background: [
+    'Claims of “free energy” fall into two classes. A perpetual-motion machine of the first kind delivers more energy than it receives and so contradicts conservation of energy. A machine of the second kind conserves energy but converts heat into work more completely than the Carnot limit allows — in the extreme case drawing work from a single reservoir such as the atmosphere or the sea — and so contradicts the second law.',
+    'Both laws are among the most thoroughly tested in physics. Conservation of energy follows, by Noether’s theorem, from the invariance of physical law under translation in time. The second law is statistical: a macroscopic violation would require an overwhelmingly improbable fluctuation. No reproducible exception to either has been observed.',
+    'When a device appears to exceed these limits, experience shows that the explanation is an unmeasured input (mains pick-up, a concealed battery, a draining internal store, ambient heat counted as “free”), or a measurement error such as confusing apparent with real electrical power. This model quantifies how large such a hidden input must be.',
+    'A counterfactual input lets the Carnot bound be multiplied by a “violation factor”. With any value other than one the model describes a world whose physics differs from ours; results are then conditional on that invented premise and are labelled as such.',
+  ],
+  phenomena: ['Energy conservation', 'Heat-to-work conversion', 'Entropy generation', 'Depletion of an internal energy store'],
+  laws: ['energy', 'second', 'noether', 'logic_nc'],
+  refs: ['Carnot, S. (1824). Réflexions sur la puissance motrice du feu. Bachelier, Paris.', 'Clausius, R. (1865). Über verschiedene für die Anwendung bequeme Formen der Hauptgleichungen der mechanischen Wärmetheorie. Annalen der Physik 125, 353–400.', 'Planck, M. (1903). Treatise on Thermodynamics. Longmans, Green & Co.', 'Ord-Hume, A. W. J. G. (1977). Perpetual Motion: The History of an Obsession. George Allen & Unwin.', 'Noether, E. (1918). Invariante Variationsprobleme. Nachrichten von der Gesellschaft der Wissenschaften zu Göttingen, 235–257.'],
+  inputs: [
+    inp('P_in', 'Claimed input power', 'W', 100, { min: 1, max: 1e6, aliases: ['input power', 'power in', 'consumes', 'draws'] }),
+    inp('P_out', 'Claimed output power', 'W', 300, { min: 1, max: 1e6, aliases: ['output power', 'power out', 'produces', 'delivers', 'generates'] }),
+    inp('T_h', 'Heat-source temperature', '°C', 80, { min: 30, max: 2000, aliases: ['source temperature', 'hot temperature', 'hot side'] }),
+    inp('T_c', 'Heat-sink (ambient) temperature', '°C', 20, { min: -50, max: 29, kind: 'environment', env: 'air_temp', aliases: ['sink temperature', 'cold temperature', 'ambient temperature', 'cold side'] }),
+    inp('E_store', 'Energy of any internal store (battery, flywheel, spring, gas)', 'kJ', 500, { min: 1, max: 1e6, aliases: ['battery', 'internal store', 'stored energy', 'flywheel'] }),
+    inp('f_viol', 'Second-law violation factor (multiplies the Carnot limit; 1 in our world)', '1', 1, { min: 1, max: 10, kind: 'hypothetical', aliases: ['violation factor'], src: 'Counterfactual parameter with no physical basis; any value other than 1 describes an invented world' }),
+  ],
+  assumptions: [
+    asm('heat_input', 'The claimed input is heat taken from the source at T_h.', { why: 'Typical of “ambient heat” and low-grade-heat engine claims', alt: 'The claimed input is work (electrical or mechanical); only the first-law limit of 100 % applies.' }),
+    asm('closed', 'No energy other than the declared input crosses the boundary of the device.', { why: 'The claim as usually stated', alt: 'The shortfall is drawn as heat from the ambient at T_c, satisfying the first law but making the device a single-reservoir engine.' }),
+    asm('steady', 'The device operates steadily with no internal store being run down.', { why: 'Required for a genuine continuous source', alt: 'An internal store supplies the shortfall, and the device stops when it is exhausted.' }),
+    asm('measured_true', 'The claimed powers are true time-averaged real powers.', { why: 'Takes the claim at face value', alt: 'Output was inferred from volt-amperes with a power factor of 0.3, a common measurement error; real output is 30 % of the claim.' }),
+  ],
+  symbols: { eta: ['Claimed efficiency', '1'], eta_C: ['Carnot efficiency', '1'], eta_lim: ['Applicable efficiency limit', '1'], P_allow: ['Largest admissible output', 'W'], P_hid: ['Hidden input needed to reconcile the claim', 'W'], S_gen: ['Entropy generation rate implied by the claim', 'W/K'], Q_amb: ['Heat drawn from the ambient', 'W'], t_run: ['Running time on the internal store', 's'], P_real: ['Real output power', 'W'] },
+  equations: a => [
+    ...(a.measured_true ? [] : [eq('pf', 'Real output power', 'P_real', '0.3*P_out', { kind: 'definition', origin: 'Real power = apparent power × power factor' })]),
+    eq('eta', 'Claimed efficiency', 'eta', a.measured_true ? 'P_out/P_in' : 'P_real/P_in', { kind: 'definition' }),
+    eq('carnot', 'Carnot efficiency', 'eta_C', '1 - T_c/T_h', { kind: 'law', origin: 'Second law of thermodynamics' }),
+    a.heat_input ? eq('lim', 'Efficiency limit', 'eta_lim', 'min(1, f_viol*eta_C)', { kind: 'hypothesis', origin: 'Carnot limit, multiplied by the counterfactual violation factor (1 in the real world), capped by the first law', needs: ['heat_input'] }) : eq('lim', 'Efficiency limit', 'eta_lim', '1', { kind: 'law', origin: 'First law of thermodynamics' }),
+    eq('allow', 'Largest admissible output', 'P_allow', 'eta_lim*P_in', { kind: 'law', origin: 'First and second laws' }),
+    eq('hid', 'Hidden input that would reconcile the claim', 'P_hid', a.measured_true ? 'max(P_out - P_allow, 0)' : 'max(P_real - P_allow, 0)', { kind: 'derived', origin: 'Energy balance with the admissible conversion' }),
+    a.heat_input
+      ? eq('sgen', 'Entropy generation rate implied by the claim', 'S_gen', a.closed ? '(P_in - P_out)/T_c - P_in/T_h' : '-P_in/T_h - Q_amb/T_c', { kind: 'law', origin: 'Entropy balance on a steady device', needs: ['steady'] })
+      : eq('sgen', 'Entropy generation rate implied by the claim', 'S_gen', a.closed ? '(P_in - P_out)/T_c' : '-Q_amb/T_c', { kind: 'law', origin: 'Entropy balance on a steady device', needs: ['steady'] }),
+    ...(a.closed ? [] : [eq('qamb', 'Heat drawn from the ambient', 'Q_amb', 'max(P_out - P_in, 0)', { kind: 'law', origin: 'First law with an undeclared ambient heat intake' })]),
+    ...(a.steady ? [] : [eq('trun', 'Running time on the internal store', 't_run', 'E_store/P_hid', { kind: 'derived', origin: 'Energy balance on the store' })]),
+  ],
+  derivation: a => [
+    { text: 'For a device in steady operation the first law requires the power leaving to equal the power entering. Any claimed excess must come from somewhere.', tex: 'P_{out} + \\dot Q_{rej} = P_{in} + P_{hidden}' },
+    { text: 'The entropy balance for a steady device taking heat at T_h and rejecting heat at T_c defines the entropy generation rate, which the second law requires to be non-negative.', tex: '\\dot S_{gen} = \\frac{\\dot Q_c}{T_c} - \\frac{\\dot Q_h}{T_h} \\ge 0' },
+    { text: 'Eliminating the rejected heat with the first law turns the entropy condition into the Carnot limit on efficiency.', tex: '\\eta = \\frac{P_{out}}{\\dot Q_h} \\le 1 - \\frac{T_c}{T_h}' },
+    { text: 'If the claimed output exceeds the admissible output, the difference is the smallest undeclared work input that would make the account balance.', tex: 'P_{hidden} = \\max\\big(P_{out} - \\eta_{lim} P_{in},\\ 0\\big)' },
+    ...(a.steady ? [] : [{ text: 'A finite internal store can supply that difference only for a limited time.', tex: 't_{run} = \\frac{E_{store}}{P_{hidden}}' }]),
+    { text: 'In the counterfactual world the Carnot bound is multiplied by a factor f; this is a stipulation, not a consequence of any known physics.', tex: '\\eta_{lim} = \\min\\big(1,\\ f\\,\\eta_C\\big)' },
+  ],
+  solve(v, a) {
+    const Pout = a.measured_true ? v.P_out : 0.3 * v.P_out, eta = Pout / v.P_in, etaC = 1 - v.T_c / v.T_h;
+    const etaLimReal = a.heat_input ? etaC : 1, etaLim = a.heat_input ? Math.min(1, v.f_viol * etaC) : 1;
+    const Pallow = etaLim * v.P_in, PallowReal = etaLimReal * v.P_in, Phid = Math.max(Pout - Pallow, 0), PhidReal = Math.max(Pout - PallowReal, 0);
+    const excess = Math.max(Pout - v.P_in, 0), Qamb = a.closed ? 0 : excess, created = a.closed ? excess : 0;
+    const Qrej = Math.max(v.P_in - Pout, 0);
+    const Sgen = Qrej / v.T_c - (a.heat_input ? v.P_in / v.T_h : 0) - Qamb / v.T_c;
+    const Sdestroyed = Math.max(-Sgen, 0);
+    let verdict = 0;
+    if (created > 0) verdict = 2; else if (Sgen < -1e-12 * v.P_in / v.T_c) verdict = Pout <= Pallow && v.f_viol > 1 ? 3 : 1;
+    const tRun = Phid > 0 ? v.E_store / Phid : Infinity;
+    // reconciled account: admissible conversion of the declared input plus the hidden work input
+    const SgenRec = (v.P_in * (1 - etaLimReal)) / v.T_c - (a.heat_input ? v.P_in / v.T_h : 0);
+    const Ths = N.linspace(v.T_c + 5, Math.max(v.T_h * 1.5, v.T_c + 200), 80), Pos = N.linspace(0, Math.max(1.5 * Pout, 1.2 * v.P_in), 80);
+    const sOf = Po => { const ex = Math.max(Po - v.P_in, 0); return Math.max(v.P_in - Po, 0) / v.T_c - (a.heat_input ? v.P_in / v.T_h : 0) - ex / v.T_c; };
+    const warnings = [];
+    if (v.f_viol > 1) warnings.push(`Counterfactual world: the Carnot bound has been multiplied by ${lab(v.f_viol)}. No known physics permits this; every result that depends on the relaxed limit is conditional on an invented premise.`);
+    if (verdict === 2) warnings.push(`The claim requires ${lab(created, 'W')} to appear from nothing. Conservation of energy has no known exception; look for an unmeasured input of at least ${lab(PhidReal, 'W')}.`);
+    if (verdict === 1) warnings.push(`The claim conserves energy but would destroy entropy at ${lab(Sdestroyed, 'W/K')}. That is a perpetual-motion machine of the second kind.`);
+    if (!a.steady && Phid > 0) warnings.push(`An internal store of ${lab(v.E_store / 1000, 'kJ')} could supply the shortfall for ${lab(tRun / 60, 'min')}; a demonstration shorter than this proves nothing.`);
+    if (!a.measured_true) warnings.push('With a power factor of 0.3 the real output is 30 % of the volt-ampere figure. Use a true-power analyser on both input and output.');
+    return {
+      scalars: [
+        scalar('verdict', 'Verdict', verdict, '1', { text: VERDICTS[verdict], status: v.f_viol > 1 ? 'hypothetical' : undefined }),
+        scalar('eta', 'Claimed efficiency', eta, '1', { show: '%' }), scalar('eta_C', 'Carnot efficiency between source and sink', etaC, '1', { show: '%' }),
+        scalar('eta_lim', 'Applicable efficiency limit', etaLim, '1', { show: '%', status: v.f_viol > 1 ? 'hypothetical' : undefined }),
+        scalar('P_allow', 'Largest admissible output', Pallow, 'W', { status: v.f_viol > 1 ? 'hypothetical' : undefined }),
+        scalar('P_hid', 'Hidden input needed to reconcile the claim', Phid, 'W', { status: v.f_viol > 1 ? 'hypothetical' : undefined }),
+        scalar('P_hid_real', 'Hidden input needed under real-world physics', PhidReal, 'W'),
+        scalar('Q_hid', 'Equivalent hidden heat input at the source temperature', a.heat_input ? PhidReal / etaC : PhidReal, 'W'),
+        scalar('P_created', 'Energy that would be created from nothing', created, 'W'), scalar('Q_amb', 'Undeclared heat drawn from the ambient', Qamb, 'W'),
+        scalar('S_gen', 'Entropy generation rate implied by the claim', Sgen, 'W/K'), scalar('S_destroyed', 'Entropy that would have to be destroyed each second', Sdestroyed, 'W/K'),
+        scalar('ratio', 'Claimed output over admissible output', Pout / Pallow, '1'),
+        scalar('t_run', 'Time an internal store could sustain the shortfall', tRun, 's', { show: 'h', text: Number.isFinite(tRun) ? undefined : 'No shortfall to supply' }),
+        scalar('E_day', 'Unexplained energy per day', PhidReal * 86400, 'J', { show: 'kWh' }),
+      ],
+      series: [
+        line('eta-T', 'Claimed efficiency against the limits', 'Source temperature', '°C', Ths.map(q => q - 273.15), [{ label: 'Carnot limit', data: Ths.map(T => 1 - v.T_c / T) }, ...(v.f_viol > 1 ? [{ label: 'Counterfactual limit', data: Ths.map(T => Math.min(1, v.f_viol * (1 - v.T_c / T))), dash: true }] : []), { label: 'First-law limit', data: Ths.map(() => 1), dash: true }, { label: 'Claim', data: Ths.map(() => eta) }], 'Efficiency', '–', { marker: [v.T_h - 273.15, eta] }),
+        line('sgen-P', 'Entropy generation implied by a claimed output', 'Claimed output power', 'W', Pos, [{ label: 'Entropy generation rate', data: Pos.map(sOf) }, { label: 'Zero (second-law boundary)', data: Pos.map(() => 0), dash: true }], 'Entropy generation', 'W/K', { marker: [Pout, Sgen], note: 'Outputs for which the curve is negative are forbidden by the second law.' }),
+      ],
+      checks: [
+        check('Reconciled account rejects non-negative heat', Math.min(v.P_in + PhidReal - Pout, 0) / v.P_in, 1e-12, 'Declared input plus hidden input covers the output; the remainder is rejected heat'),
+        check('Reconciled account generates no negative entropy', Math.min(SgenRec, 0), 1e-12, 'With the hidden input included, real-world physics is satisfied'),
+      ],
+      warnings,
+      notes: ['The verdict tests the claim as stated. It does not show that the device does nothing, only that the stated account of its energy flows cannot be complete.'],
+    };
+  },
+  benchmarks(v, a) {
+    const b = { heat_input: true, closed: true, steady: true, measured_true: true };
+    const atCarnot = this.solve({ ...v, P_in: 1000, P_out: 1000 * (1 - 300 / 600), T_h: 600, T_c: 300, f_viol: 1 }, b);
+    const over = this.solve({ ...v, P_in: 100, P_out: 300, f_viol: 1 }, { ...b, heat_input: false });
+    return [
+      bench('Entropy generation of a Carnot engine', val(atCarnot, 'S_gen') + 1, 1, 'Reversible engine: Ṡ_gen = 0', 1e-12),
+      bench('Hidden input for a 300 W output from 100 W of work', val(over, 'P_hid'), 200, 'First law: P_hidden = P_out − P_in', 1e-12),
+      bench('Carnot efficiency between 600 K and 300 K', val(atCarnot, 'eta_C'), 0.5, 'η_C = 1 − T_c/T_h', 1e-12),
+    ];
+  },
+  validation: [],
+  logicPreset: {
+    atoms: [{ k: 'F', text: 'Energy is conserved (first law)' }, { k: 'K', text: 'No cyclic device converts heat from a single reservoir entirely into work (second law)' }, { k: 'C', text: 'The device receives no energy other than its declared input' }, { k: 'H', text: 'The only heat available to the device is at ambient temperature' }, { k: 'O', text: 'The device delivers more energy than its declared input' }, { k: 'W', text: 'The device runs continuously on ambient heat alone' }],
+    premises: ['F & C -> ~O', 'K & H -> ~W', 'F', 'K', 'C', 'H'],
+    conclusion: '~O & ~W',
+  },
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(240, 120, 160, 120, 'd-body', 10)} ${S.text(320, 175, 'claimed device')} ${S.text(320, 198, '?', 'd-text')}
+      ${S.arrow(110, 180, 236, 180, a.heat_input ? 'd-arrow d-heat' : 'd-arrow')} ${S.text(170, 168, `${a.heat_input ? 'heat' : 'work'} in ${lab(v.P_in, 'W')}`)}
+      ${S.arrow(404, 180, 530, 180)} ${S.text(470, 168, `work out ${lab(v.P_out, 'W')}`)}
+      ${S.rect(60, 40, 100, 40, 'd-body')} ${S.text(110, 65, `source ${lab(v.T_h - 273.15, '°C')}`, 'd-text d-small')}
+      ${S.rect(270, 300, 100, 40, 'd-body')} ${S.text(320, 325, `sink ${lab(v.T_c - 273.15, '°C')}`, 'd-text d-small')}
+      ${S.arrow(320, 244, 320, 296, 'd-arrow d-heat')} ${S.text(372, 275, 'rejected heat', 'd-text d-small')}
+      ${S.path('M320 60 L320 116', 'd-line d-hazard')} ${S.text(320, 50, 'hidden input?', 'd-text d-small')}
+      ${a.heat_input ? S.path('M110 80 L110 180', 'd-line d-heat') : ''}
+    `);
+  },
+  experiment: {
+    objective: 'Establish a complete, independently verified energy account of a device claimed to deliver more than it receives.',
+    apparatus: ['The device inside a calorimetric enclosure with every electrical, mechanical, fluid and thermal connection passing through a metered boundary', 'A resistive dummy load', 'Faraday-cage or screened enclosure to exclude radio-frequency pick-up'],
+    instruments: [{ name: 'True-power analyser on every electrical port', measures: 'Real (not apparent) input and output power', range: 'DC–1 MHz, 0–10 kW', resolution: '±0.1 %' }, { name: 'Flow calorimeter on the enclosure coolant', measures: 'Net heat released', range: '0–5 kW', resolution: '±1 %' }, { name: 'Thermocouples on source, sink and casing', measures: 'Reservoir temperatures', range: '−50 to 1000 °C', resolution: '±0.5 K' }, { name: 'Balance or load cells under the device', measures: 'Mass change (consumed fuel or reactants)', range: '0–100 kg', resolution: '±1 g' }],
+    procedure: ['Define the system boundary and list every path by which energy could cross it.', 'Calibrate the calorimeter with a resistor of known dissipation.', 'Run the device for at least ten times the period for which any internal store could supply the claimed excess.', 'Integrate all inputs and outputs and compare; repeat with the device replaced by an inert dummy of the same mass and geometry.', 'Have the test repeated by an independent laboratory.'],
+    controls: ['Blank run with the device unpowered', 'Calibration run with a known heater', 'Batteries removed or their state of charge measured before and after'],
+    signatures: ['Energy account closing within the measurement uncertainty', 'Any apparent excess scaling with measurement bandwidth or lead arrangement (a sign of instrument error)', 'Output decaying as an internal store runs down'],
+    safety: ['Treat an unknown device as a potential electrical, chemical and stored-energy hazard', 'Isolate and lock off mains supplies when reconfiguring'],
+  },
+  falsify: ['A device that, inside a closed calorimetric boundary and over a period far longer than any internal store could sustain, delivers more energy than crosses the boundary — reproducibly and in independent laboratories.', 'A cyclic device producing net work while exchanging heat with a single reservoir.'],
+  alternatives: [{ name: 'Undeclared energy input', text: 'Mains or radio-frequency pick-up, a concealed battery, chemical reaction of the materials or ambient heat counted as free.' }, { name: 'Measurement error', text: 'Apparent power mistaken for real power, peak values mistaken for averages, or neglected phase shifts with pulsed waveforms.' }, { name: 'Transient release of stored energy', text: 'Springs, flywheels, magnets being rearranged, or thermal mass cooling down can exceed the input for a limited time.' }, { name: 'Heat pump misread as a source', text: 'A coefficient of performance above one moves more heat than the work supplied; it is not an efficiency above 100 %.' }],
+  hazards: [{ hazard: 'Financial loss', cause: 'Investment in a device that cannot work as claimed', mitigation: 'Independent calorimetric testing before commitment' }, { hazard: 'Electric shock and fire', cause: 'Improvised high-voltage or high-current apparatus', mitigation: 'Standard electrical safety practice' }],
+  standards: ['ISO/IEC 17025 (competence of testing and calibration laboratories)', 'IEC 61000-4-30 (power-quality measurement methods)', 'JCGM 100 (Guide to the expression of uncertainty in measurement)'],
+  limits: 'A steady-state audit of time-averaged powers between two reservoirs. It tests the internal consistency of a claim; it cannot identify which hidden input is present. With a violation factor other than one the results describe an invented world.',
+  numerics: { method: 'Algebraic energy and entropy balances' },
+  inverse: { series: 'sgen-P', curve: 0, fit: ['T_h'] },
+  extensions: ['Transient audit with a measured discharge curve of the internal store', 'Uncertainty propagation on the measured powers', 'Fluctuation-theorem estimate of the probability of a spontaneous violation at a given scale'],
+};
+
+// ------------------------------------------------------------------ reverse-osmosis desalination
+const M_NACL = 0.05844;
+/** March along the membrane area solving the local solution–diffusion and film-model equations. */
+function roMarch({ A, B, k, kap, cf, Qf, Pf, dp, Am, n, polarise }) {
+  const dA = Am / n, x = [], flux = [], cbs = [], cms = [], cps = [];
+  let Q = Qf, c = cf, Qp = 0, salt = 0, cpfMax = 1;
+  for (let i = 0; i < n; i++) {
+    const P = Pf - dp * (i + 0.5) / n;
+    const local = Jw => { const E = polarise ? Math.exp(Math.min(Jw / k, 50)) : 1; return { E, dpi: kap * c * E * Jw / (Jw + B * E + 1e-300) }; };
+    const Jmax = A * Math.max(P, 0);
+    const Jw = Jmax > 0 ? N.bisect(J => J - A * (P - local(J).dpi), 0, Jmax, 1e-13) : 0;
+    const E = local(Jw).E, cm = c * E * (Jw + B) / (Jw + B * E + 1e-300), cp = B * cm / (Jw + B + 1e-300);
+    const dQ = Math.min(Jw * dA, 0.5 * Q), ms = Math.min(cp * dQ, 0.5 * Q * c);
+    x.push((i + 0.5) / n); flux.push(Jw); cbs.push(c); cms.push(cm); cps.push(cp); cpfMax = Math.max(cpfMax, cm / c);
+    const Qn = Q - dQ; c = (Q * c - ms) / Qn; Q = Qn; Qp += dQ; salt += ms;
+  }
+  return { x, flux, cbs, cms, cps, Qp, Qb: Q, cb: c, cp: Qp > 0 ? salt / Qp : 0, salt, cpfMax, Pb: Pf - dp };
+}
+/** Least work of separation per unit permeate volume for a van 't Hoff solution (linear osmotic pressure). */
+function roLeastWork(kap, Qf, cf, Qp, cp, Qb, cb) {
+  const xlnx = c => (c > 0 ? c * Math.log(c) : 0);
+  return Qp > 0 ? kap * (Qp * xlnx(cp) + Qb * xlnx(cb) - Qf * xlnx(cf)) / Qp : 0;
+}
+
+const reverseOsmosis = {
+  id: 'reverse-osmosis-desalination',
+  title: 'Seawater reverse-osmosis stage',
+  module: 2, klass: 'I', domains: ['desalination', 'chemical'],
+  keywords: ['reverse osmosis', 'swro', 'desalination', 'osmotic pressure', 'membrane', 'permeate', 'recovery', 'salt rejection', 'specific energy consumption', 'energy recovery', 'concentration polarisation', 'concentration polarization', 'brine', 'water flux', 'solution-diffusion'],
+  summary: 'Single-stage seawater reverse osmosis by the solution–diffusion model: flux, recovery, permeate quality, concentration polarisation and specific energy against the thermodynamic minimum.',
+  background: [
+    'In reverse osmosis a pressure greater than the osmotic pressure is applied to saline water on one side of a dense polymer membrane. Water dissolves in and diffuses through the membrane in proportion to the net driving pressure, while salt diffuses in proportion to its concentration difference; the two fluxes are nearly independent, which is why permeate quality improves as flux rises.',
+    'Rejected salt accumulates in a boundary layer at the membrane surface. This concentration polarisation raises the osmotic pressure the pump must overcome and is described by film theory, in which the wall concentration grows exponentially with the ratio of water flux to the feed-side mass-transfer coefficient. Along a pressure vessel the bulk feed becomes more concentrated as permeate is withdrawn, so the flux falls from inlet to outlet.',
+    'The brine leaves at almost feed pressure. Isobaric energy-recovery devices return most of that hydraulic energy to the incoming feed, which brought the specific energy of seawater plants to within a factor of about two of the least work of separation.',
+  ],
+  phenomena: ['Osmosis and osmotic pressure', 'Solution–diffusion transport', 'Concentration polarisation', 'Longitudinal concentration of the feed', 'Hydraulic energy recovery'],
+  laws: ['mass', 'species', 'fick', 'energy', 'second'],
+  refs: ['Lonsdale, H. K., Merten, U. & Riley, R. L. (1965). Transport properties of cellulose acetate osmotic membranes. J. Applied Polymer Science 9, 1341–1362.', 'Wijmans, J. G. & Baker, R. W. (1995). The solution-diffusion model: a review. J. Membrane Science 107, 1–21.', 'Elimelech, M. & Phillip, W. A. (2011). The future of seawater desalination: energy, technology, and the environment. Science 333, 712–717.', 'Mistry, K. H., McGovern, R. K., Thiel, G. P., Summers, E. K., Zubair, S. M. & Lienhard V, J. H. (2011). Entropy generation analysis of desalination technologies. Entropy 13, 1829–1864.', 'Millero, F. J. & Poisson, A. (1981). International one-atmosphere equation of state of seawater. Deep-Sea Research 28A, 625–629.'],
+  inputs: [
+    inp('S_f', 'Feed salinity', 'g/kg', 35, { min: 1, max: 50, kind: 'environment', env: 'salinity', aliases: ['salinity', 'feed salinity', 'tds'] }),
+    inp('T', 'Feed temperature', '°C', 25, { min: 5, max: 40, kind: 'environment', env: 'sea_surface_temp', aliases: ['temperature', 'feed temperature', 'water temperature'] }),
+    inp('P_f', 'Feed pressure above permeate pressure', 'bar', 60, { min: 20, max: 85, aliases: ['feed pressure', 'operating pressure', 'pressure'] }),
+    inp('Q_f', 'Feed flow to the pressure vessel', 'm^3/h', 8, { min: 1, max: 20, aliases: ['feed flow', 'flow rate', 'feed rate'] }),
+    inp('A_m', 'Membrane area in the vessel', 'm^2', 260, { min: 20, max: 330, kind: 'geometry', aliases: ['membrane area', 'area'], src: 'Seven 8-inch elements of about 37 m² each' }),
+    inp('A_w', 'Water permeability', 'L/(m^2 h bar)', 1.2, { min: 0.3, max: 4, kind: 'fluid', aliases: ['water permeability', 'permeability'], src: 'Typical seawater polyamide thin-film composite membrane' }),
+    inp('B_s', 'Salt permeability', 'm/s', 2.5e-8, { min: 2e-9, max: 5e-7, kind: 'fluid', aliases: ['salt permeability'], src: 'Typical seawater membrane, about 0.1 L/(m² h)' }),
+    inp('k_m', 'Feed-side mass-transfer coefficient', 'm/s', 6e-5, { min: 1e-5, max: 2e-4, aliases: ['mass transfer coefficient'], src: 'Spacer-filled channel at typical cross-flow velocity' }),
+    inp('dp_f', 'Feed-channel pressure drop', 'bar', 1.5, { min: 0, max: 5, aliases: ['pressure drop'] }),
+    inp('phi_o', 'Osmotic coefficient', '1', 0.9, { min: 0.85, max: 1, kind: 'fluid', aliases: ['osmotic coefficient'], src: 'Seawater-strength NaCl solutions, Robinson & Stokes (1959)' }),
+    inp('eta_p', 'High-pressure pump efficiency', '1', 0.82, { min: 0.5, max: 0.95, aliases: ['pump efficiency'] }),
+    inp('eta_erd', 'Energy-recovery device efficiency', '1', 0.95, { min: 0.5, max: 0.99, aliases: ['erd efficiency', 'energy recovery', 'pressure exchanger'] }),
+    inp('n_seg', 'Number of marching segments', '1', 100, { min: 20, max: 1000, kind: 'numerical' }),
+  ],
+  assumptions: [
+    asm('cp_film', 'Concentration polarisation follows the stagnant-film model.', { why: 'Standard design treatment', alt: 'Polarisation is neglected: the wall concentration equals the bulk concentration.' }),
+    asm('salt_passage', 'Salt crosses the membrane by diffusion with permeability B.', { why: 'Real membranes are not perfectly selective', alt: 'The membrane rejects salt completely (B = 0).' }),
+    asm('erd', 'An energy-recovery device returns brine pressure energy to the feed.', { why: 'Universal in modern seawater plants', alt: 'Brine is throttled to atmosphere and its pressure energy is lost.' }),
+    asm('temp_ref', 'The stated permeabilities apply at the operating temperature.', { why: 'Membrane data supplied at site conditions', alt: 'Permeabilities are given at 25 °C and are corrected with an Arrhenius-type temperature factor (activation temperature 2640 K above 25 °C, 3020 K below, as used in manufacturers’ design manuals).' }),
+  ],
+  symbols: { c: ['Salt mass concentration', 'kg/m^3'], c_f: ['Feed concentration', 'kg/m^3'], c_b: ['Bulk concentration', 'kg/m^3'], c_m: ['Concentration at the membrane wall', 'kg/m^3'], c_p: ['Permeate concentration', 'kg/m^3'], pi_o: ['Osmotic pressure', 'Pa'], pi_m: ['Osmotic pressure at the wall', 'Pa'], pi_p: ['Osmotic pressure of permeate', 'Pa'], pi_f: ['Osmotic pressure of feed', 'Pa'], i_v: ['van ’t Hoff factor (2 for NaCl)', '1'], M_s: ['Molar mass of salt', 'kg/mol'], P: ['Local feed pressure', 'Pa'], P_b: ['Brine pressure', 'Pa'], J_w: ['Water flux', 'm/s'], J_s: ['Salt flux', 'kg/(m^2 s)'], Q: ['Local feed-side flow', 'm^3/s'], Q_p: ['Permeate flow', 'm^3/s'], Q_b: ['Brine flow', 'm^3/s'], A_x: ['Cumulative membrane area', 'm^2'], r: ['Recovery', '1'], Rej: ['Salt rejection', '1'], SEC: ['Specific energy consumption', 'J/m^3'], w_min: ['Least work of separation', 'J/m^3'], A_25: ['Water permeability at 25 °C', 'm/(s Pa)'], E_T: ['Activation temperature', 'K'], T_25: ['Reference temperature 298.15 K', 'K'] },
+  equations: a => [
+    eq('pi', 'Osmotic pressure', 'pi_o', 'phi_o*i_v*c*R_u*T/M_s', { kind: 'law', origin: 'van ’t Hoff relation with an osmotic coefficient' }),
+    eq('jw', 'Water flux', 'J_w', 'A_w*(P - (pi_m - pi_p))', { kind: 'law', origin: 'Solution–diffusion model; Lonsdale, Merten & Riley (1965)' }),
+    a.salt_passage ? eq('js', 'Salt flux', 'J_s', 'B_s*(c_m - c_p)', { kind: 'law', origin: 'Fickian diffusion of salt through the membrane', needs: ['salt_passage'] }) : eq('js', 'Salt flux', 'J_s', '0*B_s*c_m', { kind: 'closure', origin: 'Perfectly selective membrane' }),
+    eq('cp', 'Permeate concentration', 'c_p', 'J_s/J_w', { kind: 'law', origin: 'Steady salt balance across the membrane' }),
+    a.cp_film ? eq('film', 'Concentration polarisation', '(c_m - c_p)/(c_b - c_p)', 'exp(J_w/k_m)', { kind: 'derived', origin: 'Film theory: convection toward the wall balanced by back-diffusion', needs: ['cp_film'] }) : eq('film', 'Wall concentration', 'c_m', 'c_b', { kind: 'closure', origin: 'Polarisation neglected' }),
+    eq('wbal', 'Water balance along the vessel', 'pd(Q,A_x)', '-J_w', { kind: 'law', origin: 'Conservation of mass' }),
+    eq('sbal', 'Salt balance along the vessel', 'pd(Q*c_b,A_x)', '-J_s', { kind: 'law', origin: 'Conservation of species' }),
+    eq('rec', 'Recovery', 'r', 'Q_p/Q_f', { kind: 'definition' }),
+    eq('rej', 'Salt rejection', 'Rej', '1 - c_p/c_f', { kind: 'definition' }),
+    a.erd ? eq('sec', 'Specific energy consumption', 'SEC', '(Q_f*P_f - eta_erd*Q_b*P_b)/(eta_p*Q_p)', { kind: 'law', origin: 'First law: pump work less recovered brine energy', needs: ['erd'] }) : eq('sec', 'Specific energy consumption', 'SEC', 'Q_f*P_f/(eta_p*Q_p)', { kind: 'law', origin: 'First law: all feed is pumped to full pressure' }),
+    eq('wmin', 'Least work of separation (pure permeate)', 'w_min', '(pi_f/r)*ln(1/(1 - r))', { kind: 'law', origin: 'Second law: reversible separation of a van ’t Hoff solution' }),
+    ...(a.temp_ref ? [] : [eq('tcf', 'Temperature correction of permeability', 'A_w', 'A_25*exp(E_T*(1/T_25 - 1/T))', { kind: 'empirical', origin: 'Arrhenius-type correction factor from membrane manufacturers’ design manuals' })]),
+  ],
+  derivation: a => [
+    { text: 'For a dilute salt solution the chemical potential of water is lowered in proportion to the number of dissolved particles. The pressure that restores equilibrium with pure water is the osmotic pressure.', tex: '\\pi = \\phi\\,i\\,\\frac{c}{M_s}\\,R\\,T' },
+    { text: 'In the solution–diffusion picture water permeates in proportion to its chemical-potential difference, which is the applied pressure less the osmotic-pressure difference across the membrane.', tex: 'J_w = A\\,\\big(\\Delta P - (\\pi_m - \\pi_p)\\big)' },
+    { text: 'Salt permeates by diffusion, driven by its concentration difference. The permeate concentration is the ratio of the two fluxes.', tex: 'J_s = B\\,(c_m - c_p),\\qquad c_p = \\frac{J_s}{J_w}' },
+    ...(a.cp_film ? [{ text: 'In the boundary layer, convection of salt toward the wall is balanced by diffusion back to the bulk. Integrating across a film of thickness δ = D/k gives the wall concentration.', tex: '\\frac{c_m - c_p}{c_b - c_p} = \\exp\\!\\left(\\frac{J_w}{k}\\right)' }] : []),
+    { text: 'Water and salt balances over an element of membrane area describe how the feed concentrates along the vessel.', tex: '\\frac{\\mathrm{d}Q}{\\mathrm{d}A} = -J_w,\\qquad \\frac{\\mathrm{d}(Q c_b)}{\\mathrm{d}A} = -J_s' },
+    { text: 'The pump raises the feed to P_f' + (a.erd ? '; the energy-recovery device returns a fraction η_erd of the brine’s hydraulic energy.' : '; the brine energy is discarded.'), tex: a.erd ? '\\mathrm{SEC} = \\frac{Q_f P_f - \\eta_{erd} Q_b P_b}{\\eta_p\\,Q_p}' : '\\mathrm{SEC} = \\frac{Q_f P_f}{\\eta_p\\,Q_p}' },
+    { text: 'A reversible process would apply, at each instant, exactly the local osmotic pressure. Integrating over the recovery gives the least work per unit of pure permeate.', tex: 'w_{min} = \\frac{\\pi_f}{r}\\,\\ln\\frac{1}{1-r}' },
+  ],
+  solve(v, a) {
+    const S = massFrac(v.S_f), tC = v.T - 273.15, rho = R.seawaterDensity(tC, S * 1000), cf = rho * S;
+    const kap = v.phi_o * 2 * C.R_u * v.T / M_NACL;
+    const tcf = a.temp_ref ? 1 : Math.exp((v.T >= 298.15 ? 2640 : 3020) * (1 / 298.15 - 1 / v.T));
+    const base = { A: v.A_w * tcf, B: a.salt_passage ? v.B_s * tcf : 0, k: v.k_m, kap, cf, Qf: v.Q_f, Pf: v.P_f, dp: v.dp_f, Am: v.A_m, n: Math.round(v.n_seg), polarise: a.cp_film };
+    const m = roMarch(base), rec = m.Qp / v.Q_f, piF = kap * cf, piB = kap * m.cb;
+    const secOf = q => (q.Qp > 0 ? (a.erd ? (v.Q_f * q.Pf - v.eta_erd * q.Qb * q.Pb) : v.Q_f * q.Pf) / (v.eta_p * q.Qp) : Infinity);
+    const sec = secOf({ ...m, Pf: v.P_f }), wmin = roLeastWork(kap, v.Q_f, cf, m.Qp, m.cp, m.Qb, m.cb);
+    const rej = 1 - m.cp / cf, Javg = m.Qp / v.A_m, power = sec * m.Qp;
+    const Ps = N.linspace(Math.max(2e6, 0.6 * v.P_f), 8.5e6, 24);
+    const sw = Ps.map(P => { const q = roMarch({ ...base, Pf: P, n: 40 }); return { sec: secOf({ ...q, Pf: P }), rec: q.Qp / v.Q_f, wmin: roLeastWork(kap, v.Q_f, cf, q.Qp, q.cp, q.Qb, q.cb) }; });
+    const warnings = [];
+    if (v.P_f - v.dp_f < 1.02 * kap * (m.cms.at(-1) - m.cps.at(-1))) warnings.push('The net driving pressure at the brine end is close to zero: the last elements produce almost no water. Lower the recovery or raise the pressure.');
+    if (v.P_f < piF) warnings.push('The feed pressure is below the osmotic pressure of the feed. Only a trickle of poor-quality permeate is produced.');
+    if (Javg > 25e-3 / 3600) warnings.push(`Average flux of ${lab(Javg * 3.6e6, 'L/(m² h)')} is above the range usually accepted for open-intake seawater (about 12–17 L/(m² h)); fouling would be rapid.`);
+    if (m.cpfMax > 1.2 && a.cp_film) warnings.push(`The concentration-polarisation factor reaches ${lab(m.cpfMax)}; membrane suppliers typically limit it to 1.2 to control scaling.`);
+    if (m.cp > 0.5) warnings.push(`Permeate salinity of ${lab(m.cp * 1000, 'mg/L')} exceeds the usual drinking-water guideline of about 500 mg/L total dissolved solids.`);
+    return {
+      scalars: [
+        scalar('pi_f', 'Osmotic pressure of the feed', piF, 'Pa', { show: 'bar' }), scalar('pi_b', 'Osmotic pressure of the brine', piB, 'Pa', { show: 'bar' }),
+        scalar('NDP', 'Net driving pressure at the inlet (bulk)', v.P_f - piF, 'Pa', { show: 'bar' }),
+        scalar('J_w', 'Average water flux', Javg, 'm/s', { show: 'L/(m^2 h)' }), scalar('r', 'Recovery', rec, '1', { show: '%' }),
+        scalar('Q_p', 'Permeate flow', m.Qp, 'm^3/s', { show: 'm^3/h' }), scalar('c_p', 'Permeate salinity', m.cp, 'kg/m^3', { show: 'mg/L' }), scalar('Rej', 'Salt rejection', rej, '1', { show: '%' }),
+        scalar('Q_b', 'Brine flow', m.Qb, 'm^3/s', { show: 'm^3/h' }), scalar('c_b', 'Brine salinity', m.cb, 'kg/m^3', { show: 'g/L' }), scalar('CF', 'Concentration factor of the brine', m.cb / cf, '1'),
+        scalar('CPF', 'Largest concentration-polarisation factor', m.cpfMax, '1'),
+        scalar('SEC', 'Specific energy consumption', sec, 'J/m^3', { show: 'kWh/m^3' }), scalar('w_min', 'Least work of separation at this recovery', wmin, 'J/m^3', { show: 'kWh/m^3' }),
+        scalar('eta_II', 'Second-law efficiency w_min/SEC', wmin / sec, '1', { show: '%' }), scalar('P_el', 'Pumping power', power, 'W', { show: 'kW' }),
+      ],
+      series: [
+        line('flux', 'Water flux along the pressure vessel', 'Fraction of membrane area', '–', m.x, [{ label: 'Water flux', data: m.flux.map(q => q * 3.6e6) }], 'Flux', 'L/(m² h)'),
+        line('conc', 'Salt concentration along the pressure vessel', 'Fraction of membrane area', '–', m.x, [{ label: 'Bulk feed', data: m.cbs }, { label: 'Membrane wall', data: m.cms, dash: true }, { label: 'Local permeate × 100', data: m.cps.map(q => q * 100) }], 'Concentration', 'g/L'),
+        line('sec-p', 'Specific energy against feed pressure', 'Feed pressure', 'bar', Ps.map(q => q / 1e5), [{ label: 'Specific energy consumption', data: sw.map(q => (Number.isFinite(q.sec) ? q.sec / 3.6e6 : NaN)) }, { label: 'Least work of separation', data: sw.map(q => q.wmin / 3.6e6), dash: true }], 'Energy', 'kWh/m³'),
+        line('rec-p', 'Recovery against feed pressure', 'Feed pressure', 'bar', Ps.map(q => q / 1e5), [{ label: 'Recovery', data: sw.map(q => q.rec * 100) }], 'Recovery', '%'),
+      ],
+      checks: [
+        check('Water balance', (v.Q_f - m.Qp - m.Qb) / v.Q_f, 1e-10, 'Feed = permeate + brine (constant density)'),
+        check('Salt balance', (v.Q_f * cf - m.Qp * m.cp - m.Qb * m.cb) / (v.Q_f * cf), 1e-10, 'Salt in feed = salt in permeate + salt in brine'),
+        check('Second law: specific energy not below the least work of separation', Math.max(wmin - sec, 0) / piF, 0, `SEC = ${lab(sec / 3.6e6, 'kWh/m³')} against w_min = ${lab(wmin / 3.6e6, 'kWh/m³')}`),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const kap = 0.9 * 2 * C.R_u * 298.15 / M_NACL, cf = 35.8;
+    const tiny = roMarch({ A: 3e-12, B: 0, k: 1e-4, kap, cf, Qf: 1, Pf: 6e6, dp: 0, Am: 1, n: 10, polarise: false });
+    const q = roMarch({ A: 3e-12, B: 0, k: 1e-4, kap, cf, Qf: 2e-3, Pf: 6e6, dp: 0, Am: 400, n: 400, polarise: false }), rr = q.Qp / 2e-3;
+    const film = roMarch({ A: 3e-12, B: 1e-12, k: 2e-5, kap, cf, Qf: 1, Pf: 6e6, dp: 0, Am: 1, n: 1, polarise: true });
+    return [
+      bench('Flux in the limit of zero recovery and perfect rejection', tiny.flux[0], 3e-12 * (6e6 - kap * cf), 'J_w = A (ΔP − π_f)', 1e-6),
+      bench('Least work from stream free energies vs closed form', roLeastWork(kap, 2e-3, cf, q.Qp, 0, q.Qb, q.cb), kap * cf / rr * Math.log(1 / (1 - rr)), 'w_min = (π_f/r) ln[1/(1 − r)]', 1e-9),
+      bench('Film-model wall concentration', (film.cms[0] - film.cps[0]) / (film.cbs[0] - film.cps[0]), Math.exp(film.flux[0] / 2e-5), '(c_m − c_p)/(c_b − c_p) = exp(J_w/k)', 1e-8),
+      bench('Osmotic pressure of 35.8 g/L NaCl-equivalent at 25 °C', kap * cf / 1e5, 27.3, 'van ’t Hoff with φ = 0.9; seawater is about 27 bar', 1e-2),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(170, 120, 330, 90, 'd-body', 40)} ${S.path('M190 165 L480 165', 'd-liquid-line')} ${S.text(335, 150, 'feed channel', 'd-text d-small')} ${S.text(335, 190, 'permeate side', 'd-text d-small')}
+      ${S.circle(90, 150, 24)} ${S.text(90, 155, 'HP', 'd-text d-small')} ${S.path('M20 150 L66 150', 'd-pipe')} ${S.path('M114 150 L172 150', 'd-pipe')}
+      ${S.text(40, 135, 'feed', 'd-text d-small')} ${S.text(142, 136, lab(v.P_f / 1e5, 'bar'), 'd-text d-small')}
+      ${S.path('M500 150 L600 150', 'd-pipe')} ${S.text(560, 136, 'brine', 'd-text d-small')}
+      ${S.path('M335 210 L335 290 L600 290', 'd-pipe')} ${S.text(520, 278, 'permeate', 'd-text d-small')}
+      ${[0, 1, 2, 3].map(i => S.arrow(230 + i * 70, 156, 230 + i * 70, 178)).join('')}
+      ${a.erd ? S.rect(380, 40, 110, 40, 'd-body') + S.text(435, 65, 'ERD', 'd-text d-small') + S.path('M560 150 L560 60 L490 60', 'd-line') + S.path('M380 60 L140 60 L140 148', 'd-line') : S.text(560, 110, 'throttled', 'd-text d-small')}
+      ${S.text(320, 330, `${lab(v.A_m, 'm²')} of membrane,  feed ${lab(massFrac(v.S_f) * 1000, 'g/kg')} at ${lab(v.T - 273.15, '°C')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Determine the water and salt permeabilities of a membrane and the feed-side mass-transfer coefficient, then verify predicted recovery and permeate quality for a full element.',
+    apparatus: ['Cross-flow flat-sheet cell or single spiral-wound element in a pressure vessel', 'High-pressure positive-displacement pump with pulsation damper', 'Temperature-controlled feed tank with NaCl solution or pre-treated seawater', 'Back-pressure regulator on the concentrate line'],
+    instruments: [{ name: 'Pressure transducers on feed, concentrate and permeate', measures: 'Trans-membrane and channel pressure drop', range: '0–100 bar', resolution: '±0.1 %' }, { name: 'Conductivity meters on feed, concentrate and permeate', measures: 'Salinity', range: '1 µS/cm–100 mS/cm', resolution: '±0.5 %' }, { name: 'Flow meters or timed mass collection', measures: 'Permeate and concentrate flow', range: '0.01–10 m³/h', resolution: '±0.5 %' }, { name: 'Pt100 in the feed', measures: 'Temperature', range: '0–50 °C', resolution: '±0.1 K' }],
+    procedure: ['Compact the membrane with pure water at operating pressure until flux is steady; the slope of flux against pressure gives A.', 'Run with salt solution at several pressures and cross-flow velocities; record flux and permeate conductivity.', 'Extrapolate observed rejection to infinite cross-flow velocity to separate B from polarisation; the velocity dependence gives k.', 'Run the full element at design conditions and compare recovery, permeate salinity and pressure drop with the prediction.'],
+    controls: ['Pure-water flux before and after each salt run to detect fouling or compaction', 'Salt and water balances closing within 2 %'],
+    signatures: ['Flux linear in net driving pressure', 'Permeate concentration falling as flux rises', 'Flux declining along the element as bulk concentration rises'],
+    safety: ['High-pressure liquid: rated fittings, shields and relief valve', 'Stored energy in pulsation dampers', 'Chemical handling for cleaning and preservation solutions'],
+  },
+  falsify: ['Water flux not proportional to net driving pressure at fixed temperature for a clean membrane.', 'Specific energy consumption measured below the least work of separation for the measured recovery and salinities.'],
+  alternatives: [{ name: 'Spiegler–Kedem (irreversible thermodynamics) model', text: 'Adds a reflection coefficient to describe coupled convective salt transport; needed for nanofiltration and loose membranes.' }, { name: 'Pitzer or TEOS-10 osmotic pressure', text: 'Replaces the van ’t Hoff relation with a measured activity model; important above about 70 g/kg.' }, { name: 'Multi-stage or closed-circuit designs', text: 'Staging the pressure brings the applied pressure closer to the local osmotic pressure and lowers the energy use.' }],
+  hazards: [{ hazard: 'High-pressure release', cause: 'Vessel end-cap or coupling failure', mitigation: 'Rated vessels, retaining rings checked, relief valves' }, { hazard: 'Membrane scaling and fouling', cause: 'Supersaturation at the wall, biological growth', mitigation: 'Antiscalant dosing, pre-treatment, recovery limits' }, { hazard: 'Brine discharge impact', cause: 'Dense saline effluent on the seabed', mitigation: 'Diffuser design and monitoring' }],
+  standards: ['ASTM D4516 (standardising reverse-osmosis performance data)', 'ASTM D4194 (operating characteristics of reverse-osmosis devices)', 'ASME BPVC Section X (fibre-reinforced plastic pressure vessels)', 'WHO Guidelines for Drinking-water Quality'],
+  limits: 'Single pass, single stage, steady state, sodium-chloride-equivalent salinity with a constant osmotic coefficient and constant density. Permeate-side pressure drop, fouling and the dependence of the mass-transfer coefficient on local cross-flow are neglected.',
+  numerics: { method: 'Explicit marching in membrane area with a bracketed root solve for the local flux', order: 1, stability: 'Stable while each segment removes less than half the local flow', resolution: 'n_seg' },
+  optimise: { objective: 'SEC', sense: 'min', vars: ['P_f', 'Q_f'], note: 'Specific energy has a minimum in recovery: too low wastes pumping on brine, too high raises the osmotic pressure.' },
+  inverse: { series: 'flux', curve: 0, fit: ['A_w', 'k_m'] },
+  extensions: ['Two-stage and two-pass configurations', 'Local mass-transfer coefficient from a Sherwood correlation', 'Boron rejection and pH dependence', 'Fouling and cleaning-cycle modelling'],
+};
+
+// ------------------------------------------------------------------ brine outfall: near-field dense jet and far-field plume
+const brinePlume = {
+  id: 'brine-discharge-plume',
+  title: 'Brine outfall: inclined dense jet and far-field plume',
+  module: 2, klass: 'I', domains: ['desalination', 'cfd', 'marine'],
+  keywords: ['brine discharge', 'brine plume', 'brine outfall', 'outfall', 'dense jet', 'negatively buoyant jet', 'diffuser', 'dilution', 'mixing zone', 'densimetric froude', 'salinity excess', 'concentrate disposal', 'desalination brine', 'plume'],
+  summary: 'Near-field dilution of a 60° inclined dense brine jet from published laboratory correlations, followed by a bottom-attached far-field plume advected and dispersed by the ambient current, tested against a mixing-zone salinity limit.',
+  background: [
+    'Reverse-osmosis concentrate is roughly twice as saline as seawater and therefore denser. Discharged through upward-inclined nozzles it rises, loses its vertical momentum, and falls back to the seabed, entraining ambient water throughout. Laboratory studies show that for a single jet in still water every geometric and dilution quantity scales with the port diameter multiplied by the densimetric Froude number; a 60° inclination gives close to the longest trajectory and the highest dilution.',
+    'Beyond the near field the diluted brine spreads as a thin, stably stratified layer on the seabed. Vertical mixing is suppressed by the density difference, so further dilution comes mainly from lateral turbulent diffusion while the layer is carried by the current. Regulators commonly require the salinity excess to fall below a stated value at the edge of a mixing zone of the order of 100 m.',
+  ],
+  phenomena: ['Negatively buoyant jet', 'Turbulent entrainment', 'Density current on the seabed', 'Advection by ambient current', 'Lateral turbulent diffusion'],
+  laws: ['mass', 'momentum', 'species', 'fick', 'archimedes'],
+  refs: ['Roberts, P. J. W., Ferrier, A. & Daviero, G. (1997). Mixing in inclined dense jets. J. Hydraulic Engineering 123(8), 693–699.', 'Zeitoun, M. A., Reid, R. O., McHilhenny, W. F. & Mitchell, T. M. (1970). Model studies of outfall systems for desalination plants. Research and Development Progress Report 804, Office of Saline Water, U.S. Department of the Interior.', 'Fischer, H. B., List, E. J., Koh, R. C. Y., Imberger, J. & Brooks, N. H. (1979). Mixing in Inland and Coastal Waters. Academic Press.', 'Brooks, N. H. (1960). Diffusion of sewage effluent in an ocean current. In Proc. 1st Int. Conf. on Waste Disposal in the Marine Environment, Pergamon, 246–267.', 'Millero, F. J. & Poisson, A. (1981). International one-atmosphere equation of state of seawater. Deep-Sea Research 28A, 625–629.'],
+  inputs: [
+    inp('Q_b', 'Total brine flow', 'm^3/s', 1, { min: 0.05, max: 20, aliases: ['brine flow', 'discharge', 'flow rate', 'effluent flow'] }),
+    inp('S_b', 'Brine salinity', 'g/kg', 65, { min: 50, max: 90, kind: 'fluid', aliases: ['brine salinity', 'effluent salinity', 'concentrate salinity'] }),
+    inp('S_a', 'Ambient salinity', 'g/kg', 35, { min: 30, max: 45, kind: 'environment', env: 'salinity', aliases: ['ambient salinity', 'seawater salinity', 'salinity'] }),
+    inp('T_a', 'Water temperature', '°C', 22, { min: 5, max: 35, kind: 'environment', env: 'sea_surface_temp', aliases: ['water temperature', 'sea temperature', 'temperature'] }),
+    inp('d', 'Port diameter', 'm', 0.15, { min: 0.05, max: 1, kind: 'geometry', aliases: ['port diameter', 'nozzle diameter', 'nozzle'] }),
+    inp('n_p', 'Number of ports', '1', 20, { min: 1, max: 200, kind: 'geometry', aliases: ['ports', 'nozzles', 'number of ports'] }),
+    inp('s_p', 'Port spacing', 'm', 6, { min: 1, max: 30, kind: 'geometry', aliases: ['port spacing', 'spacing'] }),
+    inp('H', 'Water depth at the diffuser', 'm', 15, { min: 3, max: 100, kind: 'environment', env: 'water_depth', aliases: ['water depth', 'depth'] }),
+    inp('U_a', 'Ambient current speed', 'm/s', 0.1, { min: 0.01, max: 1.5, kind: 'environment', env: 'current_speed', aliases: ['current', 'current speed', 'ambient current'] }),
+    inp('K_y', 'Lateral turbulent diffusivity at the source scale', 'm^2/s', 0.05, { min: 0.001, max: 1, kind: 'environment', aliases: ['lateral diffusivity', 'eddy diffusivity'], src: 'Order of magnitude for coastal waters at scales of tens of metres; Fischer et al. (1979)' }),
+    inp('D_x', 'Longitudinal dispersion coefficient', 'm^2/s', 1, { min: 0.01, max: 20, kind: 'environment', aliases: ['longitudinal dispersion', 'dispersion coefficient'] }),
+    inp('x_mz', 'Mixing-zone radius', 'm', 100, { min: 10, max: 2000, aliases: ['mixing zone', 'mixing zone radius', 'compliance distance'] }),
+    inp('dS_lim', 'Permitted salinity excess at the mixing-zone edge', 'g/kg', 2, { min: 0.2, max: 10, aliases: ['salinity limit', 'permitted excess', 'limit'], src: 'Site-specific permit value; limits of 1–2 g/kg or 5 % above ambient are common' }),
+  ],
+  assumptions: [
+    asm('roberts', 'Near-field dilution follows Roberts, Ferrier & Daviero (1997), ending at the return point.', { why: 'Most widely used data set for 60° jets', alt: 'The more conservative impact-point dilution of Zeitoun et al. (1970) is used and no further near-field mixing is credited.' }),
+    asm('eos', 'Densities come from the one-atmosphere seawater equation of state.', { why: 'Accurate for brine up to about 70 g/kg', alt: 'Density varies linearly with salinity with a haline contraction coefficient of 7.6 × 10⁻⁴ per g/kg.' }),
+    asm('const_K', 'Lateral diffusivity is constant with distance.', { why: 'Conservative for a plume much narrower than the largest eddies', alt: 'Diffusivity grows with plume width to the four-thirds power (Brooks 1960).' }),
+    asm('independent', 'Adjacent jets do not merge before they return to the seabed.', { why: 'Design intent of a well-spaced diffuser', alt: 'No correction is available here: a warning is raised and the single-jet dilution is reduced by the ratio of spacing to required spacing.' }),
+  ],
+  symbols: { rho_b: ['Brine density', 'kg/m^3'], rho_a: ['Ambient density', 'kg/m^3'], g_r: ['Reduced gravity', 'm/s^2'], u_j: ['Jet exit velocity', 'm/s'], F: ['Densimetric Froude number', '1'], y_t: ['Terminal rise height', 'm'], x_i: ['Impact-point distance', 'm'], S_i: ['Impact-point dilution', '1'], x_n: ['Return-point (end of near field) distance', 'm'], S_n: ['Near-field dilution', '1'], y_L: ['Thickness of the bottom layer', 'm'], b: ['Initial plume width', 'm'], M: ['Laterally integrated salinity excess', 'm'], x: ['Distance down-current', 'm'], t: ['Time', 's'], dS: ['Centre-line salinity excess', '1'], beta_S: ['Haline contraction coefficient', '1'] },
+  equations: a => [
+    a.eos ? eq('gr', 'Reduced gravity', 'g_r', 'g*(rho_b - rho_a)/rho_a', { kind: 'definition', needs: ['eos'] }) : eq('gr', 'Reduced gravity', 'g_r', 'g*beta_S*(S_b - S_a)', { kind: 'closure', origin: 'Linearised equation of state' }),
+    eq('uj', 'Jet exit velocity', 'u_j', 'Q_b/(n_p*pi*d^2/4)', { kind: 'law', origin: 'Conservation of mass' }),
+    eq('fr', 'Densimetric Froude number', 'F', 'u_j/sqrt(g_r*d)', { kind: 'definition' }),
+    eq('yt', 'Terminal rise height', 'y_t', '2.2*d*F', { kind: 'empirical', origin: 'Roberts, Ferrier & Daviero (1997), 60° jet in still water' }),
+    eq('xi', 'Impact-point distance', 'x_i', '2.4*d*F', { kind: 'empirical', origin: 'Roberts, Ferrier & Daviero (1997)' }),
+    a.roberts ? eq('si', 'Impact-point dilution', 'S_i', '1.6*F', { kind: 'empirical', origin: 'Roberts, Ferrier & Daviero (1997)', needs: ['roberts'] }) : eq('si', 'Impact-point dilution', 'S_i', '1.12*F', { kind: 'empirical', origin: 'Zeitoun et al. (1970)' }),
+    ...(a.roberts ? [eq('xn', 'Return-point distance', 'x_n', '9*d*F', { kind: 'empirical', origin: 'Roberts, Ferrier & Daviero (1997)' }), eq('sn', 'Near-field dilution', 'S_n', '2.6*F', { kind: 'empirical', origin: 'Roberts, Ferrier & Daviero (1997)' })] : [eq('sn', 'Near-field dilution', 'S_n', 'S_i', { kind: 'closure', origin: 'No mixing credited beyond the impact point' })]),
+    eq('yl', 'Bottom-layer thickness', 'y_L', '0.7*d*F', { kind: 'empirical', origin: 'Roberts, Ferrier & Daviero (1997)' }),
+    eq('ade', 'Far-field transport of the laterally integrated excess', 'pd(M,t) + U_a*pd(M,x)', 'D_x*pd2(M,x)', { kind: 'law', origin: 'Conservation of salt, integrated across the plume' }),
+    a.const_K ? eq('lat', 'Centre-line excess with lateral diffusion', 'dS', 'M/b*erf(b/(4*sqrt(K_y*x/U_a)))', { kind: 'derived', origin: 'Exact solution for a finite line source with constant diffusivity', needs: ['const_K'] }) : eq('lat', 'Centre-line excess with lateral diffusion', 'dS', 'M/b*erf(sqrt(1.5/((1 + 8*K_y*x/(U_a*b^2))^3 - 1)))', { kind: 'derived', origin: 'Brooks (1960) four-thirds-law solution' }),
+  ],
+  derivation: a => [
+    { text: 'For a round dense jet in still water the only parameters are the kinematic fluxes of volume, momentum and buoyancy. Far from the nozzle the volume flux is unimportant, leaving one length scale, proportional to d·F.', tex: 'F = \\frac{u_j}{\\sqrt{g\'d}},\\qquad g\' = g\\,\\frac{\\rho_b-\\rho_a}{\\rho_a}' },
+    { text: 'Dimensional analysis then requires every length to be a constant times d·F and every dilution to be a constant times F; the constants are measured.', tex: '\\frac{y_t}{dF} = 2.2,\\quad \\frac{x_i}{dF} = 2.4,\\quad \\frac{S_i}{F} = ' + (a.roberts ? '1.6,\\quad \\frac{x_n}{dF} = 9,\\quad \\frac{S_n}{F} = 2.6' : '1.12') },
+    { text: 'In the far field, integrating the salt balance across the plume removes lateral diffusion and leaves a one-dimensional advection–dispersion equation for the integrated excess M.', tex: '\\frac{\\partial M}{\\partial t} + U\\frac{\\partial M}{\\partial x} = D_x\\frac{\\partial^2 M}{\\partial x^2},\\qquad M = \\int \\Delta S\\,\\mathrm{d}y' },
+    { text: 'Lateral diffusion widens the plume and lowers the centre-line value. For a source of width b and ' + (a.const_K ? 'constant diffusivity' : 'diffusivity growing as the four-thirds power of plume width') + ':', tex: a.const_K ? '\\frac{\\Delta S_{max}}{\\Delta S_0} = \\operatorname{erf}\\!\\left(\\frac{b}{4\\sqrt{K_y x/U}}\\right)' : '\\frac{\\Delta S_{max}}{\\Delta S_0} = \\operatorname{erf}\\sqrt{\\frac{3/2}{\\left(1+\\tfrac{2}{3}\\beta x/b\\right)^3-1}},\\qquad \\beta = \\frac{12K_y}{Ub}' },
+    { text: 'The salinity excess at any point is the initial excess divided by the product of near-field and far-field dilutions.', tex: '\\Delta S(x) = \\frac{S_b - S_a}{S_n\\,S_{ff}(x)}' },
+  ],
+  solve(v, a) {
+    const Sb = massFrac(v.S_b), Sa = massFrac(v.S_a), tC = v.T_a - 273.15, np = Math.max(1, Math.round(v.n_p));
+    const rhoA = R.seawaterDensity(tC, Sa * 1000), rhoB = a.eos ? R.seawaterDensity(tC, Sb * 1000) : rhoA * (1 + 0.76 * (Sb - Sa));
+    const gr = g * (rhoB - rhoA) / rhoA, uj = v.Q_b / (np * Math.PI * v.d ** 2 / 4), F = uj / Math.sqrt(gr * v.d), dF = v.d * F;
+    const yt = 2.2 * dF, xi = 2.4 * dF, Si0 = (a.roberts ? 1.6 : 1.12) * F, xn = a.roberts ? 9 * dF : xi, yL = 0.7 * dF;
+    // jets merge if the spacing is less than about the plume width at impact (≈ 2 d F); used only for the warning and penalty
+    const sReq = 2 * dF, merge = np > 1 && v.s_p < sReq, pen = !a.independent && merge ? v.s_p / sReq : 1;
+    const Si = Math.max(1, Si0 * pen), Sn = Math.max(1, (a.roberts ? 2.6 : 1.12) * F * pen);
+    const dS0 = Sb - Sa, dSn = dS0 / Sn, b = (np - 1) * v.s_p + dF;
+    const latOf = x => { if (x <= 0) return 1; return a.const_K ? erfFn(b / (4 * Math.sqrt(v.K_y * x / v.U_a))) : erfFn(Math.sqrt(1.5 / (Math.pow(1 + 8 * v.K_y * x / (v.U_a * b * b), 3) - 1))); };
+    const excessAt = r => (r <= xi ? dS0 / (1 + (Si - 1) * r / xi) : r <= xn ? dS0 / (Si + (Sn - Si) * (r - xi) / Math.max(xn - xi, 1e-9)) : dSn * latOf(r - xn));
+    // far field: laterally integrated excess from the 1-D advection–dispersion solver, started with clean water
+    const Lff = Math.max(3 * v.x_mz, 20 * dF, 200), nx = Math.round(N.clamp(Lff * v.U_a / (2 * v.D_x) + 1, 41, 201));
+    const dxx = Lff / (nx - 1), dtEst = 0.4 * Math.min(dxx / v.U_a, dxx * dxx / (2 * v.D_x)), tEnd = Math.min(1.5 * Lff / v.U_a, 20000 * dtEst);
+    const ff = N.advectDiffuse1D({ u: v.U_a, D: v.D_x, L: Lff, nx, tEnd, c0: () => 0, inlet: dSn * b, frames: 40 });
+    const xr = ff.x.map(q => q + xn), lat = ff.x.map(latOf);
+    const frames = ff.snaps.map(sn => sn.map((M, i) => M / b * lat[i] * 1000));
+    const iq = Math.min(nx - 1, Math.round(0.2 * (nx - 1))), established = tEnd >= 1.4 * Lff / v.U_a;
+    const dSmz = excessAt(v.x_mz), margin = v.dS_lim - dSmz, ok = margin >= 0;
+    const rs = N.logspace(Math.max(0.2 * xi, 0.1), Math.max(10 * v.x_mz, 5 * xn), 80), ex = rs.map(r => excessAt(r) * 1000);
+    // schematic centre-line trajectory through the measured top and impact points
+    const tj = N.linspace(0, 1, 40), xt = tj.map(q => q * xi), zt = tj.map(q => 4 * yt * q * (1 - q));
+    const xLimit = (() => { if (excessAt(rs[0]) <= v.dS_lim) return rs[0]; const far = 1e3 * Math.max(v.x_mz, xn); if (excessAt(far) > v.dS_lim) return Infinity; return N.bisect(r => excessAt(r) - v.dS_lim, rs[0], far, 1e-9); })();
+    const warnings = [];
+    if (F < 10) warnings.push(`Densimetric Froude number ${lab(F)} is below about 10–20: the correlations were established at higher values and the jet may attach to the bed near the nozzle. Use smaller or more ports.`);
+    if (yt > 0.75 * v.H) warnings.push(`The jet rises ${lab(yt, 'm')} in ${lab(v.H, 'm')} of water and will interact with the surface, reducing dilution. Deeper water or a lower exit velocity is needed.`);
+    if (merge) warnings.push(`Port spacing of ${lab(v.s_p, 'm')} is less than the ${lab(sReq, 'm')} needed to keep adjacent jets separate; single-jet dilution will not be achieved.`);
+    if (!ok) warnings.push(`Salinity excess at the mixing-zone edge is ${lab(dSmz * 1000, 'g/kg')}, above the permitted ${lab(v.dS_lim * 1000, 'g/kg')}.`);
+    if (!established) warnings.push('The far-field simulation was stopped before the plume front crossed the whole domain; the animation shows the early development only.');
+    return {
+      scalars: [
+        scalar('rho_a', 'Ambient density', rhoA, 'kg/m^3'), scalar('rho_b', 'Brine density', rhoB, 'kg/m^3'), scalar('g_r', 'Reduced gravity', gr, 'm/s^2'),
+        scalar('u_j', 'Jet exit velocity', uj, 'm/s'), scalar('F', 'Densimetric Froude number', F, '1'),
+        scalar('y_t', 'Terminal rise height', yt, 'm'), scalar('x_i', 'Impact-point distance', xi, 'm'), scalar('S_i', 'Impact-point dilution', Si, '1'),
+        scalar('x_n', 'End of the near field', xn, 'm'), scalar('S_n', 'Near-field dilution', Sn, '1'), scalar('y_L', 'Bottom-layer thickness', yL, 'm'),
+        scalar('dS_n', 'Salinity excess at the end of the near field', dSn, '1', { show: 'g/kg' }), scalar('b', 'Initial far-field plume width', b, 'm'),
+        scalar('dS_mz', 'Salinity excess at the mixing-zone edge', dSmz, '1', { show: 'g/kg' }), scalar('S_mz', 'Total dilution at the mixing-zone edge', dS0 / dSmz, '1'),
+        scalar('margin', 'Margin to the permitted excess', margin, '1', { show: 'g/kg', text: ok ? undefined : `Limit exceeded by ${lab(-margin * 1000, 'g/kg')}` }),
+        scalar('x_lim', 'Distance at which the excess falls to the permitted value', xLimit, 'm', { text: Number.isFinite(xLimit) ? undefined : 'Not reached within the modelled range' }),
+        scalar('t_adv', 'Travel time to the mixing-zone edge', v.x_mz / v.U_a, 's', { show: 'min' }),
+      ],
+      series: [
+        line('excess', 'Centre-line salinity excess against distance', 'Distance from the diffuser', 'm', rs, [{ label: 'Salinity excess', data: ex }, { label: 'Permitted excess', data: rs.map(() => v.dS_lim * 1000), dash: true }], 'Salinity excess', 'g/kg', { logx: true, logy: true, marker: [v.x_mz, dSmz * 1000], note: 'Near-field values are interpolated between the nozzle, the impact point and the return point.' }),
+        line('dilution', 'Total dilution against distance', 'Distance from the diffuser', 'm', rs, [{ label: 'Dilution', data: rs.map(r => dS0 / excessAt(r)) }], 'Dilution', '–', { logx: true, logy: true }),
+        line('trajectory', 'Schematic jet trajectory', 'Horizontal distance', 'm', xt, [{ label: 'Upper edge of the jet (parabola through the measured rise height and impact point)', data: zt }, { label: 'Water surface', data: xt.map(() => v.H), dash: true }], 'Height above port', 'm'),
+      ],
+      anims: [anim('plume', 'Far-field salinity excess developing down-current', 'Distance from the diffuser', 'm', xr, frames, ff.times, 'Centre-line salinity excess', 'g/kg')],
+      checks: [
+        check('Far-field salt flux conserved', established ? (ff.final[iq] - dSn * b) / (dSn * b) : 0, 2e-2, 'Laterally integrated excess a short way down-current equals the source value once the plume is established'),
+        check('Volume flux through the ports', (uj * np * Math.PI * v.d ** 2 / 4 - v.Q_b) / v.Q_b, 1e-12, 'Port velocity consistent with total flow'),
+        check('Dilution increases monotonically with distance', rs.some((r, i) => i > 0 && ex[i] > ex[i - 1] * (1 + 1e-9)) ? 1 : 0, 0, 'Salinity excess never rises away from the source'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    const r = this.solve(v, a), F = val(r, 'F');
+    const b = 50, K = 0.05, U = 0.1, x = 500, sig = Math.sqrt(2 * K * x / U);
+    // superposition of point-source Gaussians across a finite line source, evaluated numerically
+    const ys = N.linspace(-b / 2, b / 2, 2001), num = N.trapz(ys, ys.map(y => Math.exp(-y * y / (2 * sig * sig)) / (sig * Math.sqrt(2 * Math.PI))));
+    const adv = N.advectDiffuse1D({ u: 0.2, D: 0.5, L: 200, nx: 201, tEnd: 2000, c0: () => 0, inlet: 1, frames: 2 });
+    return [
+      bench('Rise height over d·F', val(r, 'y_t') / (v.d * F), 2.2, 'Roberts, Ferrier & Daviero (1997)', 1e-12),
+      bench('Finite line-source centre-line factor vs Gaussian superposition', erfFn(b / (4 * Math.sqrt(K * x / U))), num, 'Exact solution of the lateral diffusion equation', 1e-5),
+      bench('Far-field solver reaches the conservative steady state', adv.final[100], 1, 'Steady solution of the advection–dispersion equation with constant inlet', 1e-3),
+      bench('Seawater density at 5 °C and salinity 35', R.seawaterDensity(5, 35), 1027.675, 'Check value of the one-atmosphere equation of state, Millero & Poisson (1981)', 1e-6),
+    ];
+  },
+  validation: [],
+  diagram(v, a) {
+    return svg(`
+      ${S.path('M30 50 L610 50', 'd-liquid-line')} ${S.text(600, 40, 'sea surface', 'd-text d-small', 'end')}
+      ${S.path('M30 290 L610 290', 'd-ground')}
+      ${S.rect(60, 270, 60, 20, 'd-pipe-fill', 3)} ${S.path('M110 270 L128 240', 'd-pipe')}
+      ${S.path('M128 240 Q190 60 260 150 Q300 210 320 284', 'd-line d-hazard')}
+      ${S.path('M320 286 L600 286 L600 268 Q450 262 320 270 Z', 'd-hazard')}
+      ${S.text(170, 262, '60°', 'd-text d-small')} ${S.dim(215, 110, 215, 288, 'y_t')}
+      ${S.dim(128, 320, 320, 320, 'x_i')} ${S.text(460, 258, 'bottom-attached plume', 'd-text d-small')}
+      ${S.arrow(430, 120, 520, 120)} ${S.text(475, 108, `current ${lab(v.U_a, 'm/s')}`)}
+      ${S.dim(40, 52, 40, 288, `H = ${lab(v.H, 'm')}`)}
+      ${S.text(320, 24, `${Math.round(v.n_p)} ports of ${lab(v.d * 1000, 'mm')},  brine ${lab(massFrac(v.S_b) * 1000, 'g/kg')} into ${lab(massFrac(v.S_a) * 1000, 'g/kg')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Measure the trajectory and dilution of an inclined dense jet in a laboratory tank, and survey the salinity field around an operating outfall to verify compliance at the mixing-zone edge.',
+    apparatus: ['Glass-walled tank at least 60 nozzle-Froude lengths long with a false floor', 'Constant-head supply of dyed salt solution through a 60° nozzle', 'For field work: survey vessel with towed or profiling CTD and a bottom-mounted current meter'],
+    instruments: [{ name: 'Laser-induced fluorescence system (laser sheet, camera, Rhodamine tracer)', measures: 'Instantaneous and mean concentration field', range: 'Dilution 1–200', resolution: '±5 %' }, { name: 'Micro-conductivity probes', measures: 'Point salinity at the impact point and in the bottom layer', range: '0–80 g/kg', resolution: '±0.05 g/kg' }, { name: 'CTD profiler (field)', measures: 'Salinity, temperature and depth', range: '0–70 g/kg', resolution: '±0.01 g/kg' }, { name: 'Acoustic Doppler current profiler (field)', measures: 'Ambient current profile', range: '0–3 m/s', resolution: '±0.01 m/s' }],
+    procedure: ['Set the density difference and flow to give Froude numbers between 20 and 60.', 'Record at least 300 s of concentration images after the flow is established; average to obtain the mean field.', 'Extract rise height, impact distance and minimum dilution at the bed; normalise by d·F and by F.', 'In the field, run radial CTD transects within 1 m of the bed at slack and at peak current.'],
+    controls: ['Verify nozzle Reynolds number above about 2000 so the jet is turbulent', 'Background salinity transects up-current of the outfall'],
+    signatures: ['Rise height and impact distance proportional to d·F', 'Dilution proportional to F', 'A thin saline layer on the bed with a sharp upper interface'],
+    safety: ['Class 3B/4 laser controls for fluorescence work', 'Vessel and over-side working procedures in the field'],
+  },
+  falsify: ['Normalised rise height or impact dilution that varies systematically with Froude number above about 20 in still water.', 'Field salinity excess at the mixing-zone edge persistently above the prediction under currents no weaker than assumed.'],
+  alternatives: [{ name: 'Integral jet models (CORJET, VISJET, UM3)', text: 'Solve entrainment equations along the trajectory and handle ambient current and stratification directly.' }, { name: 'Three-dimensional CFD with a buoyancy-modified turbulence model', text: 'Resolves bed interaction, merging jets and bathymetry at much greater cost.' }, { name: 'Density-current models for the far field', text: 'On a sloping bed the layer flows down-slope under gravity; a gravity-current model then replaces passive advection.' }],
+  hazards: [{ hazard: 'Hypersaline layer on the seabed', cause: 'Insufficient dilution or weak currents', mitigation: 'Diffuser redesign, pre-dilution with cooling water, monitoring' }, { hazard: 'Recirculation into the intake', cause: 'Intake located down-current or down-slope of the outfall', mitigation: 'Separation distance and intake elevation' }, { hazard: 'Toxicity of process chemicals', cause: 'Antiscalants, coagulants and cleaning residues in the concentrate', mitigation: 'Treatment before discharge and effluent limits' }],
+  standards: ['California Ocean Plan, desalination amendment (State Water Resources Control Board)', 'UNEP guidance on desalination: resource and guidance manual for environmental impact assessments', 'WHO guidance on desalination for safe water supply', 'ISO 5667-9 (water quality — sampling from marine waters)'],
+  limits: 'Near field: single round jets at 60° in deep, unstratified, stagnant water with Froude numbers above about 20. Far field: flat bed, steady uniform current, no vertical mixing or gravitational spreading. Tidal reversal and re-entrainment of earlier discharge are not represented.',
+  numerics: { method: 'Algebraic near-field correlations; first-order upwind advection with explicit diffusion for the far-field front', order: 1, stability: 'Time step limited to 0.4 of the advective and diffusive limits' },
+  optimise: { objective: 'dS_mz', sense: 'min', vars: ['d', 'n_p'], note: 'Smaller, more numerous ports raise the Froude number and the dilution at the cost of head loss.' },
+  inverse: { series: 'excess', curve: 0, fit: ['K_y'] },
+  extensions: ['Ambient cross-flow effects on the near field', 'Merging of adjacent jets from a multiport diffuser', 'Sloping-bed gravity current', 'Tidal cycling and build-up of background salinity'],
+};
+
+// ------------------------------------------------------------------ scaling potential of RO concentrate
+const KSP_GYPSUM = Math.pow(10, -4.58), K_CASO4 = Math.pow(10, 2.30), M_CA = 0.040078, M_SO4 = 0.09606;
+const daviesLog = (z, I) => -0.509 * z * z * (Math.sqrt(I) / (1 + Math.sqrt(I)) - 0.3 * I);
+/** Gypsum saturation ratio from total molar concentrations (mol/L) and ionic strength (mol/L). */
+function gypsumSR(mCa, mSO4, I, pairing) {
+  const g2 = Math.pow(10, 2 * daviesLog(2, Math.min(I, 2)));
+  let p = 0;
+  if (pairing) { const q = K_CASO4 * g2, bq = mCa + mSO4 + 1 / q; p = 0.5 * (bq - Math.sqrt(Math.max(bq * bq - 4 * mCa * mSO4, 0))); }
+  return { SR: g2 * (mCa - p) * (mSO4 - p) / KSP_GYPSUM, gamma: Math.sqrt(g2), paired: mCa > 0 ? p / mCa : 0 };
+}
+/** Langelier saturation pH from concentrations in mg/L and temperature in kelvin. */
+const langelierPHs = (tds, T, caHard, alk) => 9.3 + (Math.log10(tds) - 1) / 10 + (-13.12 * Math.log10(T) + 34.55) - (Math.log10(caHard) - 0.4) - Math.log10(alk);
+
+const scaling = {
+  id: 'scaling-saturation-index',
+  title: 'Scaling potential of reverse-osmosis concentrate',
+  module: 2, klass: 'I', domains: ['desalination', 'chemical'],
+  keywords: ['scaling', 'saturation index', 'langelier', 'lsi', 'gypsum', 'calcium sulphate', 'calcium sulfate', 'calcium carbonate', 'scale formation', 'antiscalant', 'solubility product', 'concentrate', 'recovery limit', 'supersaturation'],
+  summary: 'Langelier saturation index for calcium carbonate and saturation ratio for gypsum in membrane concentrate as functions of recovery, with the recovery at which each scale becomes possible.',
+  background: [
+    'As a membrane system withdraws permeate, sparingly soluble salts in the remaining concentrate can exceed their solubility and deposit on the membrane. The two most common scales in brackish-water plants are calcium carbonate and gypsum (calcium sulphate dihydrate).',
+    'Calcium carbonate scaling is conventionally assessed with the Langelier saturation index, the difference between the actual pH and the pH at which the water would be just saturated. A positive index indicates a tendency to deposit. The index is reliable only at moderate salinity; for sea-water-strength concentrates the Stiff and Davis index is used instead.',
+    'Gypsum scaling is assessed from the ratio of the ion activity product to the solubility product. Activity coefficients are estimated here with the Davies equation and the neutral CaSO₄ ion pair is accounted for explicitly; both are adequate up to an ionic strength of about 0.5 mol/L.',
+  ],
+  phenomena: ['Concentration of rejected ions', 'Carbonate equilibrium and pH shift', 'Ion activity and ion pairing', 'Supersaturation and nucleation'],
+  laws: ['mass', 'species'],
+  refs: ['Langelier, W. F. (1936). The analytical control of anti-corrosion water treatment. J. American Water Works Association 28, 1500–1521.', 'Stiff, H. A. & Davis, L. E. (1952). A method for predicting the tendency of oil field waters to deposit calcium carbonate. Petroleum Transactions AIME 195, 213–216.', 'Davies, C. W. (1962). Ion Association. Butterworths, London.', 'Stumm, W. & Morgan, J. J. (1996). Aquatic Chemistry, 3rd ed., Wiley.', 'Parkhurst, D. L. & Appelo, C. A. J. (2013). Description of input and examples for PHREEQC version 3. U.S. Geological Survey Techniques and Methods 6-A43.'],
+  inputs: [
+    inp('Ca', 'Calcium in the feed (as Ca²⁺)', 'mg/L', 150, { min: 1, max: 1500, kind: 'fluid', aliases: ['calcium'] }),
+    inp('SO4', 'Sulphate in the feed (as SO₄²⁻)', 'mg/L', 600, { min: 1, max: 5000, kind: 'fluid', aliases: ['sulphate', 'sulfate'] }),
+    inp('Alk', 'Alkalinity of the feed (as CaCO₃)', 'mg/L', 180, { min: 5, max: 1000, kind: 'fluid', aliases: ['alkalinity', 'bicarbonate'] }),
+    inp('TDS', 'Total dissolved solids of the feed', 'mg/L', 2000, { min: 100, max: 12000, kind: 'fluid', aliases: ['tds', 'total dissolved solids', 'salinity'] }),
+    inp('pH', 'Feed pH', '1', 7.5, { min: 5.5, max: 9, kind: 'fluid', aliases: ['ph'] }),
+    inp('T', 'Temperature', '°C', 25, { min: 5, max: 45, aliases: ['temperature'] }),
+    inp('r', 'System recovery', '%', 75, { min: 0, max: 92, aliases: ['recovery'] }),
+    inp('Rej', 'Salt rejection of the membrane', '%', 99, { min: 90, max: 99.9, aliases: ['rejection'] }),
+    inp('CPF', 'Concentration-polarisation factor at the membrane wall', '1', 1.13, { min: 1, max: 2, aliases: ['polarisation factor', 'beta factor'], src: 'Typical design value; suppliers recommend a maximum of about 1.2' }),
+  ],
+  assumptions: [
+    asm('co2_free', 'Carbon dioxide passes the membrane freely while bicarbonate is rejected, so concentrate pH rises with the logarithm of the concentration factor.', { why: 'Standard approximation for un-acidified feed', alt: 'Concentrate pH is taken equal to feed pH.' }),
+    asm('ion_pair', 'Part of the calcium and sulphate is bound in the neutral CaSO₄ ion pair.', { why: 'Needed to reproduce the measured solubility of gypsum', alt: 'Ion pairing is ignored, which overstates the gypsum saturation ratio by roughly half.' }),
+    asm('wall', 'Saturation is evaluated at the membrane wall, where concentration is raised by the polarisation factor.', { why: 'Scale forms where the concentration is highest', alt: 'Saturation is evaluated in the bulk concentrate.' }),
+    asm('real_rej', 'A small fraction of the salt passes into the permeate.', { why: 'Slightly lowers the concentration factor', alt: 'Rejection is complete: the concentration factor is 1/(1 − r).' }),
+  ],
+  symbols: { CF: ['Concentration factor', '1'], LSI: ['Langelier saturation index', '1'], pH_c: ['Concentrate pH', '1'], pH_s: ['Saturation pH', '1'], A_L: ['Langelier solids term', '1'], B_L: ['Langelier temperature term', '1'], C_L: ['Langelier calcium term', '1'], D_L: ['Langelier alkalinity term', '1'], c_ref: ['Reference concentration 1 mg/L', 'kg/m^3'], T_ref: ['Reference temperature 1 K', 'K'], Ca_h: ['Calcium hardness of concentrate as CaCO₃', 'kg/m^3'], I_s: ['Ionic strength over 1 mol/L', '1'], gamma: ['Activity coefficient of a divalent ion', '1'], m_Ca: ['Free calcium over 1 mol/L', '1'], m_SO4: ['Free sulphate over 1 mol/L', '1'], m_pair: ['CaSO₄ ion pair over 1 mol/L', '1'], K_sp: ['Solubility product of gypsum', '1'], K_a: ['Association constant of the CaSO₄ ion pair', '1'], SR: ['Gypsum saturation ratio', '1'] },
+  equations: a => [
+    a.real_rej ? eq('cf', 'Concentration factor', 'CF', '(1 - r*(1 - Rej))/(1 - r)', { kind: 'law', origin: 'Salt balance over the membrane system', needs: ['real_rej'] }) : eq('cf', 'Concentration factor', 'CF', '1/(1 - r)', { kind: 'law', origin: 'Salt balance with complete rejection' }),
+    a.co2_free ? eq('phc', 'Concentrate pH', 'pH_c', 'pH + log10(CF)', { kind: 'derived', origin: 'Carbonate equilibrium with bicarbonate concentrated and CO₂ unchanged', needs: ['co2_free'] }) : eq('phc', 'Concentrate pH', 'pH_c', 'pH', { kind: 'closure' }),
+    eq('al', 'Solids term', 'A_L', '(log10(CF*TDS/c_ref) - 1)/10', { kind: 'empirical', origin: 'Langelier (1936), simplified form' }),
+    eq('bl', 'Temperature term', 'B_L', '34.55 - 13.12*log10(T/T_ref)', { kind: 'empirical', origin: 'Langelier (1936), simplified form' }),
+    eq('cl', 'Calcium term', 'C_L', 'log10(Ca_h/c_ref) - 0.4', { kind: 'empirical', origin: 'Langelier (1936), simplified form' }),
+    eq('dl', 'Alkalinity term', 'D_L', 'log10(CF*Alk/c_ref)', { kind: 'empirical', origin: 'Langelier (1936), simplified form' }),
+    eq('phs', 'Saturation pH', 'pH_s', '9.3 + A_L + B_L - C_L - D_L', { kind: 'empirical', origin: 'Langelier (1936)' }),
+    eq('lsi', 'Langelier saturation index', 'LSI', 'pH_c - pH_s', { kind: 'definition' }),
+    eq('is', 'Ionic strength', 'I_s', '2.5e-5*CF*TDS/c_ref', { kind: 'empirical', origin: 'Langelier’s approximation from total dissolved solids' }),
+    eq('dav', 'Davies activity coefficient', 'log10(gamma)', '-0.509*4*(sqrt(I_s)/(1 + sqrt(I_s)) - 0.3*I_s)', { kind: 'empirical', origin: 'Davies (1962), 25 °C, divalent ion' }),
+    ...(a.ion_pair ? [eq('pair', 'Ion-pair equilibrium', 'm_pair', 'K_a*gamma^2*m_Ca*m_SO4', { kind: 'law', origin: 'Mass action for Ca²⁺ + SO₄²⁻ ⇌ CaSO₄⁰', needs: ['ion_pair'] })] : []),
+    eq('sr', 'Gypsum saturation ratio', 'SR', 'gamma^2*m_Ca*m_SO4/K_sp', { kind: 'law', origin: 'Ion activity product over solubility product' }),
+  ],
+  derivation: a => [
+    { text: 'A salt balance over the system gives the factor by which rejected ions are concentrated.', tex: a.real_rej ? '\\mathrm{CF} = \\frac{1 - r\\,(1-R)}{1-r}' : '\\mathrm{CF} = \\frac{1}{1-r}' },
+    { text: 'Calcium carbonate is in equilibrium when the pH equals the saturation pH. In Langelier’s simplified form this depends on dissolved solids, temperature, calcium hardness and alkalinity.', tex: '\\mathrm{pH}_s = 9.3 + A + B - C - D' },
+    { text: 'The index is the distance of the actual pH from saturation; positive values indicate a tendency to deposit calcium carbonate.', tex: '\\mathrm{LSI} = \\mathrm{pH} - \\mathrm{pH}_s' },
+    ...(a.co2_free ? [{ text: 'With bicarbonate concentrated by CF and dissolved CO₂ unchanged, the first dissociation equilibrium of carbonic acid raises the pH.', tex: '\\mathrm{pH}_c = \\mathrm{pH}_f + \\log_{10}\\mathrm{CF}' }] : []),
+    { text: 'For gypsum the driving force is the ion activity product relative to the solubility product. Activity coefficients come from the Davies equation.', tex: '\\mathrm{SR} = \\frac{\\gamma_\\pm^2\\,[\\mathrm{Ca^{2+}}][\\mathrm{SO_4^{2-}}]}{K_{sp}},\\qquad \\log_{10}\\gamma = -0.509\\,z^2\\left(\\frac{\\sqrt I}{1+\\sqrt I} - 0.3I\\right)' },
+    ...(a.ion_pair ? [{ text: 'Free-ion concentrations are reduced by formation of the neutral ion pair, found from a quadratic mass-action equation.', tex: '[\\mathrm{CaSO_4^0}] = K_a\\,\\gamma_\\pm^2\\,[\\mathrm{Ca^{2+}}][\\mathrm{SO_4^{2-}}]' }] : []),
+  ],
+  solve(v, a) {
+    const mg = q => q * 1000; // kg/m³ → mg/L
+    const cfOf = r => (a.real_rej ? (1 - r * (1 - v.Rej)) / (1 - r) : 1 / (1 - r));
+    const state = r => {
+      const CF = cfOf(r), f = CF * (a.wall ? v.CPF : 1);
+      const tds = mg(v.TDS) * f, I = 2.5e-5 * tds, pHc = a.co2_free ? v.pH + Math.log10(CF) : v.pH;
+      const pHs = langelierPHs(tds, v.T, 2.497 * mg(v.Ca) * f, mg(v.Alk) * f);
+      const gy = gypsumSR(v.Ca * f / M_CA / 1000, v.SO4 * f / M_SO4 / 1000, I, a.ion_pair);
+      return { CF, f, tds, I, pHc, pHs, LSI: pHc - pHs, ...gy };
+    };
+    const now = state(v.r), feed = state(0);
+    const limit = fn => { if (fn(0) >= 0) return 0; if (fn(0.95) < 0) return 0.95; return N.bisect(fn, 0, 0.95, 1e-10); };
+    const rL = limit(r => state(r).LSI), rG = limit(r => state(r).SR - 1), rG2 = limit(r => state(r).SR - 2.3);
+    const rs = N.linspace(0, 0.92, 70), sw = rs.map(state);
+    const warnings = [];
+    if (now.tds > 10000) warnings.push(`Concentrate dissolved solids of ${lab(now.tds, 'mg/L')} are beyond the range of the Langelier index (about 10 000 mg/L). Use the Stiff and Davis index for calcium carbonate at this salinity.`);
+    if (now.I > 0.5) warnings.push(`Ionic strength of ${lab(now.I, 'mol/L')} is beyond the validity of the Davies equation (about 0.5 mol/L); the gypsum ratio is then overstated. A Pitzer model is needed for sea-water-strength concentrates.`);
+    if (now.LSI > 0) warnings.push(`The concentrate has a positive Langelier index (${lab(now.LSI)}): calcium carbonate can deposit unless acid or antiscalant is dosed. Antiscalants are typically effective up to an index of about 1.8–2.5.`);
+    if (now.SR > 1) warnings.push(`Gypsum is supersaturated (ratio ${lab(now.SR)}). Antiscalants typically control gypsum up to a ratio of about 2.3; beyond that, lower the recovery.`);
+    return {
+      scalars: [
+        scalar('CF', 'Concentration factor of the bulk concentrate', now.CF, '1'), scalar('TDS_c', 'Dissolved solids where saturation is evaluated', now.tds / 1000, 'kg/m^3', { show: 'mg/L' }),
+        scalar('pH_c', 'Concentrate pH', now.pHc, '1'), scalar('pH_s', 'Saturation pH of the concentrate', now.pHs, '1'),
+        scalar('LSI_f', 'Langelier index of the feed', feed.LSI, '1'), scalar('LSI', 'Langelier index of the concentrate', now.LSI, '1', { note: now.LSI > 0 ? 'scale-forming' : 'not scale-forming' }),
+        scalar('I_s', 'Ionic strength (mol/L)', now.I, '1'), scalar('gamma', 'Activity coefficient of a divalent ion', now.gamma, '1'), scalar('f_pair', 'Fraction of calcium in the CaSO₄ ion pair', now.paired, '1', { show: '%' }),
+        scalar('SR_f', 'Gypsum saturation ratio of the feed', feed.SR, '1'), scalar('SR', 'Gypsum saturation ratio of the concentrate', now.SR, '1', { note: now.SR > 1 ? 'supersaturated' : 'undersaturated' }),
+        scalar('SI_g', 'Gypsum saturation index log₁₀(SR)', Math.log10(Math.max(now.SR, 1e-300)), '1'),
+        scalar('r_LSI', 'Recovery at which the Langelier index reaches zero', rL, '1', { show: '%', text: rL === 0 ? 'Feed is already scale-forming' : rL >= 0.95 ? 'Above 95 %: not limiting' : undefined }),
+        scalar('r_gyp', 'Recovery at which gypsum becomes saturated', rG, '1', { show: '%', text: rG === 0 ? 'Feed is already saturated' : rG >= 0.95 ? 'Above 95 %: not limiting' : undefined }),
+        scalar('r_gyp_as', 'Recovery limit for gypsum with antiscalant (ratio 2.3)', rG2, '1', { show: '%', text: rG2 >= 0.95 ? 'Above 95 %: not limiting' : undefined }),
+      ],
+      series: [
+        line('lsi-r', 'Langelier index against recovery', 'Recovery', '%', rs.map(q => q * 100), [{ label: 'Langelier saturation index', data: sw.map(q => q.LSI) }, { label: 'Saturation', data: rs.map(() => 0), dash: true }], 'Index', '–', { marker: [v.r * 100, now.LSI] }),
+        line('sr-r', 'Gypsum saturation ratio against recovery', 'Recovery', '%', rs.map(q => q * 100), [{ label: 'Gypsum saturation ratio', data: sw.map(q => q.SR) }, { label: 'Saturation', data: rs.map(() => 1), dash: true }, { label: 'Typical antiscalant limit', data: rs.map(() => 2.3), dash: true }], 'Saturation ratio', '–', { logy: true, marker: [v.r * 100, now.SR] }),
+        line('ph-r', 'Concentrate pH and saturation pH against recovery', 'Recovery', '%', rs.map(q => q * 100), [{ label: 'Concentrate pH', data: sw.map(q => q.pHc) }, { label: 'Saturation pH', data: sw.map(q => q.pHs), dash: true }], 'pH', '–'),
+      ],
+      checks: [
+        check('Salt balance behind the concentration factor', (1 - (v.r * (a.real_rej ? 1 - v.Rej : 0) + (1 - v.r) * now.CF)), 1e-12, 'Feed salt = permeate salt + concentrate salt'),
+        check('Ion-pair mass action', a.ion_pair ? (() => { const mCa = v.Ca * now.f / M_CA / 1000, mS = v.SO4 * now.f / M_SO4 / 1000, p = now.paired * mCa, g2 = now.gamma ** 2; return (K_CASO4 * g2 * (mCa - p) * (mS - p) - p) / Math.max(p, 1e-30); })() : 0, 1e-8, 'Free ions and ion pair satisfy the association equilibrium'),
+      ],
+      warnings,
+    };
+  },
+  benchmarks(v, a) {
+    let pure = gypsumSR(0.0153, 0.0153, 4 * 0.0153, true);
+    for (let i = 0; i < 30; i++) pure = gypsumSR(0.0153, 0.0153, 4 * 0.0153 * (1 - pure.paired), true);
+    return [
+      bench('Saturation pH of the standard worked example', langelierPHs(320, 298.15, 150, 34), 8.2, 'TDS 320 mg/L, Ca 150 and alkalinity 34 mg/L as CaCO₃, 25 °C: pH_s = 8.2 (widely reproduced example of the simplified Langelier formula)', 1e-2),
+      bench('Davies coefficient for a divalent ion at I = 0.1 mol/L', Math.pow(10, daviesLog(2, 0.1)), 0.3732, 'Hand evaluation of the Davies (1962) equation', 1e-3),
+      bench('Gypsum saturation ratio at its measured solubility in pure water', pure.SR, 1, 'Solubility 15.3 mmol/kg at 25 °C; log K_sp = −4.58, log K_a = 2.30', 0.12),
+      bench('Concentration factor at 75 % recovery, complete rejection', val(this.solve({ ...v, r: 0.75 }, { ...a, real_rej: false }), 'CF'), 4, 'CF = 1/(1 − r)', 1e-12),
+    ];
+  },
+  validation: [
+    { name: 'Solubility of gypsum in pure water at 25 °C', ref: 'About 2.08 g/L as CaSO₄ (15.3 mmol/kg); Stumm & Morgan (1996) and standard solubility tables', note: 'A saturated gypsum solution should give a saturation ratio of one. Polarisation factor switched off.',
+      cases: [{ label: 'Saturated solution', inputs: { Ca: 0.613, SO4: 1.470, TDS: 2.083, r: 0 }, assumptions: { wall: false }, observable: 'SR_f', observed: 1.0, sigma: 0.15 }] },
+  ],
+  diagram(v, a) {
+    return svg(`
+      ${S.rect(180, 110, 280, 100, 'd-body', 10)} ${S.path('M190 160 L450 160', 'd-liquid-line')}
+      ${S.arrow(60, 135, 178, 135)} ${S.text(110, 122, 'feed')} ${S.text(110, 152, `Ca ${lab(v.Ca * 1000, 'mg/L')}`, 'd-text d-small')}
+      ${S.arrow(462, 135, 590, 135, 'd-arrow d-hazard')} ${S.text(530, 122, 'concentrate')} ${S.text(530, 152, `× ${lab(1 / (1 - v.r))}`, 'd-text d-small')}
+      ${S.arrow(320, 212, 320, 290)} ${S.text(380, 260, `permeate, ${lab(v.r * 100, '%')}`)}
+      ${[0, 1, 2, 3, 4].map(i => S.rect(330 + i * 24, 152, 14, 7, 'd-hazard', 2)).join('')}
+      ${S.text(390, 100, 'scale forms first at the tail end', 'd-text d-small')}
+      ${S.text(320, 40, `pH ${lab(v.pH)},  alkalinity ${lab(v.Alk * 1000, 'mg/L')},  sulphate ${lab(v.SO4 * 1000, 'mg/L')}`)}
+    `);
+  },
+  experiment: {
+    objective: 'Determine the recovery at which calcium carbonate and gypsum begin to precipitate from a given feed water, with and without antiscalant.',
+    apparatus: ['Stirred, thermostatted beaker or a bench cross-flow membrane cell operated in concentrate-recycle mode', 'Synthetic or site feed water', 'Antiscalant dosing stock'],
+    instruments: [{ name: 'pH electrode with temperature compensation', measures: 'pH drift on precipitation', range: '2–12', resolution: '±0.01' }, { name: 'Turbidimeter or laser scattering probe', measures: 'Onset of nucleation', range: '0–100 NTU', resolution: '±0.02 NTU' }, { name: 'Ion chromatograph or titration', measures: 'Calcium, sulphate and alkalinity', range: '1–5000 mg/L', resolution: '±2 %' }, { name: 'Conductivity meter', measures: 'Concentration factor', range: '0.1–200 mS/cm', resolution: '±0.5 %' }],
+    procedure: ['Concentrate the feed stepwise by withdrawing permeate (or by evaporation at constant temperature), holding at each step for a fixed induction time.', 'Record pH, turbidity and calcium at each step.', 'Identify the concentration factor at which turbidity rises and calcium falls; identify the solid by X-ray diffraction or microscopy.', 'Repeat with antiscalant at the supplier’s recommended dose.'],
+    controls: ['Blank with calcium-free water', 'Seeded run with added gypsum crystals to remove the nucleation barrier'],
+    signatures: ['pH fall and calcium loss at the onset of carbonate precipitation', 'Sulphate and calcium falling in equimolar proportion for gypsum', 'Induction time shortening rapidly as the saturation ratio rises above one'],
+    safety: ['Acid and antiscalant handling: gloves and eye protection', 'Pressurised membrane cell precautions'],
+  },
+  falsify: ['Gypsum precipitating from seeded solutions at a computed saturation ratio well below one within the ionic-strength range of validity.', 'Calcium carbonate depositing at a clearly negative Langelier index in water below 10 000 mg/L dissolved solids.'],
+  alternatives: [{ name: 'Stiff and Davis stability index', text: 'Replaces Langelier’s solids and temperature terms with an empirical ionic-strength function; the usual choice above about 10 000 mg/L.' }, { name: 'Pitzer ion-interaction model', text: 'Accurate activity coefficients to very high ionic strength; used in geochemical codes for sea-water concentrates.' }, { name: 'Ryznar and Puckorius indices', text: 'Empirical re-weightings of pH and saturation pH intended to correlate better with observed scale in cooling systems.' }],
+  hazards: [{ hazard: 'Irreversible membrane scaling', cause: 'Operating above the saturation limits without antiscalant', mitigation: 'Recovery limits, acid or antiscalant dosing, flushing on shut-down' }, { hazard: 'Chemical handling', cause: 'Concentrated acid for pH control', mitigation: 'Closed dosing systems, bunding, protective equipment' }],
+  standards: ['ASTM D3739 (calculation and adjustment of the Langelier saturation index for reverse osmosis)', 'ASTM D4582 (calculation and adjustment of the Stiff and Davis stability index for reverse osmosis)', 'ASTM D4692 (calculation and adjustment of sulphate scaling salts for reverse osmosis)'],
+  limits: 'Langelier index: dissolved solids below about 10 000 mg/L. Gypsum ratio: ionic strength below about 0.5 mol/L, temperature near 25 °C (the solubility product is not temperature-corrected). Other scales — barium and strontium sulphate, silica, calcium phosphate and fluoride — are not assessed.',
+  numerics: { method: 'Algebraic equilibrium relations; bisection for limiting recoveries' },
+  optimise: { objective: 'SR', sense: 'min', vars: ['r'], note: 'In practice recovery is maximised subject to the saturation limits.' },
+  inverse: { series: 'lsi-r', curve: 0, fit: ['Alk', 'Ca'] },
+  extensions: ['Stiff and Davis index for sea-water concentrates', 'Barium and strontium sulphate, silica and calcium fluoride', 'Temperature-dependent solubility products', 'Acid dosing required to reach a target index'],
+};
+
+export default [conduction, exchanger, rankine, refrigeration, airCar, freeEnergy, reverseOsmosis, brinePlume, scaling];
