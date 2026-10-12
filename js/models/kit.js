@@ -62,7 +62,9 @@ export const asm = (id, text, o = {}) => ({ id, text, on: true, ...o });
  * Equation: id, name, lhs, rhs (strings in the expression grammar), then
  * { kind: 'law'|'derived'|'closure'|'empirical'|'definition'|'hypothesis'|'boundary'|'initial',
  *   origin: 'the principle or source it comes from', needs: ['assumption ids'], note }.
- * Grammar: + - * / ^, functions sqrt exp ln log10 sin cos tan tanh sinh cosh atan asin acos abs min max erf,
+ * Grammar: + - * / ^, functions sqrt exp ln log10 sin cos tan tanh sinh cosh atan asin acos asinh acosh atanh abs min max erf,
+ * the conditional ifpos(c, a, b) meaning "a where c > 0, otherwise b" (use it so that an equation states every
+ * regime and clamp the solver applies),
  * derivative operators d(y,t) d2(y,t) pd(u,x) pd2(u,x) lap(u) grad(u) div(u) int(f,x). Greek names
  * (rho, mu, sigma, omega, ...) and subscripts with underscore (T_in) render automatically.
  */

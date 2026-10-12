@@ -13,6 +13,8 @@ import { CONSTANTS, ENV_KEYS, atmosphere, localGravity } from '../data/reference
 import { DOMAINS, LAWS } from '../data/domains.js';
 import { findEquations } from '../core/importers.js';
 import { customModel } from './custom.js';
+import { ATLAS } from '../data/atlas.js';
+import { dimensionalEstimate } from './estimate.js';
 
 /** The model in force: one from the library, or one assembled from the user's own equations. */
 export const activeModel = inv => modelById(inv.modelId) || customModel(inv);
@@ -28,13 +30,21 @@ export const PROV = {
   UNRESOLVED: { key: 'UNRESOLVED', label: 'Unresolved', tone: 'bad', text: 'Not reliably identifiable from the available information.' },
 };
 
+const ATLAS_INDEX = ATLAS.map(a => ({ id: a.id, title: a.title, keywords: a.kw, summary: a.summary, background: '', phenomena: [], inputs: Object.values(a.sym).map(v => ({ name: v[0] })), module: [1, 2], klass: 'I', domains: [] }));
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const modelClass = m => (Array.isArray(m.klass) ? m.klass : [m.klass]);
 
 /** Create a new investigation from a prompt. */
 export function createInvestigation({ module, mode = 'A', prompt, modelId = null }) {
   const ranked = P.rankModels(prompt, MODELS, module);
-  const chosen = modelId || (P.strongMatch(ranked[0]) ? ranked[0].id : null);
+  // equations written in the prompt are the user's own model: a library model replaces them only on an explicit keyword match
+  const promptEqs = findEquations(prompt.replace(/[?!]/g, '.').replace(/,?\s+\b(where|with|and|if|when|for|given|starting|from)\b/gi, ';').replace(/:\s/g, ';'), E.parse).filter(q => /[a-zA-Z]/.test(q.rhs));
+  const keywordMatch = r => !!r && ((r.hits || []).length >= 2 || (r.hits || []).some(h => h.includes(' ')));
+  // the full model library and the formula atlas compete on the same evidence: matched phrases and share of the prompt covered
+  const atlasBest = P.rankModels(prompt, ATLAS_INDEX, 1)[0] || null, weight = r => (r ? r.kw + 20 * r.cov : 0);
+  const atlasWins = !!atlasBest && (atlasBest.hits || []).length > 0 && weight(atlasBest) > weight(ranked[0]);
+  const chosen = modelId || (P.strongMatch(ranked[0]) && !atlasWins && (!promptEqs.length || keywordMatch(ranked[0])) ? ranked[0].id : null);
   const model = chosen ? modelById(chosen) : null;
   const inv = {
     id: uid(), v: 1, module, mode, prompt, title: P.titleFrom(prompt), created: Date.now(), updated: Date.now(),
@@ -46,7 +56,7 @@ export function createInvestigation({ module, mode = 'A', prompt, modelId = null
     logic: null, challenges: [], versions: [], audit: [{ ts: Date.now(), action: 'Investigation created from prompt' }],
   };
   if (!model) {
-    const found = findEquations(prompt.replace(/[?!]/g, '.').replace(/,?\s+\b(where|with|and|if|when|for|given|starting|from)\b/gi, ';').replace(/:\s/g, ';'), E.parse).filter(q => /[a-zA-Z]/.test(q.rhs));
+    const found = promptEqs;
     found.slice(0, 6).forEach(q => inv.custom.equations.push({ lhs: q.lhs, rhs: q.rhs, name: 'From your prompt' }));
     if (found.length) {
       inv.audit.push({ ts: Date.now(), action: `${Math.min(found.length, 6)} equation(s) read from the prompt and made computable` });
@@ -58,12 +68,30 @@ export function createInvestigation({ module, mode = 'A', prompt, modelId = null
         const unit = m[2] && tryUnit(m[2].replace(/[.,;]$/, '')) && !/^\d/.test(m[2]) ? m[2].replace(/[.,;]$/, '') : '1';
         inv.custom.symbols[sy] = { ...(inv.custom.symbols[sy] || {}), value: parseFloat(m[1]), unit, name: `${sy} (value stated in your prompt)` };
       }
-    } else if (ranked[0] || MODELS.length) {
-      // nothing matched strongly and the prompt holds no equations: rather than stop, run the closest model in the
-      // library and say plainly that it is only the nearest available one
-      const sem = P.semanticScores(prompt, MODELS), pool = MODELS.map((m, i) => ({ m, s: sem[i] })).filter(x => module === 1 || [].concat(x.m.module).includes(2)).sort((x, y) => y.s - x.s);
-      const pick = ranked[0] ? modelById(ranked[0].id) : (pool[0] && pool[0].s > 0.015 ? pool[0].m : null);
-      if (pick) { inv.modelId = pick.id; inv.match = { confidence: 'low', note: 'No model in the library corresponds closely to this prompt. The nearest one has been run so that there is something concrete to examine; check that it is the system you meant, pick another, or enter your own equations.' }; inv.klass = P.classifyClass(prompt, pick); inv.audit.push({ ts: Date.now(), action: `Nearest model selected with low confidence: ${pick.title}` }); }
+    } else {
+      // no strong match in the model library and no equations in the prompt: look in the formula atlas, which
+      // covers many everyday and textbook questions with small exact models
+      const ar = atlasBest, lib = ranked[0];
+      const kwHit = r => !!r && (r.hits || []).length > 0;
+      if (ar && (atlasWins || P.strongMatch(ar) || (kwHit(ar) && (!lib || !kwHit(lib))))) {
+        const at = ATLAS.find(x => x.id === ar.id);
+        inv.atlas = at.id; inv.custom.equations = at.eqs.map(([lhs, rhs, name, origin]) => ({ lhs, rhs, name, origin, kind: /law|principle|conservation/i.test(origin) ? 'law' : /definition|ratio|sum|geometry/i.test(origin) ? 'definition' : 'derived' }));
+        inv.custom.symbols = Object.fromEntries(Object.entries(at.sym).map(([k, v]) => [k, v.length > 2 ? { name: v[0], unit: v[1], value: v[2], min: v[3], max: v[4], aliases: v[5], src: v[3] === v[4] ? 'Accepted value of the constant' : 'Typical reference value' } : { name: v[0], unit: v[1] }]));
+        inv.klass = P.classifyClass(prompt, { klass: 'I', title: at.title });
+        if (!P.strongMatch(ar)) inv.match = { confidence: 'low', note: 'This is the nearest standard relation to your question. Check that it describes the situation you meant; you can replace it with your own equations.' };
+        inv.audit.push({ ts: Date.now(), action: `Standard relation selected from the formula atlas: ${at.title}` });
+        // numbers given in the prompt replace the reference values
+        const list = Object.entries(at.sym).filter(([, v]) => v.length > 2 && v[3] !== v[4]).map(([k, v]) => { const u = tryUnit(v[1]); return { sym: k, name: v[0], unit: v[1], aliases: v[5] || [], kind: 'operating', si: v[2] * u.f + u.o, rangeSI: [v[3] * u.f + u.o, v[4] * u.f + u.o] }; });
+        P.mapQuantities(P.extractQuantities(prompt), list).mapped.forEach(({ q, sym }) => { const d = inv.custom.symbols[sym]; d.value = fromSI(q.si, d.unit); d.min = Math.min(d.min, d.value); d.max = Math.max(d.max, d.value); d.src = `From your prompt: “${q.raw}”`; d.prov = 'USER'; });
+      } else if (lib && kwHit(lib) && lib.cov >= 0.3) {
+        // a library model shares real vocabulary with the prompt but not enough to be sure: run it, flagged
+        inv.modelId = lib.id; inv.match = { confidence: 'low', note: 'No model corresponds closely to this prompt. The nearest one has been run so that there is something concrete to examine; check that it is the system you meant, pick another, or enter your own equations.' }; inv.klass = P.classifyClass(prompt, modelById(lib.id)); inv.audit.push({ ts: Date.now(), action: `Nearest model selected with low confidence: ${lib.title}` });
+      } else {
+        // last resort: an order-of-magnitude scaling law built from the quantities in the prompt
+        const est = dimensionalEstimate(prompt, P.extractQuantities(prompt).items);
+        if (est) { inv.custom.equations = est.equations; inv.custom.symbols = est.symbols; inv.estimate = true; inv.match = { confidence: 'low', note: est.note }; inv.audit.push({ ts: Date.now(), action: 'Order-of-magnitude estimate synthesised by dimensional analysis' }); }
+        else inv.audit.push({ ts: Date.now(), action: 'No model or standard relation matches this prompt; reported as outside present coverage rather than running an unrelated model' });
+      }
     }
   }
   const model2 = modelById(inv.modelId);
@@ -92,6 +120,10 @@ export function applyPrompt(inv) {
     w.inputs[sym] = { si: q.si, prov: 'USER', note: `From your prompt: “${q.raw}”`, unit: q.unit && tryUnit(q.unit) && dimEq(tryUnit(q.unit).dim, tryUnit(i.unit).dim) && q.unit !== 'c' ? q.unit : i.unit };
   });
   inv.unmapped = unmapped;
+  // a power law written out in the prompt ("1/r^3", "inverse cube", "falls off as the fourth power") sets the exponent input
+  const pw = /1\s*\/\s*[a-zA-Z]\s*(?:\^|\*\*)\s*\(?(\d+(?:\.\d+)?)/.exec(inv.prompt) || (/inverse[- ]cube/i.test(inv.prompt) ? [0, '3'] : /inverse[- ]fourth/i.test(inv.prompt) ? [0, '4'] : null);
+  const ex2 = pw && base.find(i => i.unit === '1' && (/exponent|power[- ]law index/i.test(i.name) || (i.aliases || []).some(x => /exponent/.test(x))));
+  if (ex2 && !w.inputs[ex2.sym]) { const val = parseFloat(pw[1]); w.inputs[ex2.sym] = { si: val, prov: ex2.kind === 'hypothetical' ? 'HYPOTHETICAL' : 'USER', note: `From your prompt: a 1/r^${val} law`, unit: ex2.unit }; }
 }
 
 /** Model inputs with SI values and SI ranges. */
@@ -100,7 +132,10 @@ export function defaults(model) {
     const u = tryUnit(i.unit) || { f: 1, o: 0, dim: D0 };
     const si = i.value * u.f + u.o;
     const rangeSI = [i.min != null ? i.min * u.f + u.o : (si > 0 ? si / 100 : si < 0 ? si * 100 : -1), i.max != null ? i.max * u.f + u.o : (si > 0 ? si * 100 : si < 0 ? si / 100 : 1)];
-    return { ...i, si, rangeSI, dim: u.dim };
+    // counts are whole numbers: the application rounds them once, here, so that solver, displayed equations and
+    // exported code all work from the same value
+    const integer = i.integer ?? (i.unit === '1' && Number.isInteger(i.value) && i.min != null && Number.isInteger(i.min) && i.min >= 0 && /\b(number of|count|how many|doors?|people|persons?|players?|rounds?|storeys?|stories|sectors?|trials?|samples?|parts?|planks?|segments?|cells?|steps?|grains?|rooms?|buses|guests?|games?|cycles?|stages?|layers?|modes?|terms?|levels?|iterations?|points?|nodes?|elements?|bodies|members?)\b/i.test(i.name));
+    return { ...i, si, rangeSI, dim: u.dim, integer };
   });
 }
 
@@ -137,10 +172,11 @@ export function resolveInputs(inv, model, world) {
     else {
       const ev = d.env ? envValue(inv, d.env) : null;
       if (ev) r = { ...ev, unit: d.unit };
-      else r = { si: d.si, prov: d.kind === 'hypothetical' ? 'HYPOTHETICAL' : 'SUPPLIED', note: d.src || (d.kind === 'constant' ? CONSTANTS[d.sym]?.src : 'Representative reference value'), unit: d.unit };
+      else r = { si: d.si, prov: d.prov || (d.kind === 'hypothetical' ? 'HYPOTHETICAL' : 'SUPPLIED'), note: d.src || (d.kind === 'constant' ? CONSTANTS[d.sym]?.src : 'Representative reference value'), unit: d.unit };
     }
     if (d.kind === 'constant' && CONSTANTS[d.sym] && Math.abs(r.si - CONSTANTS[d.sym].value) > Math.abs(CONSTANTS[d.sym].value) * 1e-9) { r.prov = 'HYPOTHETICAL'; r.note = `Altered from the accepted value ${fmt(CONSTANTS[d.sym].value, 6)} ${d.unit}`; }
     const unc = d.unc != null ? d.unc : r.prov === 'USER' || r.prov === 'UPLOAD' ? 0.02 : r.prov === 'RETRIEVED' ? 0.05 : d.kind === 'constant' ? (CONSTANTS[d.sym]?.rel || 0) : d.kind === 'numerical' ? 0 : 0.10;
+    if (d.integer && Number.isFinite(r.si) && !Number.isInteger(r.si)) { r.si = Math.round(r.si); r.note = `${r.note ? r.note + '; ' : ''}rounded to a whole number`; }
     return { ...d, ...r, value: fromSI(r.si, r.unit), unc, default: d.si, overridden: !!ov, inWorld: !!world.inputs[d.sym] };
   });
 }

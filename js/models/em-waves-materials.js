@@ -20,7 +20,7 @@ const dB = x => 20 * Math.log10(Math.max(x, 1e-300));
 const rootOr = (f, a, b, fallback) => { try { const r = N.findRoot(f, a, b); return Number.isFinite(r) ? r : fallback; } catch { return fallback; } };
 
 // ------------------------------------------------------------------ electrostatic field in a 2-D gap
-/** Successive over-relaxation for div(eps grad phi) = -rho with a dielectric layer occupying rows 0..jb. */
+/** Successive over-relaxation for div(eps grad phi) = -rho with a dielectric layer occupying rows 0..jb. The control volume of a node on the barrier surface is half air, so it carries half the source. */
 function sorLayered(nx, ny, fixed, epsB, jb, src, tol = 1e-6, maxIt = 4000) {
   const phi = Array.from({ length: ny }, () => new Float64Array(nx)), mask = Array.from({ length: ny }, () => new Uint8Array(nx));
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const q = fixed(i, j); if (q !== undefined) { phi[j][i] = q; mask[j][i] = 1; } }
@@ -32,7 +32,7 @@ function sorLayered(nx, ny, fixed, epsB, jb, src, tol = 1e-6, maxIt = 4000) {
       const pj = phi[j], pd = phi[j - 1], pu = phi[j + 1], mj = mask[j], sj = j > jb ? src : 0;
       for (let i = 1; i < nx - 1; i++) {
         if (mj[i]) continue;
-        const gq = j === jb ? (eh * (pj[i - 1] + pj[i + 1]) + epsB * pd[i] + pu[i]) / den : (pj[i - 1] + pj[i + 1] + pd[i] + pu[i] + sj) * 0.25;
+        const gq = j === jb ? (eh * (pj[i - 1] + pj[i + 1]) + epsB * pd[i] + pu[i] + 0.5 * src) / den : (pj[i - 1] + pj[i + 1] + pd[i] + pu[i] + sj) * 0.25;
         const dl = gq - pj[i]; pj[i] += w * dl; if (Math.abs(dl) > res) res = Math.abs(dl);
       }
     }
@@ -72,7 +72,7 @@ function gapField(v, a, plate = false) {
   // flux through horizontal faces: conserved between the collector and the row below the electrode
   const flux = j => { let s = 0; const ef = j < jb ? epsB : 1; for (let i = 1; i < nx - 1; i++) s += ef * (phi[j + 1][i] - phi[j][i]); return s; };
   const m = ng - 1, G0 = flux(0), Gm = flux(m);
-  const fluxRes = open ? (Gm - G0 + rhoN * dx * dx * (nx - 2) * (m - jb)) / Math.max(Math.abs(G0), 1e-300) : 0;
+  const fluxRes = open ? (Gm - G0 + rhoN * dx * dx * (nx - 2) * (m - jb + (jb > 0 ? 0.5 : 0))) / Math.max(Math.abs(G0), 1e-300) : 0;
   return { phi, nx, ny, dx, ng, nr, nrWant, jc, jb, ic, epsB, epk, ecol, etan, G0, fluxRes, open, iterations: sol.iterations, converged: sol.converged };
 }
 const acosh = x => Math.log(x + Math.sqrt(x * x - 1));
@@ -250,7 +250,7 @@ function rlcExact(Rt, L, Cc, Rp, V, ts) {
 function rlcCore(v, a) {
   const L = v.L, Cc = v.C_cap, V = v.V_s, Rt = v.R + (a.ideal_L ? 0 : v.R_w) + (a.ideal_source ? 0 : v.R_src), Rp = a.no_leak ? Infinity : v.R_p;
   const gp = a.no_leak ? 0 : 1 / (Rp * Cc), alpha = (Rt / L + gp) / 2, wn = Math.sqrt(Rt / L * gp + 1 / (L * Cc)), zeta = alpha / wn;
-  const w0 = 1 / Math.sqrt(L * Cc), Q = w0 * L / Rt;
+  const w0 = 1 / Math.sqrt(L * Cc), Q = wn / (2 * alpha); // equals ω₀L/R_t when there is no leakage
   const slow = zeta > 1 ? wn * wn / (alpha + Math.sqrt(alpha * alpha - wn * wn)) : alpha;
   const tEnd = Math.max(3 * TAU / wn, Math.min(8 / slow, 60 * TAU / wn)), n = 900;
   const stiff = 4 * zeta * zeta > 2000;
@@ -297,9 +297,9 @@ const rlc = {
     asm('linear_L', 'The inductance is independent of current.', { why: 'Air core, or currents well below saturation', alt: 'The core saturates: the differential inductance falls as L/(1 + (i/I_sat)²).' }),
     asm('ideal_L', 'The inductor has no winding resistance.', { why: 'Loss lumped into the series resistor', alt: 'A winding resistance R_w adds to the series resistance.' }),
     asm('ideal_source', 'The source has zero output resistance.', { why: 'Stiff voltage source', alt: 'The source resistance R_src adds to the series resistance.' }),
-    asm('no_leak', 'The capacitor has no leakage.', { why: 'Film and ceramic capacitors at low frequency', alt: 'A leakage resistance R_p in parallel with the capacitor adds damping and lowers the final voltage.' }),
+    asm('no_leak', 'The capacitor has no leakage.', { why: 'Film and ceramic capacitors at low frequency', alt: 'A leakage resistance R_p in parallel with the capacitor adds damping, raises the natural frequency slightly and lowers the final voltage; damping ratio, quality factor and impedance then include it.' }),
   ],
-  symbols: { i: ['Loop current', 'A'], v_C: ['Capacitor voltage', 'V'], t: ['Time', 's'], R_t: ['Total series resistance', 'ohm'], omega_0: ['Undamped resonant angular frequency', '1/s'], Q: ['Quality factor', '1'], zeta: ['Damping ratio', '1'], omega_d: ['Damped angular frequency', '1/s'], Z_d: ['Impedance magnitude at the drive frequency', 'ohm'], L_d: ['Differential inductance', 'H'], BW: ['Half-power bandwidth', 'Hz'], f_0: ['Resonant frequency', 'Hz'] },
+  symbols: { i: ['Loop current', 'A'], v_C: ['Capacitor voltage', 'V'], t: ['Time', 's'], R_t: ['Total series resistance', 'ohm'], omega_0: ['Undamped resonant angular frequency', '1/s'], Q: ['Quality factor', '1'], zeta: ['Damping ratio', '1'], omega_d: ['Damped angular frequency', '1/s'], omega_n: ['Natural angular frequency with leakage', '1/s'], Z_d: ['Impedance magnitude at the drive frequency', 'ohm'], L_d: ['Differential inductance', 'H'], BW: ['Half-power bandwidth', 'Hz'], f_0: ['Resonant frequency', 'Hz'] },
   equations: a => [
     eq('kvl', 'Kirchhoff voltage law around the loop', `${a.linear_L ? 'L' : 'L_d'}*d(i,t) + R_t*i + v_C`, 'V_s', { kind: 'law', origin: 'Faraday\'s law and conservation of energy around a closed loop' }),
     ...(a.linear_L ? [] : [eq('sat', 'Saturating differential inductance', 'L_d', 'L/(1 + (i/I_sat)^2)', { kind: 'closure', origin: 'Smooth saturation law for a gapped ferromagnetic core' })]),
@@ -309,17 +309,28 @@ const rlc = {
     eq('rt', 'Total series resistance', 'R_t', `R${a.ideal_L ? '' : ' + R_w'}${a.ideal_source ? '' : ' + R_src'}`, { kind: 'definition' }),
     eq('w0', 'Resonant angular frequency', 'omega_0', '1/sqrt(L*C_cap)', { kind: 'derived', origin: 'Reactances cancel' }),
     eq('f0', 'Resonant frequency', 'f_0', 'omega_0/(2*pi)', { kind: 'definition' }),
-    eq('q', 'Quality factor', 'Q', 'omega_0*L/R_t', { kind: 'definition' }),
-    eq('zeta', 'Damping ratio', 'zeta', 'R_t/2*sqrt(C_cap/L)', { kind: 'derived' }),
-    eq('wd', 'Damped angular frequency', 'omega_d', 'omega_0*sqrt(1 - zeta^2)', { kind: 'derived', note: 'Real only when under-damped' }),
-    eq('bw', 'Half-power bandwidth', 'BW', 'f_0/Q', { kind: 'derived' }),
-    eq('z', 'Impedance magnitude', 'Z_d', 'sqrt(R_t^2 + (2*pi*f_d*L - 1/(2*pi*f_d*C_cap))^2)', { kind: 'derived', origin: 'Phasor sum of resistance and reactances' }),
+    ...(a.no_leak ? [
+      eq('q', 'Quality factor', 'Q', 'omega_0*L/R_t', { kind: 'definition', needs: ['no_leak'] }),
+      eq('zeta', 'Damping ratio', 'zeta', 'R_t/2*sqrt(C_cap/L)', { kind: 'derived', needs: ['no_leak'] }),
+      eq('wd', 'Damped angular frequency', 'omega_d', 'omega_0*sqrt(1 - zeta^2)', { kind: 'derived', note: 'Real only when under-damped' }),
+      eq('bw', 'Half-power bandwidth', 'BW', 'f_0/Q', { kind: 'derived' }),
+      eq('z', 'Impedance magnitude', 'Z_d', 'sqrt(R_t^2 + (2*pi*f_d*L - 1/(2*pi*f_d*C_cap))^2)', { kind: 'derived', origin: 'Phasor sum of resistance and reactances' }),
+    ] : [
+      eq('wn', 'Natural angular frequency with leakage', 'omega_n', 'sqrt((1 + R_t/R_p)/(L*C_cap))', { kind: 'derived', origin: 'Characteristic equation of the two coupled first-order equations' }),
+      eq('zeta', 'Damping ratio with leakage', 'zeta', '(R_t/L + 1/(R_p*C_cap))/(2*omega_n)', { kind: 'derived', origin: 'Series and leakage losses both damp the oscillation' }),
+      eq('q', 'Quality factor', 'Q', '1/(2*zeta)', { kind: 'definition' }),
+      eq('wd', 'Damped angular frequency', 'omega_d', 'omega_n*sqrt(1 - zeta^2)', { kind: 'derived', note: 'Real only when under-damped' }),
+      eq('bw', 'Half-power bandwidth', 'BW', 'omega_n/(2*pi*Q)', { kind: 'derived', note: 'Narrow-band estimate, accurate when Q is well above one' }),
+      eq('z', 'Impedance magnitude', 'Z_d', 'sqrt((R_t + R_p/(1 + (2*pi*f_d*R_p*C_cap)^2))^2 + (2*pi*f_d*L - 2*pi*f_d*R_p^2*C_cap/(1 + (2*pi*f_d*R_p*C_cap)^2))^2)', { kind: 'derived', origin: 'Series resistance and inductance with the leaky capacitor as a parallel R–C branch' }),
+    ]),
   ],
   derivation: a => [
     { text: 'The voltages across inductor, resistor and capacitor sum to the source voltage.', tex: 'L\\frac{\\mathrm{d}i}{\\mathrm{d}t} + R_t\\,i + v_C = V_s' },
     { text: 'The current charges the capacitor' + (a.no_leak ? '.' : ', less the leakage current.'), tex: a.no_leak ? 'C\\frac{\\mathrm{d}v_C}{\\mathrm{d}t} = i' : 'C\\frac{\\mathrm{d}v_C}{\\mathrm{d}t} = i - \\frac{v_C}{R_p}' },
-    { text: 'Eliminating the current gives the damped-oscillator equation with natural frequency ω₀ and damping ratio ζ.', tex: '\\ddot v_C + 2\\zeta\\omega_0\\,\\dot v_C + \\omega_0^2\\,v_C = \\omega_0^2 V_s,\\quad \\omega_0=\\frac{1}{\\sqrt{LC}},\\ \\zeta=\\frac{R_t}{2}\\sqrt{\\frac{C}{L}}' },
-    { text: 'For ζ < 1 the step response rings at the damped frequency inside an exponential envelope.', tex: 'v_C = V_s\\left[1 - e^{-\\zeta\\omega_0 t}\\left(\\cos\\omega_d t + \\frac{\\zeta\\omega_0}{\\omega_d}\\sin\\omega_d t\\right)\\right]' },
+    a.no_leak
+      ? { text: 'Eliminating the current gives the damped-oscillator equation with natural frequency ω₀ and damping ratio ζ.', tex: '\\ddot v_C + 2\\zeta\\omega_0\\,\\dot v_C + \\omega_0^2\\,v_C = \\omega_0^2 V_s,\\quad \\omega_0=\\frac{1}{\\sqrt{LC}},\\ \\zeta=\\frac{R_t}{2}\\sqrt{\\frac{C}{L}}' }
+      : { text: 'Eliminating the current gives a damped-oscillator equation in which the leakage raises both the natural frequency and the damping, and lowers the final voltage.', tex: '\\ddot v_C + 2\\zeta\\omega_n\\,\\dot v_C + \\omega_n^2\\,v_C = \\frac{V_s}{LC},\\quad \\omega_n^2=\\frac{1+R_t/R_p}{LC},\\ 2\\zeta\\omega_n=\\frac{R_t}{L}+\\frac{1}{R_pC}' },
+    { text: 'For ζ < 1 the step response rings at the damped frequency inside an exponential envelope' + (a.no_leak ? '.' : ' (shown for the circuit without leakage).'), tex: 'v_C = V_s\\left[1 - e^{-\\zeta\\omega_0 t}\\left(\\cos\\omega_d t + \\frac{\\zeta\\omega_0}{\\omega_d}\\sin\\omega_d t\\right)\\right]' },
     { text: 'With a sinusoidal source the phasor impedance is R + j(ωL − 1/ωC); its magnitude is least, and equal to R, at resonance. The half-power points are separated by ω₀/Q.', tex: '|Z| = \\sqrt{R_t^2 + \\left(\\omega L - \\frac{1}{\\omega C}\\right)^2},\\qquad Q = \\frac{\\omega_0 L}{R_t}' },
   ],
   solve(v, a) {
@@ -342,7 +353,7 @@ const rlc = {
         scalar('regime', 'Damping regime', c.zeta < 0.999 ? 0 : c.zeta <= 1.001 ? 1 : 2, '1', { text: regime }),
         scalar('f_dmp', 'Damped (ringing) frequency', c.zeta < 1 ? c.wn * Math.sqrt(1 - c.zeta * c.zeta) / TAU : 0, 'Hz', c.zeta < 1 ? {} : { text: 'None — no oscillation' }),
         scalar('tau_env', 'Decay time constant of the envelope', 1 / c.alpha, 's', { show: 'ms' }),
-        scalar('BW', 'Half-power bandwidth', f0 / c.Q, 'Hz'),
+        scalar('BW', 'Half-power bandwidth', c.wn / (TAU * c.Q), 'Hz'),
         scalar('v_pk', 'Peak capacitor voltage after the step', vC[ip], 'V'), scalar('OS', 'Overshoot', os, '1', { show: '%' }),
         scalar('t_set', 'Settling time to within 2 %', t[js], 's', { show: 'ms' }),
         scalar('i_pk', 'Peak current after the step', N.maxOf(iL), 'A'),
@@ -449,7 +460,7 @@ const ionicWind = {
   background: [
     'A corona discharge at a thin emitter produces ions of one polarity that drift through neutral air to a collector. Each ion is pushed by the electric field and passes that momentum to the air through collisions; the reaction on the electrodes is a thrust. Because the mechanism is a body force on charged air, it requires an atmosphere and vanishes in vacuum.',
     'This physics is measured and uncontroversial. For one-dimensional unipolar drift the thrust is T = I d/μ and the thrust-to-power ratio is 1/(μE), so efficiency improves at low field while thrust per unit area, bounded by the space-charge limit (9/8)ε₀V²/d², improves at high field (Masuyama & Barrett 2013). A fixed-wing aeroplane of 2.45 kg has flown in steady level flight on this principle, with wings providing the lift (Xu et al. 2018).',
-    'What has not been demonstrated is a practical craft that hovers on ion-drift thrust alone while carrying its own power supply and useful payload: thrust densities of a few newtons per square metre and thrust-to-power of order 5–20 N/kW set a demanding mass budget. Claims of thrust in vacuum, or of thrust beyond the momentum given to the air, have not survived controlled tests (Tajmar 2004). This model computes the measured mechanism only and reports whether the stated mass budget closes.',
+    'What has not been demonstrated is a practical craft that hovers on ion-drift thrust alone while carrying its own power supply and useful payload: thrust densities of a few newtons per square metre and, at such thrust densities, thrust-to-power of order 5–20 N/kW set a demanding mass budget (higher ratios are obtained only at very low thrust density). Claims of thrust in vacuum, or of thrust beyond the momentum given to the air, have not survived controlled tests (Tajmar 2004). This model computes the measured mechanism only and reports whether the stated mass budget closes.',
   ],
   phenomena: ['Corona ionisation at the emitter', 'Unipolar ion drift', 'Ion–neutral momentum transfer', 'Space-charge limitation of current', 'Induced air jet', 'Electrical breakdown limit'],
   laws: ['charge', 'maxwell', 'momentum', 'newton3', 'energy', 'mass'],
@@ -485,10 +496,15 @@ const ionicWind = {
     a.static ? eq('drift', 'Ion drift current', 'J', 'rho_q*mu_e*E', { kind: 'closure', origin: 'Mobility-limited drift', needs: ['static'] }) : eq('drift', 'Ion drift and convection current', 'J', 'rho_q*(mu_e*E + u_d)', { kind: 'closure', origin: 'Mobility-limited drift relative to moving air' }),
     ...(a.scl
       ? [a.static ? eq('mg', 'Space-charge-limited current density', 'J', '9/8*eps_0*mu_e*V^2/d_gap^3', { kind: 'derived', origin: 'Mott–Gurney law: Gauss\'s law with drift current and zero emitter field', needs: ['scl', 'static'] }) : eq('mg', 'Space-charge limit with moving air', 'V', 'int(E, x)', { kind: 'boundary', origin: 'Voltage constraint with zero emitter-side field', needs: ['scl'] })]
-      : [eq('town', 'Corona current per unit emitter length', 'I_l', 'k_T*eps_0*mu_e*V*(V - V_on)/d_gap^2', { kind: 'empirical', origin: 'Townsend (1914) quadratic corona law' }), eq('jl', 'Current density', 'J', 'I_l/w_c', { kind: 'definition' })]),
+      : [eq('town', 'Corona current per unit emitter length', 'I_l', 'k_T*eps_0*mu_e*V*max(V - V_on, 0)/d_gap^2', { kind: 'empirical', origin: 'Townsend (1914) quadratic corona law; no current below onset' }),
+        a.static
+          ? eq('jl', 'Current density, capped at the space-charge limit', 'J', 'min(I_l/w_c, 9/8*eps_0*mu_e*V^2/d_gap^3)', { kind: 'closure', origin: 'Corona current spread over the drift width; the Mott–Gurney value cannot be exceeded' })
+          : eq('jl', 'Current density', 'J', 'I_l/w_c', { kind: 'definition', exportable: false, note: 'Capped in the solver at the space-charge limit for moving air, which is found numerically from the voltage constraint.' })]),
     eq('force', 'Coulomb body force on the air', 'T_A', 'int(rho_q*E, x)', { kind: 'law', origin: 'Lorentz force on the ions, transferred to neutrals by collisions; reaction on the electrodes by Newton\'s third law' }),
     a.static ? eq('thr', 'Thrust per unit area', 'T_A', 'J*d_gap/mu_e', { kind: 'derived', origin: 'Body-force integral with J = ρ_q μ E', needs: ['static'] }) : eq('thr', 'Thrust per unit area from the Maxwell stress', 'T_A', 'eps_0*(E_d^2 - E_e^2)/2', { kind: 'derived', origin: 'Body-force integral with Gauss\'s law' }),
-    a.static ? eq('tp', 'Thrust-to-power ratio', 'theta_TP', 'd_gap/(mu_e*V)', { kind: 'derived', needs: ['static'] }) : eq('tp', 'Thrust-to-power ratio', 'theta_TP', 'T_n/(J*V)', { kind: 'definition' }),
+    a.static
+      ? (a.no_drag ? eq('tp', 'Thrust-to-power ratio', 'theta_TP', 'd_gap/(mu_e*V)', { kind: 'derived', needs: ['static', 'no_drag'] }) : eq('tp', 'Thrust-to-power ratio after collector drag', 'theta_TP', 'd_gap/(mu_e*V*(1 + C_d*t_c/(4*w_c)))', { kind: 'derived', origin: 'Net thrust over electrical power', needs: ['static'] }))
+      : eq('tp', 'Thrust-to-power ratio', 'theta_TP', 'T_n/(J*V)', { kind: 'definition' }),
     a.no_drag ? eq('net', 'Net thrust per unit area', 'T_n', 'T_A', { kind: 'closure', needs: ['no_drag'] }) : eq('net', 'Net thrust per unit area after collector drag', 'T_n', 'T_A/(1 + C_d*t_c/(4*w_c))', { kind: 'derived', origin: 'Drag ½ρu²C_d on the collector frontal area with u from momentum theory' }),
     eq('ud', 'Induced air speed at the electrode plane', 'u_d', 'sqrt(T_n/(2*rho_air))', { kind: 'derived', origin: 'Actuator-disc momentum theory at zero flight speed' }),
     eq('tot', 'Total thrust of the array', 'T', 'T_n*N_s*b_s*w_c', { kind: 'definition' }),
@@ -526,10 +542,14 @@ const ionicWind = {
     const rq = xg.map((_, i) => (s.J > 0 ? s.J / (s.mu * Eg[i] + s.uI) : 0));
     // sweeps in voltage
     const Vs = N.linspace(0.2 * s.V, 1.6 * s.V, 36), sw = Vs.map(q => ehd({ ...v, V: q }, a));
-    const feasible = TWR >= 1;
-    const verdict = feasible
-      ? `Thrust exceeds weight by ${lab((TWR - 1) * 100, '%')} on these inputs — hover is possible in principle, subject to the breakdown and drag warnings.`
-      : `Thrust is ${lab(TWR * 100, '%')} of the weight — the craft cannot hover on these inputs.`;
+    // the verdict follows from thrust, weight (with the supply mass when carried) and the spark-over limit, and from nothing else
+    const attainable = Emean <= v.E_bd, feasible = TWR >= 1 && attainable;
+    const caveats = [a.scl ? 'the current is the one-dimensional space-charge limit, an upper bound that measured wire-to-collector currents fall several times short of' : 'the corona coefficient and onset voltage must come from a measured current–voltage curve', ...(a.no_drag ? ['electrode drag is neglected'] : []), ...(a.psu_onboard ? [] : ['the supply is not carried, so this is tethered lift, not free hover'])];
+    const verdict = TWR < 1
+      ? `Thrust is ${lab(TWR * 100, '%')} of the weight — the craft cannot hover on these inputs${a.scl ? ', even at the space-charge limit' : ''}.`
+      : !attainable
+        ? `Thrust exceeds weight only at a mean field of ${lab(Emean / 1e6, 'MV/m')}, above spark-over: the gap would arc, so hover is not feasible on these inputs.`
+        : `Thrust exceeds weight by ${lab((TWR - 1) * 100, '%')} on these inputs, so the stated mass budget closes on paper. This is a necessary condition, not a demonstration: ${caveats.join('; ')}.`;
     const twrInf = s.Tn / (g0 * (v.m_A + (a.psu_onboard ? s.J * s.V / v.sp_psu : 0)));
     return {
       scalars: [
@@ -546,7 +566,7 @@ const ionicWind = {
         scalar('A_tot', 'Total drift area', A, 'm^2'), scalar('R_m', 'Mean radius of the annulus', Ns * v.b_s / TAU, 'm'),
         scalar('m_psu', 'Supply mass carried', mPsu, 'kg'), scalar('m_tot', 'Total mass', mTot, 'kg'), scalar('W', 'Total weight', W, 'N'),
         scalar('TWR', 'Thrust-to-weight ratio', TWR, '1'), scalar('TWR_inf', 'Thrust-to-weight of the bare array and supply (no fixed mass)', twrInf, '1'),
-        scalar('hover', 'Hover feasible on these inputs', feasible ? 1 : 0, '1', { text: verdict }),
+        scalar('hover', 'Thrust at least equal to weight at an attainable field', feasible ? 1 : 0, '1', { text: verdict }),
       ],
       series: [
         line('iv', 'Current against voltage', 'Voltage', 'kV', Vs.map(q => q / 1e3), [{ label: 'Total current', data: sw.map(q => q.J * A * 1e3) }], 'Current', 'mA'),
@@ -565,7 +585,10 @@ const ionicWind = {
   },
   benchmarks(v, a) {
     const b = { ...a, scl: true, static: true, no_drag: true }, s = ehd(v, b), out = [];
-    out.push(bench('Mott–Gurney current density', s.J, 9 / 8 * EPS0 * s.mu * v.V ** 2 / v.d_gap ** 3, 'J = (9/8) ε₀ μ V²/d³', 1e-12));
+    // independent of the closed form: integrate the space-charge-limited field profile for the computed current and recover the applied voltage
+    const sq = N.linspace(0, 1, 2001), Vq = N.trapz(sq, sq.map(q => Math.sqrt(2 * s.J * v.d_gap * q * q / (EPS0 * s.mu)) * 2 * v.d_gap * q));
+    out.push(bench('Space-charge-limited field integrates to the applied voltage', Vq, v.V, 'Quadrature of E = √(2Jx/ε₀μ) with J = (9/8) ε₀ μ V²/d³', 1e-6));
+    out.push(bench('Thrust density at the Mott–Gurney limit', s.TA, 9 / 8 * EPS0 * (v.V / v.d_gap) ** 2, 'T/A = (9/8) ε₀ (V/d)²', 1e-9));
     out.push(bench('Thrust per unit area equals J d/μ', s.TA, s.J * v.d_gap / s.mu, 'T = I d/μ', 1e-9));
     out.push(bench('Thrust-to-power equals d/(μV)', s.tp, v.d_gap / (s.mu * v.V), 'T/P = 1/(μE)', 1e-9));
     const m = ehd(v, { ...b, static: false });
@@ -679,7 +702,7 @@ const syntheticJet = {
     eq('re', 'Jet Reynolds number', 'Re_j', '2*U_o*d_o/(pi*nu)', { kind: 'definition', origin: 'Based on the mean expulsion velocity' }),
     eq('st', 'Stokes number', 'S_t', 'sqrt(2*pi*f_d*d_o^2/nu)', { kind: 'definition' }),
     eq('fj', 'Jet-formation parameter', 'F_j', 'Re_j/S_t^2', { kind: 'empirical', origin: 'Holman et al. (2005): a jet forms when this exceeds K_j', note: 'Equal to the inverse Strouhal number' }),
-    eq('thr', 'Time-mean thrust', 'T_j', `${a.slug ? '' : '4/3*'}rho*A_o*U_o^2/4`, { kind: 'derived', origin: 'Momentum of the fluid slug ejected each cycle' }),
+    eq('thr', 'Time-mean thrust', 'T_j', `ifpos(F_j - K_j, ${a.slug ? '' : '4/3*'}rho*A_o*U_o^2/4, 0)`, { kind: 'derived', origin: 'Momentum of the fluid slug ejected each cycle', note: 'Upper estimate; zero when the formation parameter F_j does not exceed K_j, because the ejected ring is then re-ingested' }),
     eq('pf', 'Fluidic power', 'P_f', `${a.slug ? '' : '2*'}rho*A_o*U_o^3/(3*pi)`, { kind: 'derived', origin: 'Kinetic-energy flux during expulsion' }),
     eq('pe', 'Electrical power', 'P_e', 'P_f/eta_e', { kind: 'definition' }),
   ],
@@ -839,9 +862,9 @@ const radiationPressure = {
     eq('phi', 'Acoustic contrast factor', 'Phi_c', 'f_1/3 + f_2/2', { kind: 'definition' }),
     eq('gor', 'Gor\'kov potential', 'U_g', 'pi*d_p^3/6*E_ac*(f_1*cos(k_w*z)^2 - 3/2*f_2*sin(k_w*z)^2)', { kind: 'law', origin: 'Gor\'kov (1962)' }),
     a.small_sphere
-      ? eq('fmax', 'Peak force on the sphere', 'F_max', 'pi*d_p^3/2*k_w*E_ac*Phi_c', { kind: 'derived', origin: 'Negative gradient of the Gor\'kov potential', needs: ['small_sphere'] })
-      : eq('fmax', 'Peak force with finite-size averaging', 'F_max', 'pi*d_p^3/2*k_w*E_ac*Phi_c*3*(sin(k_w*d_p) - k_w*d_p*cos(k_w*d_p))/(k_w*d_p)^3', { kind: 'closure', origin: 'Force density averaged over the sphere volume' }),
-    eq('wp', 'Net weight of the sphere', 'W_p', 'pi*d_p^3/6*(rho_p - rho_0)*g', { kind: 'law', origin: 'Weight less buoyancy' }),
+      ? eq('fmax', 'Peak force on the sphere (magnitude)', 'F_max', 'pi*d_p^3/2*k_w*E_ac*abs(Phi_c)', { kind: 'derived', origin: 'Negative gradient of the Gor\'kov potential', needs: ['small_sphere'], note: 'Magnitude: the sign of Φ_c only decides whether the sphere is driven to pressure nodes or antinodes' })
+      : eq('fmax', 'Peak force with finite-size averaging (magnitude)', 'F_max', 'pi*d_p^3/2*k_w*E_ac*abs(Phi_c*3*(sin(k_w*d_p) - k_w*d_p*cos(k_w*d_p))/(k_w*d_p)^3)', { kind: 'closure', origin: 'Force density averaged over the sphere volume', note: 'Magnitude: the averaging factor changes sign beyond a diameter of about 0.7 wavelengths, and the sign of Φ_c decides between nodes and antinodes' }),
+    eq('wp', 'Net weight of the sphere (magnitude)', 'W_p', 'pi*d_p^3/6*abs(rho_p - rho_0)*g', { kind: 'law', origin: 'Weight less buoyancy', note: 'Magnitude: a sphere lighter than the medium has a net upward force of this size' }),
     eq('mlev', 'Levitation margin', 'M_lev', 'F_max/W_p', { kind: 'definition' }),
   ],
   derivation: () => [
@@ -909,7 +932,10 @@ const radiationPressure = {
     const c = arfCore(v, { ...a, inviscid: true, rigid: true, small_sphere: true }), R = v.d_p / 2, out = [];
     out.push(bench('Rigid, dense sphere: contrast factor', c.Phi(1e12 * v.rho_0, R), 5 / 6, 'King (1934): Φ = 5/6', 1e-9));
     out.push(bench('King force amplitude for a rigid dense sphere', c.Fmax(1e12 * v.rho_0, R), 5 * Math.PI / 6 * R ** 3 * c.k * v.p_a ** 2 / c.kap, 'F = (5π/6) k a³ p²/(ρc²)', 1e-9));
-    out.push(bench('Radiation pressure equals intensity over sound speed', c.Et, (v.p_a ** 2 / (2 * v.rho_0 * v.c_s)) / v.c_s, 'p_rad = I/c for an absorber', 1e-12));
+    const ph = N.linspace(0, TAU, 2001), eMean = N.trapz(ph, ph.map(q => { const p = v.p_a * Math.cos(q), u = p / (v.rho_0 * v.c_s); return 0.5 * v.rho_0 * u * u + p * p / (2 * v.rho_0 * v.c_s ** 2); })) / TAU;
+    out.push(bench('Energy density against the cycle average of kinetic plus potential energy', c.Et, eMean, 'Quadrature of ½ρu² + p²/(2ρc²) over one period with u = p/(ρc)', 1e-9));
+    const zq = N.linspace(0, c.lam / 4, 2001), Fq = zq.map(z => c.Fmax(v.rho_p, R) * Math.sin(2 * c.k * z));
+    out.push(bench('Work of the force from antinode to node equals the drop in Gor\'kov potential', N.trapz(zq, Fq), 4 / 3 * Math.PI * R ** 3 * c.Eac * (c.f1(v.rho_p) + 1.5 * c.f2(v.rho_p, R)), 'ΔU = (4π/3)a³E_ac(f₁ + 3f₂/2)', 1e-6));
     const cv = arfCore({ ...v, nu: (1e-9 * R) ** 2 * c.w / 2 }, { ...a, inviscid: false, rigid: true, small_sphere: true });
     out.push(bench('Viscous dipole coefficient in the thin-layer limit', cv.f2(v.rho_p, R), c.f2(v.rho_p, R), 'Settnes & Bruus (2012) reduces to the ideal-fluid value', 1e-3));
     return out;
@@ -1003,7 +1029,7 @@ const vibratingString = {
   ],
   assumptions: [
     asm('undamped', 'The string loses no energy.', { why: 'Isolates the wave motion', alt: 'A viscous damping term γ ∂u/∂t makes every mode decay as exp(−γt/2).' }),
-    asm('flexible', 'The string is perfectly flexible: bending stiffness is negligible.', { why: 'Thin strings at low mode numbers', alt: 'Bending stiffness EI adds a fourth-derivative term and raises the overtones: f_n = n f₁ √(1 + B n²).' }),
+    asm('flexible', 'The string is perfectly flexible: bending stiffness is negligible.', { why: 'Thin strings at low mode numbers', alt: 'Bending stiffness EI adds a fourth-derivative term and raises the overtones: f_n = (n c/2L) √(1 + B n²).' }),
     asm('small_amp', 'Displacements are small, so the tension stays constant.', { why: 'Linear wave equation', alt: 'The mean stretch of the string raises the tension (Kirchhoff–Carrier correction), sharpening the pitch.' }),
     asm('plucked', 'The string is released from rest from a triangular plucked shape.', { why: 'Guitar or harp excitation', alt: 'The string is struck: it starts undisplaced with a localised velocity pulse (piano hammer).' }),
   ],
@@ -1013,15 +1039,16 @@ const vibratingString = {
     ...(a.small_amp
       ? [eq('c', 'Wave speed', 'c_w', 'sqrt(T_s/mu_l)', { kind: 'derived', needs: ['small_amp'] })]
       : [eq('te', 'Effective tension', 'T_e', 'T_s + E_y*A_w*E_0/(2*T_s*L)', { kind: 'closure', origin: 'Hooke\'s law applied to the time-averaged stretch (Kirchhoff–Carrier)' }), eq('aw', 'Cross-sectional area', 'A_w', 'pi*d_w^2/4', { kind: 'definition' }), eq('c', 'Wave speed', 'c_w', 'sqrt(T_e/mu_l)', { kind: 'derived' })]),
-    eq('f1', 'Fundamental frequency', 'f_1', 'c_w/(2*L)', { kind: 'derived', origin: 'Half a wavelength fits the string' }),
     ...(a.flexible
-      ? [eq('fn', 'Mode frequencies', 'f_n', 'n*f_1', { kind: 'derived', needs: ['flexible'] })]
-      : [eq('ia', 'Second moment of area', 'I_a', 'pi*d_w^4/64', { kind: 'definition' }), eq('bs', 'Inharmonicity coefficient', 'B_s', 'pi^2*E_y*I_a/(T_s*L^2)', { kind: 'derived' }), eq('fn', 'Mode frequencies of a stiff string', 'f_n', 'n*f_1*sqrt(1 + B_s*n^2)', { kind: 'derived', origin: 'Dispersion relation of a tensioned beam with pinned ends' })]),
+      ? [eq('f1', 'Fundamental frequency', 'f_1', 'c_w/(2*L)', { kind: 'derived', origin: 'Half a wavelength fits the string', needs: ['flexible'] }), eq('fn', 'Mode frequencies', 'f_n', 'n*f_1', { kind: 'derived', needs: ['flexible'] })]
+      : [eq('ia', 'Second moment of area', 'I_a', 'pi*d_w^4/64', { kind: 'definition' }), eq('bs', 'Inharmonicity coefficient', 'B_s', `pi^2*E_y*I_a/(${a.small_amp ? 'T_s' : 'T_e'}*L^2)`, { kind: 'derived' }),
+        eq('f1', 'Fundamental frequency of a stiff string', 'f_1', 'c_w/(2*L)*sqrt(1 + B_s)', { kind: 'derived', origin: 'Half a wavelength fits the string; bending stiffness raises the pitch slightly' }),
+        eq('fn', 'Mode frequencies of a stiff string', 'f_n', 'n*c_w/(2*L)*sqrt(1 + B_s*n^2)', { kind: 'derived', origin: 'Dispersion relation of a tensioned beam with pinned ends' })]),
     a.plucked
       ? eq('ic', 'Initial shape, left of the pluck point', 'u_0', 'a_p*x/(x_p*L)', { kind: 'initial' })
       : eq('ic', 'Initial velocity from the hammer', 'w_0', 'v_h*exp(-((x - x_p*L)/(0.03*L))^2)', { kind: 'initial' }),
     ...(a.plucked ? [eq('an', 'Harmonic amplitudes of a plucked string', 'A_n', '2*a_p/(n^2*pi^2*x_p*(1 - x_p))*sin(n*pi*x_p)', { kind: 'derived', origin: 'Fourier sine series of the triangular shape', needs: ['plucked'] })] : []),
-    eq('z', 'Wave impedance', 'Z_w', 'sqrt(T_s*mu_l)', { kind: 'definition' }),
+    eq('z', 'Wave impedance', 'Z_w', `sqrt(${a.small_amp ? 'T_s' : 'T_e'}*mu_l)`, { kind: 'definition' }),
   ],
   derivation: a => [
     { text: 'An element of string of length dx and mass μ dx is accelerated by the difference in the transverse components of tension at its ends. For small slopes this difference is T ∂²u/∂x² dx.', tex: '\\mu\\,\\frac{\\partial^2 u}{\\partial t^2} = T\\,\\frac{\\partial^2 u}{\\partial x^2}\\ \\Rightarrow\\ c = \\sqrt{T/\\mu}' },
@@ -1062,7 +1089,7 @@ const vibratingString = {
     if (s.gam / 2 > TAU * s.f1) warnings.push('The damping is so heavy that the fundamental no longer oscillates.');
     return {
       scalars: [
-        scalar('c_w', 'Wave speed', s.c, 'm/s'), scalar('f_1', 'Fundamental frequency', s.f1 * Math.sqrt(1 + s.B), 'Hz'), scalar('T_1', 'Fundamental period', T1, 's', { show: 'ms' }),
+        scalar('c_w', 'Wave speed', s.c, 'm/s'), scalar('f_1', 'Fundamental frequency', s.f1 * Math.sqrt(1 + s.B), 'Hz'), scalar('T_1', 'Fundamental period', 1 / s.fn(1), 's', { show: 'ms' }),
         scalar('f_2', 'Second partial', s.fn(2), 'Hz'), scalar('f_3', 'Third partial', s.fn(3), 'Hz'),
         scalar('lambda_1', 'Wavelength of the fundamental on the string', 2 * L, 'm'),
         scalar('Z_w', 'Wave impedance √(Tμ)', Math.sqrt(s.Te * s.mu), 'kg/s'),
@@ -1090,7 +1117,8 @@ const vibratingString = {
     const out = [], b = { ...a, flexible: true }, r = this.solve(v, b), s = stringCore(v, b);
     const fd = s.gam / 2 < TAU * s.f1 ? Math.sqrt((TAU * s.f1) ** 2 - s.gam ** 2 / 4) / TAU : NaN;
     if (Number.isFinite(fd)) out.push(bench('Fundamental frequency from the simulation', val(r, 'f_num'), fd, s.gam > 0 ? 'f₁ = (1/2L)√(T/μ), lowered by damping' : 'f₁ = (1/2L)√(T/μ)', 1e-3));
-    out.push(bench('Wave speed', s.c, Math.sqrt(s.Te / v.mu_l), 'c = √(T/μ)', 1e-12));
+    if (a.plucked) { const xq = N.linspace(0, s.L, 4001); out.push(bench('Amplitude of the first harmonic by numerical projection of the plucked shape', 2 / s.L * N.trapz(xq, xq.map(x => s.u0(x) * Math.sin(Math.PI * x / s.L))), s.An[0], 'A₁ = 2a sin(πp)/(π²p(1 − p))', 1e-5)); }
+    out.push(bench('Stiff-string partial against the pinned-beam dispersion relation', stringCore(v, { ...a, flexible: false }).fn(3), (() => { const q = stringCore(v, { ...a, flexible: false }), k = 3 * Math.PI / q.L; return Math.sqrt((q.Te * k * k + v.E_y * q.Ia * k ** 4) / q.mu) / TAU; })(), 'ω² = (T k² + E I k⁴)/μ with k = nπ/L', 1e-9));
     if (a.plucked) out.push(bench('Plucked-string series reproduces the pluck amplitude', s.modal(s.xp, 0), v.a_p, 'Fourier sine series of a triangle, 60 modes', 0.02));
     return out;
   },
@@ -1363,7 +1391,7 @@ const timeReversal = {
     asm('homogeneous', 'The wave speed is uniform.', { why: 'Simplest medium', alt: 'A slower inclusion between 62 % and 74 % of the length reflects and delays part of the wave.' }),
     asm('ideal_sensors', 'The sensors are noise-free.', { why: 'Isolates the wave physics', alt: 'Independent Gaussian noise is added to each recorded sample.' }),
   ],
-  symbols: { u: ['Wave displacement', 'm'], x: ['Position', 'm'], t: ['Time', 's'], c_x: ['Local wave speed', 'm/s'], gamma_d: ['Damping rate', '1/s'], u_a: ['Emitted amplitude', 'm'], u_0: ['Initial displacement', 'm'], u_TR: ['Displacement imposed at a sensor during replay', 'm'], u_rec: ['Displacement recorded at that sensor', 'm'], n_s: ['Sensor noise', 'm'], q_f: ['Refocused amplitude over emitted amplitude', '1'], T_r: ['Recording time', 's'] },
+  symbols: { u: ['Wave displacement', 'm'], x: ['Position', 'm'], t: ['Time', 's'], c_x: ['Local wave speed', 'm/s'], gamma_d: ['Damping rate', '1/s'], u_a: ['Emitted amplitude', 'm'], u_0: ['Initial displacement', 'm'], u_TR: ['Displacement imposed at a sensor during replay', 'm'], u_rec: ['Displacement recorded at that sensor', 'm'], n_s: ['Sensor noise', 'm'], q_f: ['Refocused amplitude over emitted amplitude', '1'], q_pred: ['Expected refocused amplitude ratio from the loss estimate', '1'], T_r: ['Recording time', 's'] },
   equations: a => [
     eq('wave', 'Wave equation', `pd2(u,t)${a.lossless ? '' : ' + gamma_d*pd(u,t)'}`, 'c_x^2*pd2(u,x)', { kind: 'law', origin: 'Newton\'s second law for the medium' }),
     a.homogeneous ? eq('cx', 'Wave speed', 'c_x', 'c_w', { kind: 'closure', needs: ['homogeneous'] }) : eq('cx', 'Wave speed inside the inclusion', 'c_x', 'c_ratio*c_w', { kind: 'closure' }),
@@ -1371,8 +1399,8 @@ const timeReversal = {
     eq('ic', 'Emitted pulse', 'u_0', 'u_a*exp(-(x - x_s*L)^2/(2*(w_p*L)^2))', { kind: 'initial' }),
     eq('tr', 'Replay at a sensor', 'u_TR', `u_rec${a.ideal_sensors ? '' : ' + n_s'}`, { kind: 'boundary', origin: 'Time-reversal mirror', note: 'The record is replayed in reverse order: the value imposed at time t is the one recorded at T_r − t' }),
     a.lossless
-      ? eq('qf', 'Expected refocused amplitude', 'q_f', a.two_sided ? '1' : '1/2', { kind: 'derived', origin: 'Time-reversal invariance; half the wave is recorded by one sensor' })
-      : eq('qf', 'Expected refocused amplitude with damping', 'q_f', a.two_sided ? '(exp(-zeta_L*x_s) + exp(-zeta_L*(1 - x_s)))/2' : 'exp(-zeta_L*x_s)/2', { kind: 'derived', origin: 'Attenuation exp(−γt/2) accumulated on the outward and return paths' }),
+      ? eq('qf', 'Expected refocused amplitude', 'q_pred', a.two_sided ? '1' : '1/2', { kind: 'derived', origin: 'Time-reversal invariance; half the wave is recorded by one sensor', note: 'Estimate for a uniform medium with noise-free sensors; the simulated ratio q_f is reported alongside' })
+      : eq('qf', 'Expected refocused amplitude with damping', 'q_pred', a.two_sided ? '(exp(-zeta_L*x_s) + exp(-zeta_L*(1 - x_s)))/2' : 'exp(-zeta_L*x_s)/2', { kind: 'derived', origin: 'Attenuation exp(−γt/2) accumulated on the outward and return paths' }),
   ],
   derivation: a => [
     { text: 'The lossless wave equation is unchanged by the substitution t → −t, because time enters only through a second derivative.', tex: '\\frac{\\partial^2 u}{\\partial t^2} = c^2\\frac{\\partial^2 u}{\\partial x^2}\\quad\\Rightarrow\\quad u(x,-t)\\ \\text{is also a solution}' },
@@ -1470,7 +1498,8 @@ function dopplerF(v, a, vs = v.v_s, vo = v.v_o, cosT = a.collinear ? 1 : Math.co
   if (a.classical) {
     const w = a.still_medium ? 0 : v.v_w, c1 = v.c_s + w, c2 = v.c_s - w;
     if (a.one_way) return c1 - us > 0 && c1 + vo > 0 ? f0 * (c1 + vo) / (c1 - us) : NaN;
-    return c1 - vo > 0 && c2 - us > 0 && c1 + us > 0 && c2 + vo > 0 ? f0 * (c1 + us) / (c1 - vo) * (c2 + vo) / (c2 - us) : NaN;
+    // outward leg (observer to reflector) runs against the wind at c2, the return leg with it at c1
+    return c2 - vo > 0 && c1 - us > 0 && c2 + us > 0 && c1 + vo > 0 ? f0 * (c2 + us) / (c2 - vo) * (c1 + vo) / (c1 - us) : NaN;
   }
   const bs = vs / C.c, bo = vo / C.c;
   if (Math.abs(bs) >= 1 || Math.abs(bo) >= 1) return NaN;
@@ -1503,7 +1532,7 @@ const doppler = {
   ],
   assumptions: [
     asm('classical', 'The wave travels in a medium at a speed far below that of light (Galilean kinematics).', { why: 'Sound, water waves', alt: 'The wave is light in vacuum: only relative velocity matters and time dilation is included.' }),
-    asm('still_medium', 'The medium is at rest.', { why: 'No wind', alt: 'A steady wind along the line from source to observer carries the wave.' }),
+    asm('still_medium', 'The medium is at rest.', { why: 'No wind', alt: 'A steady wind along the line from source to observer carries the wave: the wave speed over the ground is c + v_w toward the observer and c − v_w away from it.' }),
     asm('collinear', 'Source and observer move along the line joining them.', { why: 'Head-on approach or recession', alt: 'The source velocity makes an angle θ with the line of sight; only its radial component shifts the frequency classically.' }),
     asm('one_way', 'The observer receives the wave directly from the source.', { why: 'Passive listening', alt: 'The moving body reflects a wave sent by the observer (echo): the shift is applied on both legs.' }),
   ],
@@ -1514,7 +1543,7 @@ const doppler = {
     if (a.classical) {
       out.push(a.one_way
         ? eq('dop', 'Doppler shift in a medium', 'f_obs', `f_0*(c_s${w} + v_o)/(c_s${w} - u_s)`, { kind: 'derived', origin: 'Crest counting with Galilean kinematics' })
-        : eq('dop', 'Doppler shift of an echo', 'f_obs', `f_0*(c_s${w} + u_s)/(c_s${w} - v_o)*(c_s${wm} + v_o)/(c_s${wm} - u_s)`, { kind: 'derived', origin: 'Shift on the outward and on the return leg' }));
+        : eq('dop', 'Doppler shift of an echo', 'f_obs', `f_0*(c_s${wm} + u_s)/(c_s${wm} - v_o)*(c_s${w} + v_o)/(c_s${w} - u_s)`, { kind: 'derived', origin: 'Shift on the outward leg (against any wind) and on the return leg (with it)' }));
       out.push(eq('lam', 'Wavelength ahead of the source', 'lambda_f', `(c_s${w} - u_s)/f_0`, { kind: 'derived' }));
     } else {
       out.push(eq('bs', 'Source speed ratio', 'beta_s', 'v_s/c', { kind: 'definition' }), eq('bo', 'Observer speed ratio', 'beta_o', 'v_o/c', { kind: 'definition' }));
@@ -1851,27 +1880,27 @@ const effectiveMedium = {
     asm('spheres', 'The inclusions are spheres (depolarisation factor 1/3), so the composite is isotropic.', { why: 'Simplest shape', alt: 'The inclusions are aligned spheroids with depolarisation factor L along the field; the result is the property along that axis.' }),
     asm('mg_host', 'The matrix is the continuous phase in the Maxwell Garnett estimate.', { why: 'Dilute, well-dispersed filler', alt: 'Phase inversion: the filler material is the continuous phase and the matrix forms the inclusions.' }),
     asm('static', 'The response is static: permittivity and conductivity are treated independently as real quantities.', { why: 'Zero-frequency limit', alt: 'A complex permittivity ε − iσ/(ωε₀) is used for each phase at a given frequency, giving interfacial polarisation and loss.' }),
-    asm('no_interphase', 'The particles are bare.', { why: 'No surface treatment', alt: 'Each particle carries a concentric coating; it is replaced by the equivalent homogeneous sphere.' }),
+    asm('no_interphase', 'The particles are bare.', { why: 'No surface treatment', alt: 'Each particle carries a concentric coating of permittivity ε_sh and the conductivity of the matrix; it is replaced by the equivalent homogeneous sphere.' }),
   ],
-  symbols: { alpha_p: ['Polarisability factor of an inclusion', '1'], eps_q: ['Equivalent permittivity of a coated particle', '1'], eps_MG: ['Maxwell Garnett effective permittivity', '1'], eps_BR: ['Bruggeman effective permittivity', '1'], eps_HSL: ['Hashin–Shtrikman lower bound', '1'], eps_HSU: ['Hashin–Shtrikman upper bound', '1'], eps_Wlo: ['Wiener lower bound (series)', '1'], eps_Whi: ['Wiener upper bound (parallel)', '1'], sigma_MG: ['Maxwell Garnett effective conductivity', 'S/m'], tau_MW: ['Maxwell–Wagner relaxation time', 's'], tan_m: ['Conduction loss tangent of the matrix', '1'], L_s: ['Depolarisation factor', '1'] },
+  symbols: { alpha_p: ['Polarisability factor of an inclusion', '1'], eps_q: ['Equivalent permittivity of a coated particle', '1'], sigma_q: ['Equivalent conductivity of a coated particle', 'S/m'], eps_MG: ['Maxwell Garnett effective permittivity', '1'], eps_BR: ['Bruggeman effective permittivity', '1'], eps_HSL: ['Hashin–Shtrikman lower bound', '1'], eps_HSU: ['Hashin–Shtrikman upper bound', '1'], eps_Wlo: ['Wiener lower bound (series)', '1'], eps_Whi: ['Wiener upper bound (parallel)', '1'], sigma_MG: ['Maxwell Garnett effective conductivity', 'S/m'], tau_MW: ['Maxwell–Wagner relaxation time', 's'], tan_m: ['Conduction loss tangent of the matrix', '1'], L_s: ['Depolarisation factor', '1'] },
   equations: a => {
-    const ei = a.no_interphase ? 'eps_i' : 'eps_q', L = a.spheres ? '1/3' : 'L_d';
+    const ei = a.no_interphase ? 'eps_i' : 'eps_q', si = a.no_interphase ? 'sigma_i' : 'sigma_q', L = a.spheres ? '1/3' : 'L_d';
     const mg = (h, i, f) => `${h} + ${f}*${h}*(${i} - ${h})/(${h} + ${L}*(1 - ${f})*(${i} - ${h}))`;
     return [
-      ...(a.no_interphase ? [] : [eq('coat', 'Equivalent permittivity of a coated sphere', 'eps_q', 'eps_sh*((eps_i + 2*eps_sh) + 2*beta_c*(eps_i - eps_sh))/((eps_i + 2*eps_sh) - beta_c*(eps_i - eps_sh))', { kind: 'derived', origin: 'Exact field solution for concentric spheres' })]),
+      ...(a.no_interphase ? [] : [eq('coat', 'Equivalent permittivity of a coated sphere', 'eps_q', 'eps_sh*((eps_i + 2*eps_sh) + 2*beta_c*(eps_i - eps_sh))/((eps_i + 2*eps_sh) - beta_c*(eps_i - eps_sh))', { kind: 'derived', origin: 'Exact field solution for concentric spheres' }), eq('coats', 'Equivalent conductivity of a coated sphere', 'sigma_q', 'sigma_m*((sigma_i + 2*sigma_m) + 2*beta_c*(sigma_i - sigma_m))/((sigma_i + 2*sigma_m) - beta_c*(sigma_i - sigma_m))', { kind: 'derived', origin: 'Same solution for conduction, the coating taken to have the conductivity of the matrix' })]),
       eq('ap', 'Polarisability factor', 'alpha_p', a.spheres ? `(${ei} - eps_m)/(${ei} + 2*eps_m)` : `(${ei} - eps_m)/(3*(eps_m + L_d*(${ei} - eps_m)))`, { kind: 'derived', origin: 'Field inside an isolated ellipsoid in a uniform field' }),
       a.mg_host
         ? eq('mg', 'Maxwell Garnett mixing formula', 'eps_MG', mg('eps_m', ei, 'phi'), { kind: 'derived', origin: 'Clausius–Mossotti (Lorentz) local field', needs: ['mg_host'] })
         : eq('mg', 'Maxwell Garnett formula with phases inverted', 'eps_MG', mg(ei, 'eps_m', '(1 - phi)'), { kind: 'derived', origin: 'Clausius–Mossotti local field with the filler as host' }),
       eq('br', 'Bruggeman self-consistency condition', `phi*(${ei} - eps_BR)/(eps_BR + ${L}*(${ei} - eps_BR)) + (1 - phi)*(eps_m - eps_BR)/(eps_BR + ${L}*(eps_m - eps_BR))`, '0', { kind: 'closure', origin: 'Mean polarisation of both phases embedded in the effective medium vanishes' }),
       ...(a.spheres ? [
-        eq('hsl', 'Hashin–Shtrikman bound with the matrix as host', 'eps_HSL', `eps_m + phi/(1/(${ei} - eps_m) + (1 - phi)/(3*eps_m))`, { kind: 'law', origin: 'Variational bound for isotropic two-phase media', needs: ['spheres'] }),
-        eq('hsu', 'Hashin–Shtrikman bound with the filler as host', 'eps_HSU', `${ei} + (1 - phi)/(1/(eps_m - ${ei}) + phi/(3*${ei}))`, { kind: 'law', origin: 'Variational bound for isotropic two-phase media', needs: ['spheres'] })] : []),
+        eq('hsl', 'Hashin–Shtrikman lower bound', 'eps_HSL', `min(${mg('eps_m', ei, 'phi')}, ${mg(ei, 'eps_m', '(1 - phi)')})`, { kind: 'law', origin: 'Variational bound for isotropic two-phase media: the coated-sphere value with the lower-permittivity phase as host', needs: ['spheres'] }),
+        eq('hsu', 'Hashin–Shtrikman upper bound', 'eps_HSU', `max(${mg('eps_m', ei, 'phi')}, ${mg(ei, 'eps_m', '(1 - phi)')})`, { kind: 'law', origin: 'Variational bound for isotropic two-phase media: the coated-sphere value with the higher-permittivity phase as host', needs: ['spheres'] })] : []),
       eq('wlo', 'Wiener bound, layers in series', 'eps_Wlo', `1/(phi/${ei} + (1 - phi)/eps_m)`, { kind: 'law', origin: 'Uniform flux density' }),
       eq('whi', 'Wiener bound, layers in parallel', 'eps_Whi', `phi*${ei} + (1 - phi)*eps_m`, { kind: 'law', origin: 'Uniform field' }),
-      eq('smg', 'Maxwell Garnett effective conductivity', 'sigma_MG', a.mg_host ? mg('sigma_m', 'sigma_i', 'phi') : mg('sigma_i', 'sigma_m', '(1 - phi)'), { kind: 'derived', origin: 'Same mathematics with conductivity in place of permittivity' }),
+      eq('smg', 'Maxwell Garnett effective conductivity', 'sigma_MG', a.mg_host ? mg('sigma_m', si, 'phi') : mg(si, 'sigma_m', '(1 - phi)'), { kind: 'derived', origin: 'Same mathematics with conductivity in place of permittivity' }),
       ...(a.static ? [] : [
-        eq('mw', 'Maxwell–Wagner relaxation time', 'tau_MW', `eps_0*(eps_m + ${L}*(1 - phi)*(${ei} - eps_m))/(sigma_m + ${L}*(1 - phi)*(sigma_i - sigma_m))`, { kind: 'derived', origin: 'Pole of the Maxwell Garnett formula with complex permittivities' }),
+        eq('mw', 'Maxwell–Wagner relaxation time', 'tau_MW', a.mg_host ? `eps_0*(eps_m + ${L}*(1 - phi)*(${ei} - eps_m))/(sigma_m + ${L}*(1 - phi)*(${si} - sigma_m))` : `eps_0*(${ei} + ${L}*phi*(eps_m - ${ei}))/(${si} + ${L}*phi*(sigma_m - ${si}))`, { kind: 'derived', origin: 'Pole of the Maxwell Garnett formula with complex permittivities' }),
         eq('tm', 'Conduction loss tangent of the matrix', 'tan_m', 'sigma_m/(2*pi*f_e*eps_0*eps_m)', { kind: 'definition' })]),
     ];
   },
@@ -1881,7 +1910,7 @@ const effectiveMedium = {
     { text: 'Bruggeman instead embeds a grain of each phase in the unknown effective medium and requires the average polarisation to vanish.', tex: '\\phi\\,\\frac{\\varepsilon_i-\\varepsilon}{\\varepsilon+L(\\varepsilon_i-\\varepsilon)} + (1-\\phi)\\,\\frac{\\varepsilon_m-\\varepsilon}{\\varepsilon+L(\\varepsilon_m-\\varepsilon)} = 0' },
     { text: 'This is a quadratic for ε. With an insulating matrix its conducting root is zero until the filler fraction reaches the depolarisation factor: a percolation threshold of one-third for spheres.', tex: '\\sigma_{BR} = \\sigma_i\\,\\frac{\\phi-L}{1-L}\\quad(\\phi>L,\\ \\sigma_m\\to0)' },
     { text: 'Variational principles bound the effective property of any isotropic two-phase material. The bounds are attained by assemblages of coated spheres, and coincide with the Maxwell Garnett formula taken with each phase in turn as host.', tex: '\\varepsilon_m + \\frac{\\phi}{\\dfrac{1}{\\varepsilon_i-\\varepsilon_m}+\\dfrac{1-\\phi}{3\\varepsilon_m}} \\ \\le\\ \\varepsilon_{eff}\\ \\le\\ \\varepsilon_i + \\frac{1-\\phi}{\\dfrac{1}{\\varepsilon_m-\\varepsilon_i}+\\dfrac{\\phi}{3\\varepsilon_i}}' },
-    ...(a.static ? [] : [{ text: 'At angular frequency ω each phase has a complex permittivity. Inserting these into the mixing formula yields a Debye-type relaxation caused by charge accumulating at the interfaces.', tex: '\\varepsilon^*_k = \\varepsilon_k - \\frac{i\\sigma_k}{\\omega\\varepsilon_0},\\qquad \\tau_{MW} = \\varepsilon_0\\frac{\\varepsilon_m + L(1-\\phi)(\\varepsilon_i-\\varepsilon_m)}{\\sigma_m + L(1-\\phi)(\\sigma_i-\\sigma_m)}' }]),
+    ...(a.static ? [] : [{ text: 'At angular frequency ω each phase has a complex permittivity. Inserting these into the mixing formula yields a Debye-type relaxation caused by charge accumulating at the interfaces.', tex: '\\varepsilon^*_k = \\varepsilon_k - \\frac{i\\sigma_k}{\\omega\\varepsilon_0},\\qquad \\tau_{MW} = \\varepsilon_0\\frac{\\varepsilon_m + L(1-\\phi)(\\varepsilon_i-\\varepsilon_m)}{\\sigma_m + L(1-\\phi)(\\sigma_i-\\sigma_m)}\\ \\text{(matrix as host)}' }]),
   ],
   solve(v, a) {
     const c = emtCore(v, a), f = v.phi, em = v.eps_m, ei = c.eI, sm = v.sigma_m, si = c.sI, warnings = [];
@@ -1894,7 +1923,7 @@ const effectiveMedium = {
     if (Math.max(si / sm, sm / si) > 1e3 && Math.abs(f - c.L) < 0.1) warnings.push('The loading is near the Bruggeman percolation threshold, where the conductivity is extremely sensitive to microstructure; treat the estimates as order-of-magnitude.');
     if (!a.spheres) warnings.push('Aligned spheroids make the composite anisotropic: the Hashin–Shtrikman bounds for isotropic media do not apply, only the Wiener bounds.');
     const fin = ei / em / (1 + c.L * (ei / em - 1));
-    const tauMW = EPS0 * (em + c.L * (1 - f) * (ei - em)) / (sm + c.L * (1 - f) * (si - sm));
+    const tauMW = a.mg_host ? EPS0 * (em + c.L * (1 - f) * (ei - em)) / (sm + c.L * (1 - f) * (si - sm)) : EPS0 * (ei + c.L * f * (em - ei)) / (si + c.L * f * (sm - si)); // pole of the Maxwell Garnett formula for whichever phase is the host
     const ps = N.linspace(0, 1, 101);
     const scalars = [
       scalar('eps_MG', 'Effective permittivity, Maxwell Garnett', eMG, '1'), scalar('eps_BR', 'Effective permittivity, Bruggeman', eBR, '1'),
@@ -2215,7 +2244,7 @@ const ferroelectric = {
     eq('lk', 'Landau–Khalatnikov equation', 'd(P,t)', `-Gamma_k*(alpha_L*P + beta_L*P^3${a.second_order ? '' : ' + gamma_L*P^5'} - E)`, { kind: 'law', origin: 'Relaxational dynamics down the free-energy gradient' }),
     a.sine_drive ? eq('drive', 'Applied field', 'E', 'E_0*sin(2*pi*f_d*t)', { kind: 'boundary' }) : eq('drive', 'Applied triangular field', 'E', '2*E_0/pi*asin(sin(2*pi*f_d*t))', { kind: 'boundary' }),
     ...(a.second_order
-      ? [eq('ps', 'Spontaneous polarisation', 'P_s', 'sqrt(-alpha_L/beta_L)', { kind: 'derived', origin: 'Minimum of the free energy at zero field', needs: ['second_order'] }), eq('ec', 'Thermodynamic coercive field', 'E_c0', '2/(3*sqrt(3))*(-alpha_L)*sqrt(-alpha_L/beta_L)', { kind: 'derived', origin: 'Field at which the metastable minimum disappears', needs: ['second_order'] }), eq('tau', 'Relaxation time about the polar state', 'tau_P', '1/(2*Gamma_k*abs(alpha_L))', { kind: 'derived' })]
+      ? [eq('ps', 'Spontaneous polarisation', 'P_s', 'sqrt(max(-alpha_L, 0)/beta_L)', { kind: 'derived', origin: 'Minimum of the free energy at zero field', needs: ['second_order'] }), eq('ec', 'Thermodynamic coercive field', 'E_c0', '2/(3*sqrt(3))*max(-alpha_L, 0)*sqrt(max(-alpha_L, 0)/beta_L)', { kind: 'derived', origin: 'Field at which the metastable minimum disappears', needs: ['second_order'] }), eq('tau', 'Relaxation time about the equilibrium state', 'tau_P', 'ifpos(-alpha_L, 1/(2*Gamma_k*abs(alpha_L)), 1/(Gamma_k*alpha_L))', { kind: 'derived', origin: 'Linearised Landau–Khalatnikov equation: curvature −2α_L at ±P_s below the transition, α_L at P = 0 above it' })]
       : [eq('ps', 'Spontaneous polarisation (implicit)', 'alpha_L + beta_L*P_s^2 + gamma_L*P_s^4', '0*alpha_L', { kind: 'derived', origin: 'Minimum of the free energy at zero field' })]),
     a.no_background ? eq('disp', 'Displacement plotted', 'D_e', 'P', { kind: 'closure', needs: ['no_background'] }) : eq('disp', 'Electric displacement', 'D_e', 'P + eps_0*eps_b*E', { kind: 'law', origin: 'Constitutive relation with a linear background' }),
     eq('loss', 'Energy dissipated per cycle', 'W_c', 'int(E, P)', { kind: 'law', origin: 'Electrical work around a closed loop' }),
@@ -2274,7 +2303,8 @@ const ferroelectric = {
       const fq = 1e-6 / (TAU * c.tau), s = feSim(v, a, fq, 3 * c.Ec0, 2, 4000);
       out.push(bench('Quasi-static remanent polarisation', s.Pr, c.Ps, a.second_order ? 'P_r = √(−α/β)' : 'Minimum of the free energy at zero field', 1e-3));
       out.push(bench('Quasi-static coercive field', s.Ec, c.Ec0, a.second_order ? 'E_c = (2/3√3)|α|P_s' : 'Field at the inflection of the free energy', 0.02));
-      if (a.second_order) out.push(bench('Spontaneous polarisation', c.Ps, Math.sqrt(-c.al / c.be), 'P_s = √(−α/β)', 1e-12));
+      out.push(bench('Spontaneous polarisation against the numerical zero of ∂F/∂P', c.Ps, rootOr(c.dF, c.Pc, 3 * c.Ps, NaN), 'Bracketed root of αP + βP³ (+ γP⁵) on the polar branch', 1e-9));
+      out.push(bench('Loop area equals the dissipation integral in a resolved cycle', (() => { const r = feSim(v, a, 0.2 / (TAU * c.tau), 3 * c.Ec0, 2, 6000); return r.Dq / r.W; })(), 1, '∮E dP = (1/Γ)∮(dP/dt)² dt', 0.02));
     } else {
       const fq = 1e-6 / (TAU * c.tau), s = feSim(v, a, fq, 1e-6 * c.al * Math.sqrt(c.al / c.be), 1, 400);
       out.push(bench('Paraelectric susceptibility', s.P[100] / s.E[100], 1 / c.al, 'P = E/α (Curie–Weiss)', 1e-3));
@@ -2350,7 +2380,7 @@ const chargeMemory = {
   keywords: ['charge relaxation', 'memory kernel', 'remembers', 'memory', 'charge decay', 'maxwell relaxation', 'relaxation time', 'non-exponential decay', 'stretched exponential', 'conducting fluid', 'history dependent', 'non-markovian', 'what if', 'new law', 'electrolyte', 'dielectric relaxation'],
   summary: 'Compares the conventional exponential decay of free charge in a conductor (Maxwell relaxation, τ = ε/σ) with a hypothesised law in which the decay rate depends on the charge history through a memory kernel, and states what measurement would tell them apart.',
   background: [
-    'Established physics. Free charge placed inside a uniform ohmic conductor does not stay there. Charge conservation, Ohm\'s law and Gauss\'s law together give dq/dt = −q/τ with τ = ε/σ, the Maxwell (charge) relaxation time: about 10⁻¹⁹ s in copper, microseconds in tap water, hours in good insulators. The decay is a single exponential, monotone, with its steepest slope at the first instant. Departures from a single exponential are well known and conventional: a material with regions of different ε/σ decays as a sum of exponentials (Maxwell–Wagner), and disordered dielectrics often follow stretched-exponential or power-law responses.',
+    'Established physics. Free charge placed inside a uniform ohmic conductor does not stay there. Charge conservation, Ohm\'s law and Gauss\'s law together give dq/dt = −q/τ with τ = ε/σ, the Maxwell (charge) relaxation time: about 10⁻¹⁹ s in copper (a formal value, far shorter than the electron collision time), microseconds in distilled water, tens of nanoseconds in tap water, minutes to hours in good insulators. The decay is a single exponential, monotone, with its steepest slope at the first instant. Departures from a single exponential are well known and conventional: a material with regions of different ε/σ decays as a sum of exponentials (Maxwell–Wagner), and disordered dielectrics often follow stretched-exponential or power-law responses.',
     'Hypothesis (not established). Suppose instead that the conduction current responds not to the present charge but to a weighted average of its past, dq/dt = −(1/τ)∫K(t − s) q(s) ds. With an exponential kernel of memory time τ_m this is equivalent to giving the current its own relaxation time — formally the Drude model, whose relaxation time in real conductors is of order 10⁻¹⁴ s and therefore invisible. The hypothesis is that in some fluid τ_m is comparable with τ. The consequence is sharp: the decay starts with zero slope, and when τ_m exceeds τ/4 the charge overshoots zero and oscillates. Results below are conditional on that hypothesis.',
   ],
   phenomena: ['Ohmic charge relaxation', 'Hypothetical delayed (history-dependent) conduction', 'Overshoot and sign reversal of the charge', 'Non-exponential tails from heterogeneity (conventional)'],
@@ -2391,7 +2421,9 @@ const chargeMemory = {
       eq('thc', 'Critical memory ratio', 'theta_c', '1/4', { kind: 'derived', origin: 'Discriminant of the equivalent second-order equation' }),
       a.instant_charge ? eq('ic', 'Memory variable at the instant of charging', 'y_0', '0*q_0', { kind: 'initial' }) : eq('ic', 'Memory variable after long preconditioning', 'y_0', 'q_0', { kind: 'initial' }),
     ] : [eq('kww', 'Hypothesised stretched-exponential response', 'q', 'q_0*exp(-(t/tau_M)^beta_s)', { kind: 'hypothesis', origin: 'Postulated response function; not an established law for a homogeneous ohmic fluid' })]),
-    a.free_fit ? eq('fit', 'Conventional curve fitted to the data', 'q_f', 'A_f*q_0*exp(-t/tau_f)', { kind: 'definition' }) : eq('fit', 'Conventional curve with independently measured properties', 'q_f', 'q_0*exp(-t/tau_M)', { kind: 'definition' }),
+    a.free_fit
+      ? eq('fit', 'Conventional curve fitted to the data', 'q_f', a.uniform ? 'A_f*q_0*exp(-t/tau_f)' : 'A_f*q_0*((1 - w_2)*exp(-t/tau_f) + w_2*exp(-t/(r_tau*tau_f)))', { kind: 'definition' })
+      : eq('fit', 'Conventional curve with independently measured properties', 'q_f', a.uniform ? 'q_0*exp(-t/tau_M)' : 'q_0*((1 - w_2)*exp(-t/tau_M) + w_2*exp(-t/(r_tau*tau_M)))', { kind: 'definition' }),
     eq('sig', 'Noise level for a five-standard-deviation distinction', 'sigma_req', 'D_rms*sqrt(n_samp)/5', { kind: 'definition', origin: 'Chi-square difference between the two descriptions' }),
   ],
   derivation: a => [
@@ -2748,12 +2780,12 @@ const skinDepth = {
       eq('eta', 'Intrinsic impedance magnitude', 'eta_m', 'sqrt(omega*mu_0*mu_r/sqrt(sigma_e^2 + (omega*eps_0*eps_r)^2))', { kind: 'derived' }),
     ]),
     eq('rs', 'Surface resistance', 'R_s', a.good_conductor ? '1/(sigma_e*delta_s)' : 'eta_m*cos(pi/4 - atan(omega*eps_0*eps_r/sigma_e)/2)', { kind: 'derived', origin: 'Real part of the intrinsic impedance' }),
-    a.far_field ? eq('zw', 'Wave impedance of a plane wave', 'Z_w', 'sqrt(mu_0/eps_0)', { kind: 'law', needs: ['far_field'] }) : eq('zw', 'Wave impedance near a magnetic source', 'Z_w', 'sqrt(mu_0/eps_0)*2*pi*r_src*f_d/c', { kind: 'derived', origin: 'Near field of a small current loop' }),
+    a.far_field ? eq('zw', 'Wave impedance of a plane wave', 'Z_w', 'sqrt(mu_0/eps_0)', { kind: 'law', needs: ['far_field'] }) : eq('zw', 'Wave impedance near a magnetic source', 'Z_w', 'sqrt(mu_0/eps_0)*min(1, 2*pi*r_src*f_d/c)', { kind: 'derived', origin: 'Near field of a small current loop', note: 'Capped at the plane-wave value once the source is farther than λ/2π' }),
     eq('adb', 'Absorption loss', 'A_dB', '8.686*t_s*alpha', { kind: 'derived', origin: 'Exponential decay through the thickness' }),
-    eq('rdb', 'Reflection loss', 'R_dB', '20*log10((Z_w + eta_m)^2/(4*Z_w*eta_m))', { kind: 'derived', origin: 'Impedance mismatch at the two faces (magnitudes shown; phases are included in the calculation)' }),
+    eq('rdb', 'Reflection loss', 'R_dB', '20*log10((Z_w^2 + 2*Z_w*R_s + eta_m^2)/(4*Z_w*eta_m))', { kind: 'derived', origin: 'Impedance mismatch at the two faces: |Z_w + η|² = Z_w² + 2Z_w Re(η) + |η|², with Re(η) = R_s' }),
     a.multi_reflect ? eq('bdb', 'Re-reflection correction', 'B_dB', '20*log10(abs(1 - ((Z_w - eta_m)/(Z_w + eta_m))^2*exp(-2*t_s*alpha)))', { exportable: false, note: 'Shown in magnitude form; the solver evaluates it with the complex propagation constant and impedance.',  kind: 'derived', origin: 'Sum of the internal reflection series (magnitudes shown)' }) : eq('bdb', 'Re-reflection correction', 'B_dB', '0', { kind: 'closure' }),
     a.solid ? eq('se', 'Shielding effectiveness', 'SE', 'A_dB + R_dB + B_dB', { kind: 'derived', origin: 'Schelkunoff decomposition' }) : eq('se', 'Shielding effectiveness limited by an aperture', 'SE', 'min(A_dB + R_dB + B_dB, SE_ap)', { kind: 'derived' }),
-    ...(a.solid ? [] : [eq('ap', 'Aperture limit', 'SE_ap', '20*log10(c/(2*f_d*l_a))', { kind: 'empirical', origin: 'Slot-antenna leakage rule (Ott 2009)' })]),
+    ...(a.solid ? [] : [eq('ap', 'Aperture limit', 'SE_ap', 'max(0, 20*log10(c/(2*f_d*l_a)))', { kind: 'empirical', origin: 'Slot-antenna leakage rule (Ott 2009)', note: 'Zero once the slot is longer than half a wavelength: it then offers no shielding' })]),
     eq('et', 'Transmitted field', 'E_t', 'E_0*10^(-SE/20)', { kind: 'definition' }),
   ],
   derivation: a => [
@@ -2790,7 +2822,7 @@ const skinDepth = {
         scalar('SE', 'Shielding effectiveness', c.SE, 'dB'),
         ...(a.solid ? [] : [scalar('SE_ap', 'Aperture limit on shielding', c.ap, 'dB')]),
         scalar('E_t', 'Transmitted field amplitude', Et, 'V/m'),
-        scalar('R_ac', 'Alternating / direct-current resistance of the sheet (current on one face)', td > 1e-6 ? td / (1 - Math.exp(-td)) : 1, '1'),
+        scalar('R_ac', 'Alternating / direct-current resistance of the sheet (current on one face)', td < 1e-2 ? 1 + 4 * td ** 4 / 45 : td > 300 ? td : td * (Math.sinh(2 * td) + Math.sin(2 * td)) / (Math.cosh(2 * td) - Math.cos(2 * td)), '1', { note: 'Re[γt coth γt] for a good conductor with the field excluded from the far face' }),
         scalar('f_t', 'Frequency at which the skin depth equals the thickness', 1 / (Math.PI * c.mu * c.sg * v.t_s ** 2), 'Hz', { note: 'Good-conductor formula' }),
       ],
       series: [

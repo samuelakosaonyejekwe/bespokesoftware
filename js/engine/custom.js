@@ -6,6 +6,7 @@ import * as E from '../core/expr.js';
 import * as N from '../core/num.js';
 import { tryUnit, fmt } from '../core/units.js';
 import { DOMAINS } from '../data/domains.js';
+import { ATLAS } from '../data/atlas.js';
 
 const K = {}; // no symbol is assumed to be a constant of nature: in a user's equation, c or g may mean anything
 
@@ -21,6 +22,7 @@ export function customModel(inv) {
   const unitOf = s => ((S[s] && S[s].unit && tryUnit(S[s].unit)) ? S[s].unit : '1');
   const mk = (sym, name) => {
     const d = S[sym] || {}, known = K[sym] != null && !d.unit, value = d.value != null ? d.value : known ? K[sym] : 1;
+    if (d.src) return { sym, name: d.name || name, unit: unitOf(sym), value, min: d.min != null ? d.min : value, max: d.max != null ? d.max : value, kind: d.min != null && d.min === d.max ? 'constant' : 'operating', unc: d.min != null && d.min === d.max ? 0 : 0.05, placeholder: false, src: d.src, prov: d.prov, aliases: d.aliases };
     return { sym, name: d.name || name, unit: unitOf(sym), value, min: d.min != null ? d.min : value > 0 ? value / 10 : value < 0 ? value * 10 : -1, max: d.max != null ? d.max : value > 0 ? value * 10 : value < 0 ? value / 10 : 1, kind: 'operating', unc: 0.05, placeholder: d.value == null && !known, src: d.value != null ? 'Value you declared for your equation' : known ? 'Accepted constant' : 'Placeholder of 1: set the real value' };
   };
   const inputs = [...free].map(s => mk(s, `Symbol ${s}`)).concat(states.map(s => mk(s, `Initial value of ${s}`)));
@@ -32,16 +34,17 @@ export function customModel(inv) {
   { const known = new Set([...free, ...states, tVar].filter(Boolean)); let prog = true; while (prog) { prog = false; for (const p of alg) if (!p.done && [...E.symbols(p.R)].every(s => known.has(s))) { order.push(p); known.add(p.L.n); p.done = true; prog = true; } } }
   const evalAlg = env => { for (const p of order) { try { env[p.L.n] = E.evaluate(p.R, env); } catch { env[p.L.n] = NaN; } } return env; };
   const domains = (inv.domains || []).map(d => d.key).filter(k => DOMAINS[k]).slice(0, 2);
+  const at = inv.atlas ? ATLAS.find(x => x.id === inv.atlas) : null;
   return {
-    id: 'custom', custom: true, title: 'Your own equations', module: [1, 2], klass: inv.klass && inv.klass.tags.includes('III') ? ['III', 'I'] : ['I'], hypothetical: true,
+    id: at ? `atlas:${at.id}` : 'custom', custom: true, atlas: !!at, title: at ? at.title : inv.estimate ? 'Order-of-magnitude estimate by dimensional analysis' : 'Your own equations', module: [1, 2], klass: !at && inv.klass && inv.klass.tags.includes('III') ? ['III', 'I'] : ['I'], hypothetical: !at,
     domains: domains.length ? domains : ['classical'], keywords: [],
-    summary: 'A model assembled from the equations you supplied. Explicit relations are evaluated in order and time-dependent ones are integrated numerically.',
-    background: 'These equations are yours. They are treated as hypotheses: verified for syntax, dimensions and finiteness, solved as written, and given no standing beyond the evidence you bring to them.',
-    laws: [], refs: [], limits: 'Valid only as far as the supplied equations are. Symbols without a declared value run with a placeholder of 1.',
+    summary: at ? at.summary : 'A model assembled from the equations you supplied. Explicit relations are evaluated in order and time-dependent ones are integrated numerically.',
+    background: at ? `${at.summary} These are standard textbook relations, assembled into a small model because no full model in the library covers the question. Every reference value can be replaced with your own.` : 'These equations are yours. They are treated as hypotheses: verified for syntax, dimensions and finiteness, solved as written, and given no standing beyond the evidence you bring to them.',
+    laws: at ? at.laws || [] : [], refs: at ? ['Standard relations found in any university physics text, for example Halliday, Resnick & Walker, Fundamentals of Physics (Wiley).'] : [], limits: at ? at.limits || 'A compact textbook relation: it captures the leading effect only.' : 'Valid only as far as the supplied equations are. Symbols without a declared value run with a placeholder of 1.',
     inputs,
     symbols: Object.fromEntries([...defined].map(s => [s, [(S[s] && S[s].name) || `Symbol ${s}`, unitOf(s)]]).concat(tVar ? [[tVar, ['Time', unitOf(tVar)]]] : [])),
     assumptions: odes.length ? [{ id: 'saturate', text: 'Every rate of change is passed through a smooth cap f → f / √(1 + f²/F²), so no variable can reach infinity in finite time.', on: true, why: 'Guarantees a solution that exists and stays finite for all time', alt: 'Rates are used exactly as written; a solution that blows up is then reported as such.' }] : [],
-    equations: () => parsed.map(p => ({ id: `user${p.i + 1}`, name: p.q.name || `Your equation ${p.i + 1}`, lhs: p.q.lhs, rhs: p.q.rhs, kind: 'hypothesis', origin: 'Supplied by you' })),
+    equations: () => parsed.map(p => ({ id: `user${p.i + 1}`, name: p.q.name || `Your equation ${p.i + 1}`, lhs: p.q.lhs, rhs: p.q.rhs, kind: p.q.kind || 'hypothesis', origin: p.q.origin || 'Supplied by you' })),
     derivation: () => [],
     numerics: { method: odes.length ? 'Adaptive Runge–Kutta (Dormand–Prince 4/5) with smoothly capped rates; algebraic relations evaluated in dependency order' : 'Direct evaluation in dependency order' },
     falsify: ['Any measurement that departs from the predicted curves by more than its uncertainty.'],

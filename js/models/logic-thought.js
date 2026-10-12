@@ -40,21 +40,23 @@ const montyHall = {
     asm('host_knows', 'The host knows where the prize is and always opens losing doors.', { why: 'The standard statement of the problem', alt: 'An ignorant host opens doors at random; games in which the prize is exposed are void. Conditional on only goats being shown, staying and switching are equally good.' }),
     asm('must_offer', 'The host must always offer the switch, whatever the first choice.', { why: 'Without a fixed protocol the offer itself carries information', alt: 'An adversarial host offers the switch only when the first choice is correct, so switching always loses.' }),
   ],
-  symbols: { P_st: ['Probability of winning by staying', '1'], P_sw: ['Probability of winning by switching to one remaining door', '1'], A_sw: ['Advantage ratio of switching', '1'], sigma_mc: ['Standard error of the simulated frequency', '1'], P_valid: ['Probability that the game proceeds to the offer', '1'] },
+  symbols: { P_st: ['Probability of winning by staying', '1'], P_sw: ['Probability of winning by switching to one remaining door', '1'], A_sw: ['Advantage ratio of switching', '1'], sigma_mc: ['Standard error of the simulated frequency', '1'], P_valid: ['Probability that the game proceeds to the offer', '1'], n_left: ['Other doors left closed', '1'] },
   equations: a => (!a.must_offer ? [
     eq('offer', 'Probability that the switch is offered', 'P_valid', '1/n_d', { kind: 'derived', origin: 'The adversarial host offers only when the first choice is correct' }),
     eq('stay', 'Winning by staying, given an offer', 'P_st', '1', { kind: 'derived', origin: 'Bayes\' theorem: the offer reveals that the first choice is right' }),
     eq('switch', 'Winning by switching, given an offer', 'P_sw', '0', { kind: 'derived', origin: 'Complement of staying' }),
-    eq('se', 'Standard error of a simulated frequency', 'sigma_mc', 'sqrt(P_sw*(1 - P_sw)/n_trials)', { kind: 'derived', origin: 'Binomial sampling' }),
+    eq('se', 'Standard error of a simulated frequency', 'sigma_mc', 'sqrt(P_sw*(1 - P_sw)/(n_trials*P_valid))', { kind: 'derived', origin: 'Binomial sampling over the games in which the offer is made' }),
   ] : a.host_knows ? [
+    eq('left', 'Other doors left closed', 'n_left', 'n_d - min(k_open, n_d - 2) - 1', { kind: 'definition', note: 'The host opens at most n − 2 doors, so that one other door is left to switch to.' }),
     eq('stay', 'Winning by staying', 'P_st', '1/n_d', { kind: 'law', origin: 'Uniform prior; the informed host\'s action is uninformative about the chosen door', needs: ['host_knows', 'must_offer'] }),
-    eq('switch', 'Winning by switching to one of the remaining doors', 'P_sw', '(n_d - 1)/(n_d*(n_d - k_open - 1))', { kind: 'derived', origin: 'Total probability: the mass (n − 1)/n is shared among the n − k − 1 doors left closed', needs: ['host_knows', 'must_offer'] }),
+    eq('switch', 'Winning by switching to one of the remaining doors', 'P_sw', '(n_d - 1)/(n_d*n_left)', { kind: 'derived', origin: 'Total probability: the mass (n − 1)/n is shared among the n − k − 1 doors left closed', needs: ['host_knows', 'must_offer'] }),
     eq('adv', 'Advantage of switching', 'A_sw', 'P_sw/P_st', { kind: 'definition' }),
     eq('se', 'Standard error of a simulated frequency', 'sigma_mc', 'sqrt(P_sw*(1 - P_sw)/n_trials)', { kind: 'derived', origin: 'Binomial sampling' }),
   ] : [
-    eq('valid', 'Probability that no prize is exposed', 'P_valid', '(n_d - k_open)/n_d', { kind: 'derived', origin: 'Total probability over the position of the prize' }),
-    eq('stay', 'Winning by staying, given only goats are exposed', 'P_st', '1/(n_d - k_open)', { kind: 'derived', origin: 'Bayes\' theorem with a host who opens doors at random' }),
-    eq('switch', 'Winning by switching, given only goats are exposed', 'P_sw', '1/(n_d - k_open)', { kind: 'derived', origin: 'Symmetry among all doors still closed' }),
+    eq('left', 'Other doors left closed', 'n_left', 'n_d - min(k_open, n_d - 2) - 1', { kind: 'definition', note: 'The host opens at most n − 2 doors, so that one other door is left to switch to.' }),
+    eq('valid', 'Probability that no prize is exposed', 'P_valid', '(n_left + 1)/n_d', { kind: 'derived', origin: 'Total probability over the position of the prize' }),
+    eq('stay', 'Winning by staying, given only goats are exposed', 'P_st', '1/(n_left + 1)', { kind: 'derived', origin: 'Bayes\' theorem with a host who opens doors at random: one of the n − k doors still closed' }),
+    eq('switch', 'Winning by switching, given only goats are exposed', 'P_sw', '1/(n_left + 1)', { kind: 'derived', origin: 'Symmetry among all n − k doors still closed' }),
     eq('adv', 'Advantage of switching', 'A_sw', 'P_sw/P_st', { kind: 'definition' }),
     eq('se', 'Standard error of a simulated frequency', 'sigma_mc', 'sqrt(P_sw*(1 - P_sw)/(n_trials*P_valid))', { kind: 'derived', origin: 'Binomial sampling over the games that are not void' }),
   ]),
@@ -107,7 +109,7 @@ const montyHall = {
         scalar('P_valid', 'Probability that the game reaches the offer', pValid, '1', PCT),
         scalar('f_st', 'Simulated frequency of winning by staying', fSt, '1', PCT),
         scalar('f_sw', 'Simulated frequency of winning by switching', fSw, '1', PCT),
-        scalar('sigma_mc', 'Standard error of the simulated switching frequency', sig, '1'),
+        scalar('sigma_mc', 'Standard error of the simulated switching frequency', Math.sqrt(pSw * (1 - pSw) / (nT * pValid)), '1'),
         scalar('n_games', 'Valid games simulated', games, '1'),
         scalar('n_left', 'Other doors left closed', m, '1'),
       ],
@@ -213,7 +215,7 @@ const zenoAchilles = {
     eq('ratio', 'Speed ratio', 'r_v', 'v_T/v_A', { kind: 'definition' }),
     ...(a.const_speed ? [
       eq('stage', 'Duration of stage k', 'tau_k', 'd_0*r_v^k_i/v_A', { kind: 'derived', origin: 'Uniform motion: each stage covers the previous gap', needs: ['const_speed'] }),
-      eq('part', 'Elapsed time after n stages', 't_n', 'd_0*(1 - r_v^n_st)/(v_A*(1 - r_v))', { kind: 'derived', origin: 'Sum of a finite geometric progression', needs: ['const_speed'] }),
+      eq('part', 'Elapsed time after n stages', 't_n', 'd_0*(1 - r_v^n_st)/(v_A*(1 - r_v))', { kind: 'derived', origin: 'Sum of a finite geometric progression', needs: ['const_speed'], ...(a.continuum ? {} : { exportable: false, note: 'When the construction ends at the smallest length, the solver sums only the stages actually completed, which may be fewer than the number requested.' }) }),
       a.limit_exists
         ? eq('lim', 'Catch-up time (limit of the partial sums)', 't_c', 'd_0/(v_A - v_T)', { kind: 'derived', origin: 'Limit of the geometric series; identical to the kinematic solution', needs: ['limit_exists', 'const_speed'] })
         : eq('lim', 'Least upper bound of the partial sums', 't_sup', 'd_0/(v_A - v_T)', { kind: 'derived', origin: 'Every partial sum is smaller; whether the bound is attained is the point in dispute', needs: ['const_speed'] }),
@@ -223,7 +225,7 @@ const zenoAchilles = {
       eq('xt', 'Position of the tortoise', 'x_T', 'd_0 + v_T*t', { kind: 'law', origin: 'Uniform motion' }),
       eq('rec', 'Stage recursion', 't_next', '-tau_f*ln(1 - (d_0 + v_T*t_k)/(v_A*tau_f))', { kind: 'derived', origin: 'Time for Achilles to reach the tortoise\'s previous position' }),
     ]),
-    ...(a.continuum ? [] : [eq('nfin', 'Number of stages longer than the smallest length', 'n_fin', 'ln(d_0/ell_min)/ln(v_A/v_T)', { kind: 'hypothesis', origin: 'Gap d₀ rᵏ compared with the smallest length' })]),
+    ...(a.continuum ? [] : [eq('nfin', 'Number of stages longer than the smallest length', 'n_fin', 'ln(d_0/ell_min)/ln(v_A/v_T)', { kind: 'hypothesis', origin: 'Gap d₀ rᵏ compared with the smallest length', exportable: false, note: 'The solver reports a whole number of stages, rounding this value up.' })]),
   ],
   derivation: a => [
     { text: 'In stage 0 Achilles runs the head start d₀, taking d₀/v_A. Meanwhile the tortoise advances by the fraction r = v_T/v_A of that distance, which becomes the gap for the next stage.', tex: 'g_k = d_0\\,r^k,\\qquad \\tau_k = \\frac{d_0\\,r^k}{v_A},\\qquad r = \\frac{v_T}{v_A}' },
@@ -390,7 +392,9 @@ const maxwellsDemon = {
     a.landauer
       ? { text: 'Resetting a bit is logically irreversible and releases at least k_B T ln 2 of heat to the bath. The total entropy change of the cycle is then never negative.', tex: '\\Delta S_{net} = k_B\\ln 2 - \\frac{W}{T} = k_B\\left[\\ln 2 - I\\right] \\ge 0' }
       : { text: 'If erasure were free nothing would compensate the entropy removed from the bath, and each cycle would lower the total entropy.', tex: '\\Delta S_{net} = -\\frac{W}{T} = -k_B\\,I < 0' },
-    { text: 'The second law is therefore preserved by exactly one premise in the bookkeeping: the cost of forgetting.', tex: 'W_{net} = W - Q_{erase} \\le 0' },
+    a.landauer
+      ? { text: 'The second law is therefore preserved by exactly one premise in the bookkeeping: the cost of forgetting.', tex: 'W_{net} = W - Q_{erase} \\le 0' }
+      : { text: 'Without the cost of forgetting the cycle would deliver net work from a single bath. The second law is preserved by exactly that one premise in the bookkeeping.', tex: 'W_{net} = W - Q_{erase} = W > 0' },
   ],
   solve(v, a) {
     const kB = C.k_B, kT = kB * v.T, I = Math.LN2 - H2(v.eps_m), eta = a.quasi_static ? 1 : v.eta_w;
@@ -549,7 +553,7 @@ const prisonersDilemma = {
   ],
   derivation: a => [
     { text: 'Write the payoff to the row player for each pair of moves. The game is symmetric.', tex: '\\begin{array}{c|cc} & C & D\\\\\\hline C & R & S\\\\ D & T & P\\end{array}' },
-    { text: 'If T > R and P > S, defecting gives the higher payoff whatever the other player does: defection strictly dominates.', tex: 'T > R \\quad\\text{and}\\quad P > S \;\\Rightarrow\; D \\text{ dominates } C' },
+    { text: 'If T > R and P > S, defecting gives the higher payoff whatever the other player does: defection strictly dominates.', tex: 'T > R \\quad\\text{and}\\quad P > S \\;\\Rightarrow\\; D \\text{ dominates } C' },
     { text: 'Both players reasoning in this way reach mutual defection, the unique Nash equilibrium. Since R > P it is Pareto-dominated by mutual co-operation.', tex: '(D,D)\\ \\text{is Nash};\\qquad (R,R) \\succ (P,P)' },
     { text: 'In the repeated game with continuation probability δ, co-operating for ever against grim trigger is worth R/(1 − δ); defecting once yields T followed by P for ever. Co-operation is an equilibrium when the first is at least the second.', tex: '\\frac{R}{1-\\delta} \\ge T + \\frac{\\delta P}{1-\\delta} \\iff \\delta \\ge \\delta_c = \\frac{T-R}{T-P}' },
     { text: 'The condition 2R > T + S ensures that taking turns to exploit one another does not beat steady mutual co-operation.', tex: '2R > T + S' },
@@ -754,7 +758,7 @@ const newcombProblem = {
       ],
       checks: [
         check('Expected utilities coincide at the break-even accuracy', a.evidential && pStar <= 1 ? (eAt[0] - eAt[1]) / Math.max(Math.abs(eAt[0]), 1e-300) : 0, 1e-9, 'Definition of the threshold'),
-        check('Dominance: with a fixed credence two-boxing is better by the utility of the small prize or more', a.evidential ? 0 : Math.max(0, e1 - e2), 0, 'Causal expected utility'),
+        check('Dominance: with a fixed credence two-boxing is never worse than one-boxing', a.evidential ? 0 : Math.max(0, e1 - e2), 0, 'Causal expected utility'),
         check('Probabilities lie in [0, 1]', p < 0 || p > 1 || q < 0 || q > 1 ? 1 : 0, 0, ''),
       ],
       warnings,
@@ -848,7 +852,9 @@ const liarParadox = {
     ] : [
       eq('fix', 'Fixed point', 'v_fix', '1/2', { kind: 'derived', origin: 'Unique solution of v = 1 − v on the unit interval' }),
       eq('rev', 'Damped revision rule', 'v_next', a.single ? 'v_k + lambda_r*(1 - 2*v_k)' : 'v_k + lambda_r*(1 - v_nb - v_k)', { kind: 'definition', origin: 'Under-relaxed fixed-point iteration' }),
-      eq('rate', 'Contraction factor', 'rho_c', 'abs(1 - 2*lambda_r)', { kind: 'derived', origin: 'Linear iteration about the fixed point' }),
+      a.single
+        ? eq('rate', 'Contraction factor', 'rho_c', 'abs(1 - 2*lambda_r)', { kind: 'derived', origin: 'Linear iteration about the fixed point' })
+        : eq('rate', 'Contraction factor for a cycle of odd length', 'rho_c', 'sqrt(1 - 2*lambda_r*(1 - lambda_r)*(1 - cos(pi/m_c)))', { kind: 'derived', origin: 'Largest eigenvalue modulus |1 − λ − λ e^(2πij/m)| of the cyclic iteration', exportable: false, note: 'Holds for a cycle of odd length. For an even cycle the alternating mode is not damped and the solver reports a factor of 1.' }),
     ]),
   ],
   derivation: a => [
@@ -858,8 +864,11 @@ const liarParadox = {
       : { text: 'If v may take any value in the unit interval the condition has exactly one solution.', tex: 'v = 1 - v \\iff v = \\tfrac12' },
     a.bivalent
       ? { text: 'Treating the condition as a rule for revising a guess produces an endless alternation with period two.', tex: 'v_{k+1} = 1 - v_k:\\qquad 1,\\,0,\\,1,\\,0,\\,\\ldots' }
-      : { text: 'A damped revision moves a fraction λ of the way towards the revised value. The distance from one half shrinks by the factor |1 − 2λ| at each step.', tex: 'v_{k+1} - \\tfrac12 = (1-2\\lambda)\\left(v_k - \\tfrac12\\right)' },
+      : a.single
+        ? { text: 'A damped revision moves a fraction λ of the way towards the revised value. The distance from one half shrinks by the factor |1 − 2λ| at each step.', tex: 'v_{k+1} - \\tfrac12 = (1-2\\lambda)\\left(v_k - \\tfrac12\\right)' }
+        : { text: 'A damped revision moves the value of each sentence a fraction λ of the way towards the value its successor requires of it.', tex: 'v^{(i)}_{k+1} = v^{(i)}_k + \\lambda\\left(1 - v^{(i+1)}_k - v^{(i)}_k\\right)' },
     ...(a.single ? [] : [{ text: 'For a cycle of m sentences each saying that the next is false, a classical assignment must alternate around the cycle, which is possible exactly when m is even.', tex: '\\#\\text{models} = \\begin{cases}2 & m \\text{ even}\\\\ 0 & m \\text{ odd}\\end{cases}' }]),
+    ...(a.single || a.bivalent ? [] : [{ text: 'On a cycle the damped revision couples each sentence to its successor. Its modes are the m-th roots of unity; for odd m the slowest one sets the rate of approach to one half, and for even m the alternating mode is not damped at all.', tex: '\\rho = \\max_j\\left|1-\\lambda-\\lambda e^{2\\pi i j/m}\\right| = \\sqrt{1-2\\lambda(1-\\lambda)\\left(1-\\cos\\tfrac{\\pi}{m}\\right)}\\quad(m\\ \\text{odd})' }]),
   ],
   solve(v, a) {
     const m = a.single ? 1 : int(v.m_c, 1, 14), n = int(v.n_it, 4, 2000), lam = v.lambda_r;
@@ -880,7 +889,8 @@ const liarParadox = {
       if (Number.isNaN(nConv) && rf < 1e-6) nConv = k;
       steps.push(k); yc.push(cl[0]); yf.push(fz[0]); rr.push(Math.max(rf, 1e-17));
     }
-    const classicalOk = nModels > 0, rho = Math.abs(1 - 2 * lam);
+    // slowest mode of v ← (1 − λ)v − λPv + λ on the cycle: eigenvalues 1 − λ − λ·exp(2πij/m)
+    const classicalOk = nModels > 0, rho = m % 2 === 0 ? 1 : Math.sqrt(Math.max(0, 1 - 2 * lam * (1 - lam) * (1 - Math.cos(Math.PI / m))));
     const warnings = [];
     if (!a.bivalent && lam >= 1 && m === 1) warnings.push('With a relaxation factor of 1 the revision is undamped and oscillates; any smaller positive factor converges to one half.');
     if (!a.bivalent && m % 2 === 0) warnings.push('For a cycle of even length the alternating assignments (v, 1 − v, …) are all fixed points; the damped revision settles on one of them, determined by the starting values.');
@@ -997,7 +1007,7 @@ const shipOfTheseus = {
     ...(a.random_repl ? [
       eq('frac', 'Expected original fraction', 'f_o', '(1 - 1/N_p)^(r_rep*t)', { kind: 'derived', origin: 'Each replacement spares a given part with probability 1 − 1/N', needs: ['random_repl'] }),
       eq('half', 'Time to one half', 't_50', 'ln(1/2)/(r_rep*ln(1 - 1/N_p))', { kind: 'derived', origin: 'Inverting the geometric decay', needs: ['random_repl'] }),
-      eq('all', 'Expected time until no original part remains', 't_all', 'N_p*(ln(N_p) + 0.5772)/r_rep', { kind: 'derived', origin: 'Coupon-collector expectation N·H_N with the harmonic number approximated by ln N + γ', needs: ['random_repl'] }),
+      eq('all', 'Expected time until no original part remains', 't_all', 'N_p*(ln(N_p) + 0.5772156649 + 1/(2*N_p))/r_rep', { kind: 'derived', origin: 'Coupon-collector expectation N·H_N with the harmonic number H_N ≈ ln N + γ + 1/(2N), in error by less than 1/(12N²)', needs: ['random_repl'] }),
     ] : [
       eq('frac', 'Original fraction', 'f_o', 'max(0, 1 - r_rep*t/N_p)', { kind: 'derived', origin: 'One original part removed per replacement' }),
       eq('half', 'Time to one half', 't_50', 'N_p/(2*r_rep)', { kind: 'derived', origin: 'Linear depletion' }),
@@ -1034,7 +1044,8 @@ const shipOfTheseus = {
       if (k === cp[ci]) { ci++; sx.push(k / Ns); sy.push(left / Ns); }
     }
     const exactS = n => (a.random_repl ? Math.pow(1 - 1 / Ns, n) : Math.max(0, 1 - n / Ns));
-    const sigS = Math.sqrt(Math.max(exactS(Ns) * (1 - exactS(Ns)), 0) / Ns);
+    // exact variance of the number of surviving originals after Ns random draws (the survival indicators are negatively correlated)
+    const qS = exactS(Ns), sigS = a.random_repl ? Math.sqrt(Math.max(Ns * qS + Ns * (Ns - 1) * Math.pow(1 - 2 / Ns, Ns) - Ns * Ns * qS * qS, 0)) / Ns : 0;
     const tEnd = (a.random_repl ? 5 : 1.2) * Np / r, tt = N.linspace(0, tEnd, 200);
     return {
       scalars: [
@@ -1068,6 +1079,9 @@ const shipOfTheseus = {
     out.push(bench('Original fraction after N random replacements', val(e, 'f_o'), Math.exp(-1), '(1 − 1/N)ᴺ → 1/e', 1 / Np));
     const l = this.solve({ ...v, t_obs: 0.25 * Np / v.r_rep }, { ...on, random_repl: false });
     out.push(bench('Systematic replacement of a quarter of the parts', val(l, 'f_o'), 0.75, 'Linear depletion', 1e-9));
+    const s = this.solve({ ...v, N_p: 10, r_rep: 1, t_obs: 10 }, on);
+    out.push(bench('Ten random replacements in a ship of ten parts', val(s, 'f_o'), 0.3486784401, 'Exact value (9/10)¹⁰', 1e-9));
+    out.push(bench('Expected replacements until no original part remains, ten parts', val(s, 't_all'), 7381 / 252, 'Coupon collector: 10·H₁₀ with H₁₀ = 7381/2520', 1e-12));
     return out;
   },
   validation: [],
@@ -1169,7 +1183,7 @@ const grandfatherParadox = {
     const seq = ctcIterate(q, p0, n), steps = seq.map((_, i) => i);
     let run = 0; const avg = seq.map((p, i) => { run += p; return run / (i + 1); });
     const rho = Math.abs(1 - 2 * q), dev0 = Math.abs(p0 - 0.5);
-    const nConv = dev0 <= 1e-6 || q === 0.5 ? 0 : rho >= 1 ? Infinity : Math.ceil(Math.log(1e-6 / dev0) / Math.log(rho));
+    const nConv = dev0 <= 1e-6 ? 0 : rho >= 1 ? Infinity : rho === 0 ? 1 : Math.max(1, Math.ceil(Math.log(1e-6 / dev0) / Math.log(rho)));
     // enumeration of definite histories (value emerging, gate action) carrying non-zero weight
     const hist = [];
     for (const x of [0, 1]) for (const f of [0, 1]) { const w = f ? q : 1 - q; if (w > 0) hist.push({ x, f, w, ok: (x ^ f) === x }); }
@@ -1178,7 +1192,7 @@ const grandfatherParadox = {
     // single-history trial runs: does the value survive one pass unchanged?
     let x = p0 >= 0.5 ? 1 : 0, okCount = 0; const bits = [x];
     for (let k = 0; k < n; k++) { const f = rnd() < q ? 1 : 0; if (!f) okCount++; x ^= f; bits.push(x); }
-    const pFix = 0.5, sFix = 1;
+    const pFix = 0.5, sFix = 1, noFix = a.single_history ? 'Not applicable: a single history has no mixed state' : !a.novikov ? 'Not applicable: no consistency condition is imposed' : undefined;
     let verdict, code;
     if (!a.novikov) { verdict = 'No constraint imposed: the altered bit belongs to another branch and nothing is contradicted'; code = 2; }
     else if (a.single_history) { code = q >= 1 ? 0 : 1; verdict = q >= 1 ? 'Paradox: no self-consistent single history exists' : q <= 0 ? 'Consistent: the gate never negates' : 'Consistent only in histories where the gate fails to negate'; }
@@ -1191,8 +1205,8 @@ const grandfatherParadox = {
         scalar('n_cons', 'Definite histories permitted', nCons, '1', { text: `${nCons} of ${hist.length} with non-zero weight`, status: 'hypothetical' }),
         scalar('P_cons', 'Total weight of the permitted histories', pCons, '1', { ...PCT, status: 'hypothetical' }),
         scalar('f_cons', 'Simulated fraction of passes that leave the bit unchanged', okCount / n, '1', PCT),
-        scalar('p_fix', 'Fixed-point probability that the bit is 1', a.single_history ? NaN : pFix, '1', { text: a.single_history ? 'Not applicable: a single history has no mixed state' : undefined, status: 'hypothetical' }),
-        scalar('S_fix', 'Entropy of the fixed-point state (bits)', a.single_history ? NaN : sFix, '1', { text: a.single_history ? 'Not applicable' : undefined, status: 'hypothetical' }),
+        scalar('p_fix', 'Fixed-point probability that the bit is 1', noFix ? NaN : pFix, '1', { text: noFix, status: 'hypothetical' }),
+        scalar('S_fix', 'Entropy of the fixed-point state (bits)', noFix ? NaN : sFix, '1', { text: noFix ? 'Not applicable' : undefined, status: 'hypothetical' }),
         scalar('rho_c', 'Contraction factor per pass', rho, '1'),
         scalar('n_conv', 'Passes for plain iteration to come within 10⁻⁶ of one half', nConv, '1', { text: Number.isFinite(nConv) ? undefined : 'Never: the iteration does not contract' }),
         scalar('p_avg', 'Running average of the iterated probability', avg[n], '1'),
@@ -1321,7 +1335,7 @@ const laplaceDemonChaos = {
     { text: 'Averaging the logarithm of that factor along the orbit gives the Lyapunov exponent. When it is positive, small errors grow exponentially on average.', tex: '\\lambda = \\lim_{n\\to\\infty}\\frac1n\\sum_{k=0}^{n-1}\\ln\\left|r(1-2x_k)\\right|,\\qquad \\delta_n \\approx \\delta_0\\,e^{\\lambda n}' },
     a.finite_precision || !a.isolated
       ? { text: 'Prediction fails once the error reaches the tolerance Δ. The horizon grows only with the logarithm of the precision: each further decimal digit buys a fixed number of steps.', tex: 't^* = \\frac{1}{\\lambda}\\ln\\frac{\\Delta}{\\delta_0},\\qquad \\frac{\\partial t^*}{\\partial\\log_{10}(1/\\delta_0)} = \\frac{\\ln 10}{\\lambda}' }
-      : { text: 'With an exactly known state and an undisturbed rule the error is zero at every step: determinism then does give unlimited prediction. The horizon is finite as soon as either idealisation is relaxed.', tex: '\\delta_0 = 0 \;\\Rightarrow\; \\delta_n = 0\\ \\text{for all } n' },
+      : { text: 'With an exactly known state and an undisturbed rule the error is zero at every step: determinism then does give unlimited prediction. The horizon is finite as soon as either idealisation is relaxed.', tex: '\\delta_0 = 0 \\;\\Rightarrow\\; \\delta_n = 0\\ \\text{for all } n' },
     { text: 'For r = 4 the substitution x = sin²(πθ) turns the map into angle doubling, for which the exponent is exactly ln 2.', tex: 'r = 4:\\qquad \\theta_{k+1} = 2\\theta_k \\bmod 1,\\qquad \\lambda = \\ln 2' },
   ],
   solve(v, a) {
@@ -1368,11 +1382,13 @@ const laplaceDemonChaos = {
       warnings,
     };
   },
-  benchmarks() {
+  benchmarks(v) {
     const out = [];
     out.push(bench('Lyapunov exponent at r = 4', logisticLyapunov(4, 0.2, 200000), Math.LN2, 'Exact value ln 2 from conjugacy with the doubling map', 0.01));
     out.push(bench('Lyapunov exponent at r = 2.5', logisticLyapunov(2.5, 0.2, 2000), -Math.LN2, 'Stable fixed point x* = 0.6 with derivative −1/2', 1e-9));
-    out.push(bench('Horizon for δ₀ = 10⁻¹⁰ and Δ = 0.1 at λ = ln 2', Math.log(0.1 / 1e-10) / Math.LN2, 9 * Math.log2(10), 'Nine decades at one bit per step: about 30 steps', 1e-12));
+    out.push(bench('Lyapunov exponent at r = 3.2', logisticLyapunov(3.2, 0.2, 2000), 0.5 * Math.log(0.16), 'Stable two-cycle with multiplier 4 + 2r − r² = 0.16', 1e-9));
+    const s = this.solve({ ...v, r_map: 4, delta_0: 1e-10, Delta_tol: 0.1 }, { finite_precision: true, isolated: true });
+    out.push(bench('Horizon times exponent for δ₀ = 10⁻¹⁰ and Δ = 0.1', val(s, 't_star') * val(s, 'lambda_L'), 9 * Math.LN10, 'ln(Δ/δ₀): nine decades, about 30 steps at one bit per step', 1e-12));
     return out;
   },
   validation: [],
@@ -1435,7 +1451,7 @@ const olbersParadox = {
   laws: ['energy', 'causality', 'sr'],
   refs: ['Olbers, H. W. M. (1823). Über die Durchsichtigkeit des Weltraums. Berliner Astronomisches Jahrbuch für das Jahr 1826, 110–121.', 'Harrison, E. R. (1977). The dark night sky paradox. American Journal of Physics 45, 119–124.', 'Harrison, E. R. (1987). Darkness at Night: A Riddle of the Universe. Harvard University Press.', 'Wesson, P. S., Valle, K. & Stabell, R. (1987). The extragalactic background light and a definitive resolution of Olbers\'s paradox. Astrophysical Journal 317, 601–606.', 'Wesson, P. S. (1991). Olbers\'s paradox and the spectral intensity of the extragalactic background light. Astrophysical Journal 367, 399–406.'],
   inputs: [
-    inp('n_s', 'Mean number density of stars', '1/Mpc^3', 1e9, { min: 1e6, max: 1e12, aliases: ['star density', 'number density', 'stellar density'], src: 'Order of magnitude for the present-day universe averaged over large volumes' }),
+    inp('n_s', 'Mean number density of stars', '1/Mpc^3', 1.5e8, { min: 1e6, max: 1e12, aliases: ['star density', 'number density', 'stellar density'], src: 'Number of Sun-like stars that reproduces the observed local luminosity density of galaxies, of order 1–2 × 10⁸ solar luminosities per cubic megaparsec' }),
     inp('L_s', 'Luminosity of a typical star', 'W', 3.828e26, { min: 1e24, max: 1e30, aliases: ['luminosity', 'stellar luminosity'], src: 'Nominal solar luminosity (IAU 2015)' }),
     inp('R_s', 'Radius of a typical star', 'm', 6.957e8, { min: 1e7, max: 1e11, aliases: ['stellar radius', 'star radius'], src: 'Nominal solar radius (IAU 2015)' }),
     inp('t_0', 'Age of the universe (or Hubble time in the steady-state case)', 'Gyr', 13.8, { min: 0.1, max: 100, aliases: ['age of the universe', 'age', 'hubble time'], src: 'Planck Collaboration (2020), rounded' }),
@@ -1460,15 +1476,15 @@ const olbersParadox = {
       eq('tot', 'Total in an eternal, exponentially expanding (steady-state) universe', 'F_sky', 'n_s*L_s*c*t_0/4', { kind: 'derived', origin: 'Bolometric intensity integral with scale factor exp(t/t₀) and constant proper emissivity', needs: ['eternal'] }),
     ] : [
       eq('hor', 'Light-travel horizon', 'R_h', 'c*t_0', { kind: 'law', origin: 'Finite speed of light and finite age' }),
-      eq('tot', a.static ? 'Total from within the horizon' : 'Total from within the horizon, with redshift', 'F_sky', a.static ? (a.transparent ? 'n_s*L_s*c*t_0' : 'n_s*L_s*ell_s*(1 - exp(-c*t_0/ell_s))') : '(3/5)*n_s*L_s*c*t_0', { kind: 'derived', origin: a.static ? 'Shell sum truncated at the horizon' : 'Bolometric intensity integral with scale factor proportional to t^(2/3) and conserved comoving sources', needs: a.static ? ['static'] : [] }),
+      eq('tot', a.static ? 'Total from within the horizon' : 'Total from within the horizon, with redshift', 'F_sky', `${a.static ? '' : '(3/5)*'}${a.transparent ? 'n_s*L_s*c*t_0' : 'n_s*L_s*ell_s*2*exp(-c*t_0/(2*ell_s))*sinh(c*t_0/(2*ell_s))'}`, { kind: 'derived', origin: a.static ? 'Shell sum truncated at the horizon' : 'Bolometric intensity integral with scale factor proportional to t^(2/3) and conserved comoving sources', needs: a.static ? ['static'] : [], ...(a.transparent ? {} : { note: `The occulted sum n L ℓ (1 − exp(−c t₀/ℓ)) is written with a hyperbolic sine so that it stays accurate when the horizon is far smaller than the mean free path.${a.static ? '' : ' The redshift factor 3/5 is applied to it, an approximation that is very accurate in the same regime.'}` }) }),
     ]),
     eq('cov', 'Fraction of the sky covered by stars', 'f_cov', 'F_sky/F_surf', { kind: 'definition' }),
   ],
   derivation: a => [
     { text: 'A shell of radius r and thickness dr contains 4πr² n dr stars. Each delivers the flux L/(4πr²), so the shell contributes an amount independent of its radius.', tex: 'dF = 4\\pi r^2 n\\,dr\\cdot\\frac{L}{4\\pi r^2} = n\\,L\\,dr' },
     a.transparent
-      ? { text: 'Summing over shells out to radius R gives a flux proportional to R, which diverges for an infinite, eternal, static universe.', tex: 'F(R) = n\\,L\\,R \;\\longrightarrow\; \\infty' }
-      : { text: 'A line of sight travels a mean distance ℓ = 1/(nπR_s²) before ending on a stellar disc. Counting only unobstructed stars the sum saturates at the brightness of a stellar surface.', tex: 'F(R) = n L\\,\\ell\\left(1-e^{-R/\\ell}\\right) \;\\longrightarrow\; \\frac{L}{\\pi R_s^2}' },
+      ? { text: 'Summing over shells out to radius R gives a flux proportional to R, which diverges for an infinite, eternal, static universe.', tex: 'F(R) = n\\,L\\,R \\;\\longrightarrow\\; \\infty' }
+      : { text: 'A line of sight travels a mean distance ℓ = 1/(nπR_s²) before ending on a stellar disc. Counting only unobstructed stars the sum saturates at the brightness of a stellar surface.', tex: 'F(R) = n L\\,\\ell\\left(1-e^{-R/\\ell}\\right) \\;\\longrightarrow\\; \\frac{L}{\\pi R_s^2}' },
     ...(a.eternal ? [] : [{ text: 'If the stars have shone only for a time t₀, no light has arrived from beyond R_h = c t₀. Since R_h is vastly smaller than ℓ, only a tiny fraction of sight lines end on a star.', tex: 'F = n\\,L\\,c\\,t_0,\\qquad f_{cov} = \\frac{c\\,t_0}{\\ell} \\ll 1' }]),
     ...(a.static ? [] : [{ text: 'In an expanding universe each photon is redshifted and the arrival rate is reduced. For conserved comoving sources the bolometric flux is the static result weighted by the scale factor at emission.', tex: 'F = n_0 L\\,c\\int_0^{t_0}\\frac{a(t)}{a(t_0)}\\,dt = \\tfrac35\\,n_0 L\\,c\\,t_0\\quad\\text{for } a\\propto t^{2/3}' }]),
     { text: 'The observed darkness therefore rules out the conjunction of the four classical premises; it does not by itself say which one fails.', tex: '\\lnot\\,(\\text{infinite}\\land\\text{static}\\land\\text{eternal}\\land\\text{uniform})' },
@@ -1487,7 +1503,7 @@ const olbersParadox = {
     const rr = N.linspace(0, Rh, 2001), numSum = N.trapz(rr, rr.map(x => (a.transparent ? nL : nL * Math.exp(-x / ell))));
     const warnings = [];
     if (a.eternal && a.static) warnings.push(a.transparent ? 'The classical premises give an infinitely bright sky. This is the paradox: the observed darkness shows that at least one premise is false.' : 'With occultation the classical premises give a sky as bright as the surface of a star in every direction, about 180 000 times the flux of full sunlight for Sun-like stars. This is the paradox in the form stated by Olbers.');
-    if (!a.static && !a.transparent) warnings.push('Occultation and expansion are combined approximately: the redshift factor is applied to the occulted sum. The difference is negligible while the horizon is much smaller than the mean free path.');
+    if (!a.static && !a.transparent) warnings.push(a.eternal ? 'Occultation is not applied in the steady-state case: the result n L c t₀/4 counts every star, which is accurate while c t₀ is much smaller than the mean free path.' : 'Occultation and expansion are combined approximately: the redshift factor is applied to the occulted sum. The difference is negligible while the horizon is much smaller than the mean free path.');
     return {
       scalars: [
         scalar('j_L', 'Luminosity density', nL, 'W/m^3'),
@@ -1517,7 +1533,10 @@ const olbersParadox = {
     const r = this.solve(v, off);
     out.push(bench('Finite-age flux against n L c t₀', val(r, 'F_sky'), v.n_s * v.L_s * C.c * v.t_0, 'Shell sum truncated at the horizon', 1e-12));
     const e = this.solve(v, { ...off, static: false });
-    out.push(bench('Ratio of expanding to static brightness', val(e, 'F_sky') / val(r, 'F_sky'), 0.6, 'Matter-dominated expansion: ∫(t/t₀)^(2/3) dt/t₀ = 3/5', 1e-12));
+    const us = N.linspace(0, 1, 4001), xe = N.linspace(0, 12, 4001);
+    out.push(bench('Ratio of expanding to static brightness', val(e, 'F_sky') / val(r, 'F_sky'), N.trapz(us, us.map(u => 3 * u ** 4)), 'Matter-dominated expansion: ∫(t/t₀)^(2/3) dt/t₀ = 3/5, integrated numerically with t/t₀ = u³', 1e-6));
+    const ss = this.solve(v, { eternal: true, static: false, transparent: true });
+    out.push(bench('Steady-state brightness as a fraction of n L c t₀', val(ss, 'F_sky') / val(r, 'F_sky'), N.trapz(xe, xe.map(x => Math.exp(-4 * x))), 'Redshift and dilution (a/a₀)⁴ integrated over an unlimited past: ∫ e^(−4x) dx = 1/4', 1e-4));
     const o = this.solve(v, { eternal: true, static: true, transparent: false });
     out.push(bench('Olbers\' limit against the stellar-surface value', val(o, 'F_sky'), v.L_s / (Math.PI * v.R_s ** 2), 'L/(π R_s²)', 1e-12));
     const ell = 1 / (v.n_s * Math.PI * v.R_s ** 2), xs = N.linspace(0, 3 * ell, 4001);
@@ -1564,7 +1583,7 @@ const olbersParadox = {
     { name: 'Finite or hierarchical distribution of stars', text: 'A finite island of stars, or a fractal distribution whose mean density falls with scale, also gives a finite sum. Observations show approximate uniformity on large scales.' },
     { name: 'Finite stellar lifetimes', text: 'Stars do not contain enough energy to fill space with radiation at stellar-surface temperature; the available luminous energy is exhausted long before equilibrium is reached. This is closely related to the finite-age resolution.' },
   ],
-  limits: 'Identical stars at uniform density in Euclidean space; bolometric flux summed over the whole sky. The expanding case uses matter-dominated expansion with conserved comoving sources and a constant luminosity; evolution of the star-formation rate, the cosmological constant and spectral effects are not included. The numbers are order-of-magnitude estimates.',
+  limits: 'Identical stars at uniform density in Euclidean space; bolometric flux summed over the whole sky. The expanding case uses matter-dominated expansion with conserved comoving sources and a constant luminosity; evolution of the star-formation rate, the cosmological constant and spectral effects are not included. The numbers are order-of-magnitude estimates: with the default density of Sun-like stars the luminosity density is 1.5 × 10⁸ solar luminosities per cubic megaparsec and the finite-age flux n L c t₀ is about 2.6 × 10⁻⁷ W m⁻² over the whole sky, that is about 20 nW m⁻² sr⁻¹ (12 nW m⁻² sr⁻¹ with the redshift factor 3/5), the same order as the measured extragalactic background light.',
   numerics: { method: 'Closed-form shell integrals; trapezoidal check to the horizon' },
   extensions: ['Luminosity density evolving with redshift from the measured star-formation history', 'Spectral energy distribution of the background light', 'The cosmic microwave background as the redshifted glow of an opaque early universe', 'Gravitational analogue: the Seeliger paradox for Newtonian gravity'],
 };
@@ -1616,10 +1635,12 @@ const birthdayProblem = {
       a.exact_day
         ? eq('rec', 'No-match recurrence', 'Q_next', 'Q_k*(1 - k_i/d_y)', { kind: 'law', origin: 'Multiplication rule: the next person must avoid k occupied days', needs: ['uniform', 'independent'] })
         : eq('rec', 'No-near-match recurrence', 'Q_next', 'Q_k*(1 - (n_p*w_d + k_i)/d_y)', { kind: 'derived', origin: 'Naus (1968): circular spacings of at least w + 1 days', needs: ['uniform', 'independent'] }),
-      eq('exp', 'Expected number of matching pairs', 'E_pair', a.exact_day ? 'N_pair/d_y' : 'N_pair*(2*w_d + 1)/d_y', { kind: 'derived', origin: 'Linearity of expectation over pairs' }),
+      eq('exp', 'Expected number of matching pairs', 'E_pair', a.exact_day ? 'N_pair/d_y' : 'N_pair*min((2*w_d + 1)/d_y, 1)', { kind: 'derived', origin: 'Linearity of expectation over pairs' + (a.exact_day ? '' : '; a window that spans the whole year makes every pair a match') }),
     ] : [
-      eq('s2', 'Probability that two given people match', 's_2', '(1 + a_s^2/2)/d_y', { kind: 'derived', origin: 'Sum of squared day probabilities for a sinusoidal distribution' }),
-      eq('exp', 'Expected number of matching pairs', 'E_pair', 'N_pair*s_2', { kind: 'derived', origin: 'Linearity of expectation over pairs' }),
+      eq('s2', 'Probability that two given people share a day', 's_2', 'ifpos(d_y - 2.5, (1 + a_s^2/2)/d_y, (1 + a_s^2)/d_y)', { kind: 'derived', origin: 'Sum of squared day probabilities for a sinusoidal distribution: the squared cosine averages one half over three or more days and one over two days' }),
+      a.exact_day
+        ? eq('exp', 'Expected number of matching pairs', 'E_pair', 'N_pair*s_2', { kind: 'derived', origin: 'Linearity of expectation over pairs' })
+        : eq('exp', 'Expected number of matching pairs', 'E_pair', 'N_pair*ifpos(d_y - 2*w_d - 1, s_2 + (2*w_d + (a_s^2/2)*(sin((2*w_d + 1)*pi/d_y)/sin(pi/d_y) - 1))/d_y, 1)', { kind: 'derived', origin: 'Linearity of expectation over pairs; the chance that two people fall within w days is s₂ plus the sum over non-zero offsets of Σ pᵢ pᵢ₊ₒ = (1 + ½a² cos(2πo/d))/d, and is one when the window spans the whole year' }),
     ]),
     eq('apx', 'Exponential approximation', 'P_apx', '1 - exp(-E_pair)', { kind: 'derived', origin: 'Poisson approximation for the number of matching pairs' }),
   ],
@@ -1635,17 +1656,20 @@ const birthdayProblem = {
     const n = int(v.n_p, 1, 5000), d = int(v.d_y, 2, 100000), w = a.exact_day ? 0 : int(v.w_d, 0, 30), amp = a.uniform ? 0 : Math.min(v.a_s, 1);
     const nT = int(v.n_trials, 100, 1000000), rnd = N.rng(int(v.seed, 1, 2147483647)), warnings = [];
     const pairs = n * (n - 1) / 2, p = a.uniform ? null : seasonal(d, amp);
-    let exact, n50, exactOf, haveExact = true, s2 = 1 / d;
+    // pMatch: probability that two given people fall within w days of each other (w = 0: on the same day)
+    let exact, n50, exactOf, haveExact = true, s2 = 1 / d, pMatch = Math.min((2 * w + 1) / d, 1);
     if (a.uniform) { exactOf = m => birthdayExact(m, d, w); exact = exactOf(n); n50 = birthdayN50(d, w); }
     else {
       s2 = 0; for (let i = 0; i < d; i++) s2 += p[i] * p[i];
+      // a window that reaches every day of the circular year makes any two people a match
+      if (2 * w + 1 >= d) pMatch = 1; else { pMatch = 0; for (let o = -w; o <= w; o++) for (let i = 0; i < d; i++) pMatch += p[i] * p[((i + o) % d + d) % d]; }
       if (w === 0) {
         const J = Math.min(d, Math.max(n, Math.ceil(1.7 * Math.sqrt(d)) + 10)), q = distinctProbs(p, J);
         exactOf = m => (m > d ? 1 : m <= J ? 1 - q[m] : NaN); exact = exactOf(n);
         n50 = d + 1; for (let m = 2; m <= J; m++) if (1 - q[m] >= 0.5) { n50 = m; break; }
-      } else { haveExact = false; exactOf = m => -Math.expm1(-m * (m - 1) / 2 * (2 * w + 1) * s2); exact = NaN; n50 = NaN; warnings.push('No closed form is used for near matches with unequal birthday frequencies; the simulated frequency and the Poisson approximation are reported.'); }
+      } else { haveExact = false; exactOf = m => -Math.expm1(-m * (m - 1) / 2 * pMatch); exact = NaN; n50 = NaN; warnings.push('No closed form is used for near matches with unequal birthday frequencies; the simulated frequency and the Poisson approximation are reported.'); }
     }
-    const ePair = pairs * (2 * w + 1) * s2, apx = -Math.expm1(-ePair), apxSimple = -Math.expm1(-n * n / (2 * d) * (2 * w + 1));
+    const ePair = pairs * pMatch, apx = -Math.expm1(-ePair), apxSimple = -Math.expm1(-n * n / (2 * d) * (2 * w + 1));
     if (!a.independent) warnings.push('Dependence between birthdays is not modelled. Positive dependence, such as twins, raises the probability of a match above the value shown.');
     // simulation
     const perGroup = Math.min(n, 1.3 * Math.sqrt(d / (2 * w + 1)) + 2) * (1 + 2 * amp), nSim = Math.max(200, Math.min(nT, Math.floor(600000 / perGroup)));
@@ -1693,7 +1717,8 @@ const birthdayProblem = {
   },
   benchmarks(v, a) {
     const out = [];
-    out.push(bench('Twenty-three people, 365 days', birthdayExact(23, 365), 0.5073, 'Classical value 0.507297…', 1e-4));
+    out.push(bench('Twenty-three people, 365 days', birthdayExact(23, 365), 0.5072972343, 'Classical value 0.5072972343…', 1e-9));
+    out.push(bench('Smallest group for an even chance of birthdays within one day', birthdayN50(365, 1), 14, 'Naus (1968)', 1e-12));
     out.push(bench('Smallest group for an even chance, 365 days', birthdayN50(365), 23, 'von Mises (1939); Feller (1968)', 1e-12));
     // brute-force enumeration of a small case to test the near-match formula
     let ok = 0; const dd = 11, tot = dd ** 3;
@@ -1835,7 +1860,7 @@ const bayesDiagnostic = {
   benchmarks(v) {
     const on = { screening: true, single_test: true, fixed_rates: true }, out = [];
     const e = this.solve({ ...v, prev: 0.01, sens: 0.8, spec: 0.904 }, on);
-    out.push(bench('Mammography example: probability of cancer given a positive result', val(e, 'PPV'), 0.008 / (0.008 + 0.09504), 'Eddy (1982): about 7.8 %', 1e-12));
+    out.push(bench('Mammography example: probability of cancer given a positive result', val(e, 'PPV'), 0.008 / (0.008 + 0.09504), 'Gigerenzer & Hoffrage (1995), after Eddy (1982): prevalence 1 %, sensitivity 80 %, false-positive rate 9.6 %, giving about 7.8 %', 1e-12));
     const c = this.solve({ ...v, prev: 0.001, sens: 1, spec: 0.95 }, on);
     out.push(bench('Harvard Medical School problem', val(c, 'PPV'), 0.001 / (0.001 + 0.04995), 'Casscells et al. (1978): about 2 %', 1e-12));
     const d = this.solve({ ...v, prev: 0.01, sens: 0.9, spec: 0.95, N_pop: 10000 }, on);
@@ -1921,13 +1946,17 @@ const stPetersburg = {
       : eq('term', 'Contribution of the k-th outcome', 'a_k', 'p_h*(1 - p_h)^(k_i - 1)*2^k_i', { kind: 'law', origin: 'Geometric distribution of the first head' }),
     a.fair_coin
       ? eq('part', 'Expectation over the first K outcomes', 'E_K', 'K_t', { kind: 'derived', origin: 'Sum of K equal terms: unbounded as K grows', needs: ['fair_coin'] })
-      : eq('part', 'Expectation over the first K outcomes', 'E_K', '2*p_h*(1 - (2*(1 - p_h))^K_t)/(2*p_h - 1)', { kind: 'derived', origin: 'Finite geometric sum with ratio 2(1 − p)' }),
+      : eq('part', 'Expectation over the first K outcomes', 'E_K', '2*p_h*(1 - (2*(1 - p_h))^K_t)/(2*p_h - 1)', { kind: 'derived', origin: 'Finite geometric sum with ratio 2(1 − p)', note: 'Indeterminate at a probability of exactly one half, where the sum equals K.' }),
     ...(a.unlimited_bank ? [] : [
       eq('lc', 'Tosses covered in full', 'L_c', 'floor(ln(B_cap)/ln(2))', { kind: 'definition' }),
-      ...(a.fair_coin ? [eq('cap', 'Expectation with a capped bank', 'E_cap', 'L_c + B_cap/2^L_c', { kind: 'derived', origin: 'L full terms plus the capped tail', needs: ['fair_coin'] })] : []),
+      a.fair_coin
+        ? eq('cap', 'Expectation with a capped bank', 'E_cap', 'L_c + B_cap/2^L_c', { kind: 'derived', origin: 'L full terms plus the capped tail', needs: ['fair_coin'] })
+        : eq('cap', 'Expectation with a capped bank', 'E_cap', '2*p_h*(1 - (2*(1 - p_h))^L_c)/(2*p_h - 1) + B_cap*(1 - p_h)^L_c', { kind: 'derived', origin: 'Finite geometric sum over L tosses plus the capped tail of probability (1 − p)ᴸ', note: 'Indeterminate at a probability of exactly one half, where the first term equals L.' }),
     ]),
     ...(a.linear_utility ? [] : [
-      eq('ulog', 'Expected logarithm of the prize', 'U_ln', a.fair_coin ? '2*ln(2)' : 'ln(2)/p_h', { kind: 'derived', origin: 'Mean of a geometric distribution times ln 2' }),
+      a.unlimited_bank
+        ? eq('ulog', 'Expected logarithm of the prize', 'U_ln', a.fair_coin ? '2*ln(2)' : 'ln(2)/p_h', { kind: 'derived', origin: 'Mean of a geometric distribution times ln 2' })
+        : eq('ulog', 'Expected logarithm of the capped prize', 'U_ln', a.fair_coin ? 'ln(2)*(2 - (L_c + 2)/2^L_c) + ln(B_cap)/2^L_c' : 'ln(2)*(1 - (L_c + 1)*(1 - p_h)^L_c + L_c*(1 - p_h)^(L_c + 1))/p_h + ln(B_cap)*(1 - p_h)^L_c', { kind: 'derived', origin: 'Truncated mean of a geometric distribution times ln 2, plus the capped tail' }),
       eq('ce', 'Certainty equivalent', 'C_e', 'exp(U_ln)', { kind: 'closure', origin: 'Bernoulli (1738): logarithmic utility' }),
     ]),
   ],
@@ -1936,7 +1965,7 @@ const stPetersburg = {
     { text: 'If the bank can pay at most B, prizes beyond L = ⌊log₂ B⌋ tosses are replaced by B. The expectation is then finite and grows only logarithmically with the bank.', tex: 'E_B = \\sum_{k=1}^{L} 1 + B\\sum_{k>L}2^{-k} = L + \\frac{B}{2^{L}}' },
     { text: 'With logarithmic utility of the prize the expected utility converges. Its exponential, the certainty equivalent, is four units.', tex: 'E[\\ln X] = \\sum_{k=1}^{\\infty}\\frac{k\\ln 2}{2^{k}} = 2\\ln 2,\\qquad C = e^{2\\ln 2} = 4' },
     { text: 'For a player with wealth w the fair fee c leaves expected log-wealth unchanged. It rises slowly with wealth.', tex: '\\sum_{k=1}^{\\infty}2^{-k}\\ln\\left(w - c + 2^{k}\\right) = \\ln w' },
-    { text: 'The sample mean of n plays does not converge to a constant; it is typically of order log₂ n, so even very long experience suggests a modest value.', tex: '\\frac{S_n}{n\\log_2 n} \\xrightarrow{\;P\;} 1' },
+    { text: 'The sample mean of n plays does not converge to a constant; it is typically of order log₂ n, so even very long experience suggests a modest value.', tex: '\\frac{S_n}{n\\log_2 n} \\xrightarrow{\\;P\\;} 1' },
     ...(a.fair_coin ? [] : [{ text: 'For a coin with probability p of heads the series is geometric with ratio 2(1 − p); it converges exactly when p exceeds one half.', tex: 'E = \\sum_{k\\ge1}p\\,(1-p)^{k-1}2^{k} = \\frac{2p}{2p-1}\\quad (p > \\tfrac12)' }]),
   ],
   solve(v, a) {
@@ -2095,9 +2124,9 @@ const twoEnvelopes = {
       { text: 'At the smallest possible amount switching is certain to gain, and at the largest it is certain to lose. Weighted by the probabilities of observing each amount, the gains cancel exactly.', tex: '\\sum_x P(x)\\,\\big(E[\\text{other}\\mid x]-x\\big) = 0' },
     ] : [
       { text: 'The switching argument takes this probability to be one half for every x, which gives a 25 % expected gain whatever is observed.', tex: 'E[\\text{other}\\mid x] = \\tfrac12(2x) + \\tfrac12\\left(\\tfrac{x}{2}\\right) = \\tfrac54 x' },
-      { text: 'Equal probability at every x requires w(x) = w(x/2) for all x: a prior uniform over infinitely many scales, whose total probability cannot be one.', tex: 'w(x) = w(x/2)\\ \\ \\forall x \;\\Rightarrow\; \\sum_x w(x) \\in \\{0, \\infty\\}' },
+      { text: 'Equal probability at every x requires w(x) = w(x/2) for all x: a prior uniform over infinitely many scales, whose total probability cannot be one.', tex: 'w(x) = w(x/2)\\ \\ \\forall x \\;\\Rightarrow\\; \\sum_x w(x) \\in \\{0, \\infty\\}' },
     ]),
-    { text: 'A player who sees the amount can do better than chance by switching only when the amount is small, because small amounts are more likely to be the smaller of the pair.', tex: 'G_{thr} = \\sum_{x < x_{thr}} P(x)\\,\\big(E[\\text{other}\\mid x]-x\\big) > 0' },
+    { text: 'A player who sees the amount can do better than never switching by switching only when the amount is small: the smallest possible amount is certainly the smaller of the pair and the largest certainly the larger, so a threshold between them keeps the sure gain and avoids the sure loss.', tex: 'G_{thr} = \\sum_{x < x_{thr}} P(x)\\,\\big(E[\\text{other}\\mid x]-x\\big) > 0\\quad (x_{min} < x_{thr} \\le x_{max})' },
   ],
   solve(v, a) {
     const r = v.r_g, K = int(v.K_max, 2, 45), { w, levels } = envelopePrior(r, K);
@@ -2165,7 +2194,7 @@ const twoEnvelopes = {
       ${S.text(320, 60, 'One envelope holds twice as much as the other')}
       ${S.text(320, 90, a.proper_prior ? `P(other is larger | x) = r/(1 + r) = ${lab(v.r_g / (1 + v.r_g))}` : 'Naive: P(other is larger | x) = 1/2 for every x', 'd-text d-small')}
       ${S.text(320, 305, a.proper_prior ? 'Conditional gains average to zero over all amounts' : 'Claimed gain of 25 % at every amount: impossible', 'd-text d-small')}
-      ${S.text(320, 335, 'Small amounts are more likely to be the smaller of the pair', 'd-text d-small')}
+      ${S.text(320, 335, 'The smallest possible amount is certainly the smaller of the pair', 'd-text d-small')}
     `);
   },
   logicPreset: {
@@ -2214,14 +2243,14 @@ const simpsonsParadox = {
   laws: ['kolmogorov'],
   refs: ['Simpson, E. H. (1951). The interpretation of interaction in contingency tables. Journal of the Royal Statistical Society B 13, 238–241.', 'Blyth, C. R. (1972). On Simpson\'s paradox and the sure-thing principle. Journal of the American Statistical Association 67, 364–366.', 'Bickel, P. J., Hammel, E. A. & O\'Connell, J. W. (1975). Sex bias in graduate admissions: data from Berkeley. Science 187, 398–404.', 'Charig, C. R., Webb, D. R., Payne, S. R. & Wickham, J. E. A. (1986). Comparison of treatment of renal calculi by open surgery, percutaneous nephrolithotomy, and extracorporeal shockwave lithotripsy. British Medical Journal 292, 879–882.', 'Julious, S. A. & Mullee, M. A. (1994). Confounding and Simpson\'s paradox. British Medical Journal 309, 1480–1481.', 'Pearl, J. (2014). Comment: understanding Simpson\'s paradox. The American Statistician 68, 8–13.'],
   inputs: [
-    inp('s_A1', 'Group 1, treatment A: successes', '1', 81, { min: 0, max: 100000, aliases: ['a successes group 1'], src: 'Charig et al. (1986), stones under 2 cm, open surgery' }),
-    inp('n_A1', 'Group 1, treatment A: patients', '1', 87, { min: 1, max: 100000, aliases: ['a patients group 1'], src: 'Charig et al. (1986)' }),
-    inp('s_B1', 'Group 1, treatment B: successes', '1', 234, { min: 0, max: 100000, aliases: ['b successes group 1'], src: 'Charig et al. (1986), stones under 2 cm, percutaneous nephrolithotomy' }),
-    inp('n_B1', 'Group 1, treatment B: patients', '1', 270, { min: 1, max: 100000, aliases: ['b patients group 1'], src: 'Charig et al. (1986)' }),
-    inp('s_A2', 'Group 2, treatment A: successes', '1', 192, { min: 0, max: 100000, aliases: ['a successes group 2'], src: 'Charig et al. (1986), stones of 2 cm or more, open surgery' }),
-    inp('n_A2', 'Group 2, treatment A: patients', '1', 263, { min: 1, max: 100000, aliases: ['a patients group 2'], src: 'Charig et al. (1986)' }),
-    inp('s_B2', 'Group 2, treatment B: successes', '1', 55, { min: 0, max: 100000, aliases: ['b successes group 2'], src: 'Charig et al. (1986), stones of 2 cm or more, percutaneous nephrolithotomy' }),
-    inp('n_B2', 'Group 2, treatment B: patients', '1', 80, { min: 1, max: 100000, aliases: ['b patients group 2'], src: 'Charig et al. (1986)' }),
+    inp('s_A1', 'Group 1, treatment A: successes', '1', 81, { integer: true, min: 0, max: 100000, aliases: ['a successes group 1'], src: 'Charig et al. (1986), stones under 2 cm, open surgery' }),
+    inp('n_A1', 'Group 1, treatment A: patients', '1', 87, { integer: true, min: 1, max: 100000, aliases: ['a patients group 1'], src: 'Charig et al. (1986)' }),
+    inp('s_B1', 'Group 1, treatment B: successes', '1', 234, { integer: true, min: 0, max: 100000, aliases: ['b successes group 1'], src: 'Charig et al. (1986), stones under 2 cm, percutaneous nephrolithotomy' }),
+    inp('n_B1', 'Group 1, treatment B: patients', '1', 270, { integer: true, min: 1, max: 100000, aliases: ['b patients group 1'], src: 'Charig et al. (1986)' }),
+    inp('s_A2', 'Group 2, treatment A: successes', '1', 192, { integer: true, min: 0, max: 100000, aliases: ['a successes group 2'], src: 'Charig et al. (1986), stones of 2 cm or more, open surgery' }),
+    inp('n_A2', 'Group 2, treatment A: patients', '1', 263, { integer: true, min: 1, max: 100000, aliases: ['a patients group 2'], src: 'Charig et al. (1986)' }),
+    inp('s_B2', 'Group 2, treatment B: successes', '1', 55, { integer: true, min: 0, max: 100000, aliases: ['b successes group 2'], src: 'Charig et al. (1986), stones of 2 cm or more, percutaneous nephrolithotomy' }),
+    inp('n_B2', 'Group 2, treatment B: patients', '1', 80, { integer: true, min: 1, max: 100000, aliases: ['b patients group 2'], src: 'Charig et al. (1986)' }),
   ],
   assumptions: [
     asm('observed_alloc', 'Patients were allocated to treatments as observed, in different proportions in the two groups.', { why: 'Observational data', alt: 'Allocation is balanced, as in a randomised trial: both treatments receive the same mix of groups. The pooled rates are then weighted alike and no reversal can occur.', affects: ['p_A', 'p_B'] }),
@@ -2229,10 +2258,10 @@ const simpsonsParadox = {
   ],
   symbols: { p_A1: ['Success rate of A in group 1', '1'], p_A2: ['Success rate of A in group 2', '1'], p_B1: ['Success rate of B in group 1', '1'], p_B2: ['Success rate of B in group 2', '1'], p_A: ['Pooled success rate of A', '1'], p_B: ['Pooled success rate of B', '1'], w_A: ['Share of A patients who are in group 1', '1'], w_B: ['Share of B patients who are in group 1', '1'], w_1: ['Share of all patients who are in group 1', '1'], d_adj: ['Difference in success rate, A minus B, standardised to the whole population', '1'], d_agg: ['Difference in pooled success rate, A minus B', '1'] },
   equations: a => [
-    eq('ra1', 'Success rate of A in group 1', 'p_A1', 's_A1/n_A1', { kind: 'definition' }),
-    eq('ra2', 'Success rate of A in group 2', 'p_A2', 's_A2/n_A2', { kind: 'definition' }),
-    eq('rb1', 'Success rate of B in group 1', 'p_B1', 's_B1/n_B1', { kind: 'definition' }),
-    eq('rb2', 'Success rate of B in group 2', 'p_B2', 's_B2/n_B2', { kind: 'definition' }),
+    eq('ra1', 'Success rate of A in group 1', 'p_A1', 'min(s_A1, n_A1)/n_A1', { kind: 'definition', note: 'Successes cannot exceed patients; a larger entry is limited to the number of patients.' }),
+    eq('ra2', 'Success rate of A in group 2', 'p_A2', 'min(s_A2, n_A2)/n_A2', { kind: 'definition', note: 'Successes cannot exceed patients; a larger entry is limited to the number of patients.' }),
+    eq('rb1', 'Success rate of B in group 1', 'p_B1', 'min(s_B1, n_B1)/n_B1', { kind: 'definition', note: 'Successes cannot exceed patients; a larger entry is limited to the number of patients.' }),
+    eq('rb2', 'Success rate of B in group 2', 'p_B2', 'min(s_B2, n_B2)/n_B2', { kind: 'definition', note: 'Successes cannot exceed patients; a larger entry is limited to the number of patients.' }),
     eq('w1', 'Share of all patients in group 1', 'w_1', '(n_A1 + n_B1)/(n_A1 + n_A2 + n_B1 + n_B2)', { kind: 'definition' }),
     ...(a.observed_alloc ? [
       eq('wa', 'Share of A patients in group 1', 'w_A', 'n_A1/(n_A1 + n_A2)', { kind: 'definition' }),
@@ -2306,6 +2335,9 @@ const simpsonsParadox = {
     out.push(bench('Kidney-stone data: reversal present', val(r, 'rev'), 1, 'A better for small and for large stones, B better pooled', 1e-12));
     const b = this.solve({ ...v, ...d }, { ...on, observed_alloc: false });
     out.push(bench('Balanced allocation: pooled difference equals standardised difference', val(b, 'd_agg'), val(b, 'd_adj'), 'Common weights', 1e-12));
+    out.push(bench('Kidney-stone data: crude odds ratio', val(r, 'OR_c'), (273 * 61) / (77 * 289), 'Pooled table: 273/77 against 289/61, below one', 1e-12));
+    out.push(bench('Kidney-stone data: Mantel–Haenszel odds ratio', val(r, 'OR_MH'), (2916 / 357 + 4800 / 343) / (1404 / 357 + 3905 / 343), 'Stratum sums 81·36/357 + 192·25/343 over 6·234/357 + 71·55/343, above one', 1e-12));
+    out.push(bench('Kidney-stone data: standardised difference', val(r, 'd_adj'), 0.51 * (81 / 87 - 234 / 270) + 0.49 * (192 / 263 - 55 / 80), 'Group 1 holds 357 of the 700 patients', 1e-12));
     return out;
   },
   validation: [],
@@ -2394,7 +2426,7 @@ const hilbertHotel = {
     a.infinite
       ? { text: 'Each map puts the set of rooms in one-to-one correspondence with a proper subset of itself. This is impossible for a finite set and characteristic of an infinite one.', tex: '|\\mathbb{N}| = |\\mathbb{N}\\setminus\\{1,\\ldots,m\\}| = |2\\mathbb{N}| = |\\mathbb{N}\\times\\mathbb{N}|' }
       : { text: 'In a hotel with N rooms the shift sends the occupants of the last m rooms beyond room N. A one-to-one map of a finite set into itself is onto, so no room can be freed.', tex: 'n + m > N \\ \\text{ for } n > N - m' },
-    ...(a.countable ? [] : [{ text: 'Suppose the guests are all infinite sequences of 0s and 1s and that sequence s⁽ᵏ⁾ has been given room k. The sequence whose k-th digit differs from the k-th digit of s⁽ᵏ⁾ is a guest with no room.', tex: 'd_k = 1 - s^{(k)}_k \;\\Rightarrow\; d \\ne s^{(k)}\\ \\text{for every } k' }]),
+    ...(a.countable ? [] : [{ text: 'Suppose the guests are all infinite sequences of 0s and 1s and that sequence s⁽ᵏ⁾ has been given room k. The sequence whose k-th digit differs from the k-th digit of s⁽ᵏ⁾ is a guest with no room.', tex: 'd_k = 1 - s^{(k)}_k \\;\\Rightarrow\\; d \\ne s^{(k)}\\ \\text{for every } k' }]),
   ],
   solve(v, a) {
     const Nw = int(v.N_w, 10, 50000), m = int(v.m_new, 1, 1e6), n0 = int(v.n_room, 1, 1e9), b = int(v.b_bus, 1, 1e6), s = int(v.s_seat, 1, 1e6);
@@ -2449,14 +2481,16 @@ const hilbertHotel = {
       warnings: a.infinite ? [] : ['In a finite hotel the same room maps fail: the shift needs rooms beyond the last one. The possibility of freeing a room in a full hotel is what distinguishes an infinite set.'],
     };
   },
-  benchmarks() {
+  benchmarks(v) {
     const out = []; let bad = 0;
     for (let z = 1; z <= 5000; z++) { const [b, s] = cantorUnpair(z); if (b < 1 || s < 1 || cantorPair(b, s) !== z) bad++; }
     out.push(bench('Pairing is a bijection on rooms 1 to 5000', bad, 0, 'Every room has exactly one (coach, seat) pre-image', 1e-12));
     out.push(bench('Pairing of coach 1, seat 1', cantorPair(1, 1), 1, 'Start of the enumeration', 1e-12));
     out.push(bench('Pairing of coach 3, seat 5', cantorPair(3, 5), 26, '(6·7)/2 + 5', 1e-12));
-    let even = 0; for (let n = 1; n <= 100; n++) if (2 * n <= 100) even++;
-    out.push(bench('Images of the doubling map among rooms 1 to 100', even, 50, 'Natural density one half', 1e-12));
+    const r = this.solve({ ...v, N_w: 1000, b_bus: 3, s_seat: 5 }, { infinite: true, countable: true });
+    out.push(bench('Rooms filled by the complete diagonals within a window of 1000', val(r, 'T_cov'), 990, 'Triangular number 44·45/2; the next, 1035, exceeds the window', 1e-12));
+    out.push(bench('Fraction of rooms 1 to 2000 occupied after doubling', val(r, 'dens'), 0.5, 'Natural density of the even numbers', 1e-12));
+    out.push(bench('Collisions among the images of the window', val(r, 'n_coll'), 0, 'All three maps are one-to-one', 1e-12));
     return out;
   },
   validation: [],
@@ -2504,7 +2538,7 @@ const hilbertHotel = {
 };
 
 // ================================================================== 17. Drake equation and the Fermi question
-const GAL_AGE = 1e10 * YEAR, GAL_DIAM = 1e5 * LY, GAL_VOL = Math.PI * (5e4 * LY) ** 2 * (1e3 * LY);
+const GAL_AGE = 1e10 * YEAR, GAL_DIAM = 1e5 * LY, GAL_THICK = 1e3 * LY, GAL_VOL = Math.PI * (5e4 * LY) ** 2 * GAL_THICK;
 const DRAKE_F = [['R_star', 'Star formation rate', false, false], ['f_p', 'Stars with planets', true, false], ['n_e', 'Habitable planets per system', false, false], ['f_l', 'Life arises', true, true], ['f_i', 'Intelligence evolves', true, true], ['f_c', 'Detectable technology', true, true], ['L_civ', 'Lifetime', false, true]];
 const drakeFermi = {
   id: 'drake-fermi',
@@ -2573,7 +2607,8 @@ const drakeFermi = {
     const sorted = Float64Array.from(logs).sort(), qtl = q => sorted[Math.min(nS - 1, Math.floor(q * (nS - 1)))];
     const muMC = sum / nS, muAn = N.sum(lo.map((l, i) => (l + hi[i]) / 2)), sdAn = Math.sqrt(N.sum(lo.map((l, i) => (hi[i] - l) ** 2 / 12)));
     const pAlone = alone / nS, pNorm = sdAn > 0 ? Phi(-muAn / sdAn) : (muAn < 0 ? 1 : 0);
-    const med = Math.pow(10, qtl(0.5)), dnn = med >= 1 ? Math.cbrt(GAL_VOL / med) : NaN;
+    // mean spacing: three-dimensional while it is smaller than the thickness of the disc, otherwise two-dimensional within the disc
+    const med = Math.pow(10, qtl(0.5)), d3 = Math.cbrt(GAL_VOL / med), dnn = med >= 1 ? (d3 <= GAL_THICK ? d3 : Math.sqrt(GAL_VOL / GAL_THICK / med)) : NaN;
     const span = sorted[nS - 1] - sorted[0], hist = span > 1e-9 ? N.histogram(sorted, 40) : { centres: [sorted[0]], counts: [nS] };
     const cdfX = N.linspace(sorted[0], sorted[nS - 1] + 1e-9, 80), cdfY = cdfX.map(x => { let l = 0, h = nS; while (l < h) { const mid = (l + h) >> 1; if (sorted[mid] <= x) l = mid + 1; else h = mid; } return l / nS; });
     const warnings = ['Four of the seven factors are unknown; the results are conditional on the stated values and ranges and are not measurements.'];
@@ -2592,6 +2627,8 @@ const drakeFermi = {
         scalar('d_nn', 'Typical distance to the nearest civilisation at the median', dnn, 'm', { show: 'ly', text: Number.isFinite(dnn) ? undefined : 'None expected within the Galaxy', status: 'hypothetical' }),
         scalar('t_col', 'Time to cross the Galaxy at the stated expansion speed', tCol, 's', { show: 'yr', status: 'hypothetical' }),
         scalar('N_ever', 'Point estimate of civilisations that arose early enough to have crossed the Galaxy', NeverPoint, '1', { status: 'hypothetical' }),
+        scalar('T_gal', 'Age of the Galactic disc adopted', GAL_AGE, 's', { show: 'yr' }),
+        scalar('D_gal', 'Diameter of the Galactic disc adopted', GAL_DIAM, 'm', { show: 'ly' }),
       ],
       series: [
         line('histogram', 'Distribution of the number of civilisations', 'log₁₀ N', '–', hist.centres, [{ label: 'Samples', data: hist.counts }], 'Count', '–', { kind: 'bar', status: 'hypothetical', note: 'Values to the left of zero correspond to fewer than one civilisation.' }),
@@ -2614,6 +2651,9 @@ const drakeFermi = {
     const g = N.rng(123); let s = 0; for (let i = 0; i < 100000; i++) s += g();
     out.push(bench('Mean of the uniform generator', s / 1e5, 0.5, 'Tolerance of four standard errors', 4 * Math.sqrt(1 / 12 / 1e5) / 0.5));
     out.push(bench('Galactic crossing time at one per cent of the speed of light', val(this.solve({ ...v, beta_x: 0.01 }, a), 't_col') / YEAR, 1e7, '100 000 light-years at 0.01 c', 1e-6));
+    const u = this.solve({ ...v, R_star: 1 / YEAR, f_p: 1, n_e: 1, f_l: 0.01, f_i: 0.01, f_c: 0.01, L_civ: 1e6 * YEAR, u_hyp: 1, u_ast: 0 }, { uncertain: true, steady: true, no_colonise: true });
+    out.push(bench('Spread of log₁₀ N for four factors each uncertain by one decade either way', val(u, 'sd_log'), Math.sqrt(4 / 3), 'Variance of a uniform variable of width 2 is 1/3; four add', 1e-12));
+    out.push(bench('Probability of N < 1 for a distribution symmetric about N = 1', val(u, 'P_alone'), 0.5, 'Symmetry of the sum of uniform variables; tolerance of four standard errors', 4 / Math.sqrt(int(v.n_samples, 1000, 1000000))));
     return out;
   },
   validation: [],
@@ -2720,10 +2760,10 @@ const soritesHeap = {
       ? { text: 'With two truth values, H(N) true and H(1) false, the truth value must change somewhere. At that point the conditional has a true antecedent and a false consequent: exactly one inductive premise is false.', tex: '\\exists\\,n^*:\\ H(n^*)\\land\\lnot H(n^*-1)' }
       : { text: 'Let the degree of heapness rise smoothly with the number of grains. Each conditional is then true to a degree just short of one, the shortfall being the drop in heapness across the step.', tex: 'h(n) = \\frac{1}{1+e^{-(n-n_{mid})/w}},\\qquad I_n = \\min\\big(1,\\,1-h(n)+h(n-1)\\big)' },
     a.lukasiewicz
-      ? { text: 'Modus ponens guarantees its conclusion only to the degree of the conjunction of its premises. With Łukasiewicz conjunction the shortfalls add, and the bound telescopes to the degree of heapness itself.', tex: 'v_{n-1} = \\max\\big(0,\\,v_n + I_n - 1\\big) \;\\Rightarrow\; v_1 = h(N) - \\sum_{n=2}^{N}\\big(1-I_n\\big) = h(1)' }
+      ? { text: 'Modus ponens guarantees its conclusion only to the degree of the conjunction of its premises. With Łukasiewicz conjunction the shortfalls add, and the bound telescopes to the degree of heapness itself.', tex: 'v_{n-1} = \\max\\big(0,\\,v_n + I_n - 1\\big) \\;\\Rightarrow\\; v_1 = h(N) -\\sum_{n=2}^{N}\\big(1-I_n\\big) = h(1)' }
       : { text: 'With product conjunction the degrees multiply along the chain, and many factors slightly below one give a product near zero.', tex: 'v_1 = h(N)\\prod_{n=2}^{N} I_n' },
     a.tolerance
-      ? { text: 'If every conditional is taken to be fully true, nothing is lost along the chain and the conclusion inherits the full truth of the first premise, contradicting the evident falsity of H(1).', tex: 'I_n = 1\\ \\forall n \;\\Rightarrow\; v_1 = h(N) \\approx 1 \\ne h(1) \\approx 0' }
+      ? { text: 'If every conditional is taken to be fully true, nothing is lost along the chain and the conclusion inherits the full truth of the first premise, contradicting the evident falsity of H(1).', tex: 'I_n = 1\\ \\forall n \\;\\Rightarrow\\; v_1 = h(N) \\approx 1 \\ne h(1) \\approx 0' }
       : { text: 'Each step is nearly valid, yet the conclusion is nearly false: validity in the sense of preserving full truth does not extend to preserving approximate truth over long chains.', tex: '\\min_n I_n \\approx 1 - \\frac{1}{4w}\\quad\\text{but}\\quad v_1 \\approx 0' },
   ],
   solve(v, a) {

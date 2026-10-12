@@ -31,7 +31,7 @@ export const BODIES = {
   mercury: { name: 'Mercury', GM: 2.2032e13, mass: 3.3011e23, radius: 2.4397e6, a: 5.7909e10, ecc: 0.2056, period: 7.6005e6, g: 3.70, src: IAU },
   venus: { name: 'Venus', GM: 3.24859e14, mass: 4.8675e24, radius: 6.0518e6, a: 1.08209e11, ecc: 0.0068, period: 1.94142e7, g: 8.87, rhoAtm: 65, src: IAU },
   earth: { name: 'Earth', GM: 3.986004418e14, mass: 5.9722e24, radius: 6.371e6, a: 1.495978707e11, ecc: 0.0167, period: 3.15581e7, g: 9.80665, rhoAtm: 1.225, scaleHeight: 8500, J2: 1.08263e-3, src: IAU },
-  moon: { name: 'Moon', GM: 4.9048695e12, mass: 7.342e22, radius: 1.7374e6, a: 3.844e8, ecc: 0.0549, period: 2.3606e6, g: 1.62, src: IAU },
+  moon: { name: 'Moon', GM: 4.9028e12, mass: 7.342e22, radius: 1.7374e6, a: 3.844e8, ecc: 0.0549, period: 2.3606e6, g: 1.62, src: IAU },
   mars: { name: 'Mars', GM: 4.282837e13, mass: 6.4171e23, radius: 3.3895e6, a: 2.27939e11, ecc: 0.0934, period: 5.93543e7, g: 3.71, rhoAtm: 0.020, scaleHeight: 11100, src: IAU },
   jupiter: { name: 'Jupiter', GM: 1.26686534e17, mass: 1.8982e27, radius: 6.9911e7, a: 7.7857e11, ecc: 0.0489, period: 3.74336e8, g: 24.79, src: IAU },
   saturn: { name: 'Saturn', GM: 3.7931187e16, mass: 5.6834e26, radius: 5.8232e7, a: 1.43353e12, ecc: 0.0565, period: 9.29292e8, g: 10.44, src: IAU },

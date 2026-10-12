@@ -11,7 +11,7 @@ export const fn = (n, ...args) => ({ t: 'fn', n, args });
 
 const FN1 = {
   sqrt: Math.sqrt, exp: Math.exp, ln: Math.log, log: Math.log, log10: Math.log10, sin: Math.sin, cos: Math.cos, tan: Math.tan,
-  asin: Math.asin, acos: Math.acos, atan: Math.atan, sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh, abs: Math.abs,
+  asin: Math.asin, acos: Math.acos, atan: Math.atan, sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh, asinh: Math.asinh, acosh: Math.acosh, atanh: Math.atanh, abs: Math.abs,
   sign: Math.sign, floor: Math.floor, erf, heaviside: x => (x >= 0 ? 1 : 0),
 };
 const FN2 = { min: Math.min, max: Math.max, atan2: Math.atan2, pow: Math.pow };
@@ -128,6 +128,7 @@ export function evaluate(e, env = {}) {
     case 'fn': {
       if (FN1[e.n]) return FN1[e.n](evaluate(e.args[0], env));
       if (FN2[e.n]) return FN2[e.n](evaluate(e.args[0], env), evaluate(e.args[1], env));
+      if (e.n === 'ifpos') return evaluate(e.args[0], env) > 0 ? evaluate(e.args[1], env) : evaluate(e.args[2], env);
       throw new Error(`"${e.n}" is a differential operator and has no pointwise value`);
     }
   }
@@ -205,6 +206,9 @@ export function diff(e, x) {
         case 'sinh': return chain(fn('cosh', u));
         case 'cosh': return chain(fn('sinh', u));
         case 'tanh': return chain(op('-', num(1), op('^', fn('tanh', u), num(2))));
+        case 'asinh': return chain(op('/', num(1), fn('sqrt', op('+', op('^', u, num(2)), num(1)))));
+        case 'acosh': return chain(op('/', num(1), fn('sqrt', op('-', op('^', u, num(2)), num(1)))));
+        case 'atanh': return chain(op('/', num(1), op('-', num(1), op('^', u, num(2)))));
         case 'abs': return chain(fn('sign', u));
         case 'erf': return chain(op('*', num(2 / Math.sqrt(Math.PI)), fn('exp', neg(op('^', u, num(2))))));
         case 'pow': return diff(op('^', e.args[0], e.args[1]), x);
@@ -262,6 +266,11 @@ export function dims(e, table) {
           if (isZero(e.args[1])) return a[0];
           if (!dimEq(a[0], a[1])) throw new DimError(`Arguments of ${e.n} differ in dimension`);
           return a[0];
+        case 'ifpos':
+          if (isZero(e.args[1])) return a[2];
+          if (isZero(e.args[2])) return a[1];
+          if (!dimEq(a[1], a[2])) throw new DimError('The two branches of ifpos differ in dimension');
+          return a[1];
         case 'atan2':
           if (!dimEq(a[0], a[1])) throw new DimError('Arguments of atan2 differ in dimension');
           return D0;
@@ -353,6 +362,9 @@ export function bound(e, box) {
             return r;
           }
           case 'sinh': return mono(Math.sinh)(a);
+          case 'asinh': return mono(Math.asinh)(a);
+          case 'acosh': if (a[0] < 1) issues.push({ kind: 'complex-value', at: toText(u.args[0]), node: u, text: `Argument of acosh, ${toText(u.args[0])}, can fall below 1` }); return I(0, Math.acosh(Math.max(a[1], 1)));
+          case 'atanh': if (a[0] <= -1 || a[1] >= 1) { issues.push({ kind: 'pole', at: toText(u.args[0]), node: u, text: `Argument of atanh, ${toText(u.args[0])}, can reach ±1` }); return I(-Infinity, Infinity); } return mono(Math.atanh)(a);
           case 'tanh': return mono(Math.tanh)(a);
           case 'atan': return mono(Math.atan)(a);
           case 'erf': return mono(erf)(a);
@@ -379,6 +391,7 @@ export function bound(e, box) {
           case 'min': { const b = go(u.args[1]); return I(Math.min(a[0], b[0]), Math.min(a[1], b[1])); }
           case 'max': { const b = go(u.args[1]); return I(Math.max(a[0], b[0]), Math.max(a[1], b[1])); }
           case 'atan2': go(u.args[1]); return I(-Math.PI, Math.PI);
+          case 'ifpos': { const p1 = go(u.args[1]), p2 = go(u.args[2]); return I(Math.min(p1[0], p2[0]), Math.max(p1[1], p2[1])); }
           case 'pow': return go(op('^', u.args[0], u.args[1]));
           default: return I(-Infinity, Infinity);
         }
@@ -515,6 +528,7 @@ export function toTex(e, sy) {
         case 'mat': return `\\frac{\\mathrm{D}${wrapD(e.args[0], sy)}}{\\mathrm{D}t}`;
         case 'pow': return `${par(e.args[0], 5)}^{${a[1]}}`;
         case 'heaviside': return `H\\!\\left(${a[0]}\\right)`;
+        case 'ifpos': return `\\begin{cases}${a[1]} & ${a[0]} > 0\\\\ ${a[2]} & \\text{otherwise}\\end{cases}`;
         case 'min': case 'max': return `\\${e.n}\\!\\left(${a.join(',\\,')}\\right)`;
         default: return `\\${texFn(e.n)}\\!\\left(${a.join(',\\,')}\\right)`;
       }
@@ -522,7 +536,7 @@ export function toTex(e, sy) {
   }
   return '?';
 }
-const texFn = n => ({ ln: 'ln', log: 'ln', log10: 'log_{10}', asin: 'arcsin', acos: 'arccos', atan: 'arctan', atan2: 'operatorname{atan2}', erf: 'operatorname{erf}', sign: 'operatorname{sgn}', floor: 'operatorname{floor}' }[n] || n);
+const texFn = n => ({ ln: 'ln', log: 'ln', log10: 'log_{10}', asin: 'arcsin', acos: 'arccos', atan: 'arctan', asinh: 'operatorname{arsinh}', acosh: 'operatorname{arcosh}', atanh: 'operatorname{artanh}', atan2: 'operatorname{atan2}', erf: 'operatorname{erf}', sign: 'operatorname{sgn}', floor: 'operatorname{floor}' }[n] || n);
 const wrapD = (u, sy) => (u.t === 'sym' ? toTex(u, sy) : `\\left(${toTex(u, sy)}\\right)`);
 
 export function toText(e) {
@@ -540,7 +554,7 @@ export function toText(e) {
 
 const CODE = {
   js: { pow: (a, b) => `Math.pow(${a},${b})`, fn: n => (n === 'erf' ? 'erf' : n === 'ln' || n === 'log' ? 'Math.log' : n === 'heaviside' ? '(x=>x>=0?1:0)' : `Math.${n}`), pi: 'Math.PI' },
-  python: { pow: (a, b) => `${a}**${b}`, fn: n => ({ ln: 'np.log', log: 'np.log', log10: 'np.log10', abs: 'np.abs', asin: 'np.arcsin', acos: 'np.arccos', atan: 'np.arctan', atan2: 'np.arctan2', min: 'np.minimum', max: 'np.maximum', erf: 'math.erf', heaviside: '(lambda x: np.heaviside(x, 1.0))', pow: 'np.power' }[n] || `np.${n}`), pi: 'np.pi' },
+  python: { pow: (a, b) => `${a}**${b}`, fn: n => ({ ln: 'np.log', log: 'np.log', log10: 'np.log10', abs: 'np.abs', asin: 'np.arcsin', acos: 'np.arccos', atan: 'np.arctan', asinh: 'np.arcsinh', acosh: 'np.arccosh', atanh: 'np.arctanh', atan2: 'np.arctan2', min: 'np.minimum', max: 'np.maximum', erf: 'math.erf', heaviside: '(lambda x: np.heaviside(x, 1.0))', pow: 'np.power' }[n] || `np.${n}`), pi: 'np.pi' },
   matlab: { pow: (a, b) => `${a}.^${b}`, fn: n => ({ ln: 'log', log: 'log', pow: 'power', heaviside: '(@(x) double(x>=0))' }[n] || n), pi: 'pi', mul: '.*', div: './' },
   cpp: { pow: (a, b) => `std::pow(${a}, ${b})`, fn: n => ({ ln: 'std::log', log: 'std::log', abs: 'std::fabs', min: 'std::min', max: 'std::max', heaviside: '([](double x){return x>=0?1.0:0.0;})', sign: '([](double x){return (x>0)-(x<0);})' }[n] || `std::${n}`), pi: 'M_PI', numFloat: true },
   lean: { pow: (a, b) => `${a} ^ ${b}`, fn: n => ({ sqrt: 'Real.sqrt', exp: 'Real.exp', ln: 'Real.log', log: 'Real.log', sin: 'Real.sin', cos: 'Real.cos', tan: 'Real.tan', tanh: 'Real.tanh', sinh: 'Real.sinh', cosh: 'Real.cosh', atan: 'Real.arctan', asin: 'Real.arcsin', acos: 'Real.arccos', log10: 'Real.logb 10', abs: 'abs', min: 'min', max: 'max' }[n] || unsupportedLean(n)), pi: 'Real.pi', lean: true },
@@ -573,6 +587,13 @@ export function toCode(e, lang = 'python', rename = n => n) {
       }
       case 'fn': {
         if (DIFF_OPS.has(u.n)) throw new Error(`Differential operator ${u.n}() has no direct code form`);
+        if (u.n === 'ifpos') {
+          const [c, x, y] = u.args.map(q => go(q));
+          if (L.lean) return `(if 0 < ${c} then ${x} else ${y})`;
+          if (lang === 'python') return `np.where(${c} > 0, ${x}, ${y})`;
+          if (lang === 'matlab') return `((${c}) > 0) .* (${x}) + ((${c}) <= 0) .* (${y})`;
+          return `((${c}) > 0 ? (${x}) : (${y}))`;
+        }
         if (L.lean) return wrap(`${L.fn(u.n)} ${u.args.map(a => go(a, 9)).join(' ')}`, 8);
         return `${L.fn(u.n)}(${u.args.map(a => go(a)).join(', ')})`;
       }

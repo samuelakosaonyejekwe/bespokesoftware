@@ -4,6 +4,47 @@ import { inp, asm, eq, scalar, line, check, bench, svg, S, lab, N } from './kit.
 const LN2 = Math.LN2;
 
 // ------------------------------------------------------------------ point kinetics
+// Keepin (1965), thermal fission of uranium-235: relative abundance and decay constant (1/s) of the six delayed groups.
+// Their abundance-weighted mean lifetime gives the one-group decay constant 1/Σ(a_i/λ_i) = 0.0767 1/s.
+const KEEPIN_U235 = [[0.033, 0.0124], [0.219, 0.0305], [0.196, 0.111], [0.395, 0.301], [0.115, 1.14], [0.042, 3.01]];
+/** Illustrative power coefficient of reactivity: reactivity lost per unit rise of relative power. */
+const ALPHA_F = 2e-3;
+/**
+ * Roots ω_j of the inhour equation ρ = ωΛ + Σ ω β_i/(ω + λ_i) and the amplitude A_j of each mode of n(t) = Σ A_j exp(ω_j t)
+ * after a step from equilibrium. Returned in descending order: the first root sets the stable period, the last is the prompt root.
+ */
+function inhourModes(rho, L, groups) {
+  const gs = groups.slice().sort((p, q) => p.l - q.l), m = gs.length, bt = gs.reduce((q, c) => q + c.b, 0), e = 1e-13;
+  const F = w => w * L - rho + gs.reduce((q, c) => q + w * c.b / (w + c.l), 0);
+  // F rises monotonically from −∞ to +∞ between consecutive poles, so each interval holds exactly one root
+  const root = (lo, hi) => { for (let i = 0; i < 300; i++) { const mid = 0.5 * (lo + hi); if (mid <= lo || mid >= hi) break; if (F(mid) > 0) hi = mid; else lo = mid; } return 0.5 * (lo + hi); };
+  const ws = [root(-gs[0].l * (1 - e), Math.abs(rho) / L + 1)];
+  for (let i = 0; i < m - 1; i++) ws.push(root(-gs[i + 1].l * (1 - e), -gs[i].l * (1 + e)));
+  ws.push(root(-Math.max(2 * gs[m - 1].l, (2 * bt + Math.abs(rho)) / L + 1), -gs[m - 1].l * (1 + e)));
+  return ws.map(w => ({ w, A: (L + gs.reduce((q, c) => q + c.b / (w + c.l), 0)) / (L + gs.reduce((q, c) => q + c.b * c.l / (w + c.l) ** 2, 0)) }));
+}
+/**
+ * Kinetics with power feedback, ρ(n) = ρ − α(n − 1), by backward Euler on a grid clustered toward t = 0. The precursor
+ * equations are linear and are eliminated exactly, leaving a quadratic for the new population with one positive root, so
+ * the step is unconditionally stable however stiff the prompt mode. Two grids are combined by Richardson extrapolation.
+ */
+function kineticsWithFeedback(rho, beta, L, groups, alpha, tEnd, nSteps = 2000) {
+  const kap = Math.max(Math.log(tEnd * Math.max(Math.abs(beta - rho), 0.05 * beta) / L), 1e-6);
+  const run = N2 => {
+    const t = [0], n = [1], m = groups.length, C = groups.map(q => q.b / (L * q.l)), den = Math.expm1(kap); let nn = 1;
+    for (let k = 1; k <= N2; k++) {
+      const tk = tEnd * Math.expm1(kap * k / N2) / den, h = tk - t[k - 1];
+      let s1 = 0, s2 = 0; for (let i = 0; i < m; i++) { const q = groups[i], d = 1 + h * q.l; s1 += q.l * C[i] / d; s2 += q.l * q.b / d; }
+      const A = h * alpha / L, B = 1 - h * (rho + alpha - beta) / L - h * h * s2 / L, Cc = nn + h * s1;
+      nn = (-B + Math.sqrt(B * B + 4 * A * Cc)) / (2 * A);
+      for (let i = 0; i < m; i++) { const q = groups[i]; C[i] = (C[i] + h * q.b * nn / L) / (1 + h * q.l); }
+      t.push(tk); n.push(nn);
+    }
+    return { t, n };
+  };
+  const c = run(nSteps), f = run(2 * nSteps);
+  return { t: c.t, n: c.n.map((q, k) => 2 * f.n[2 * k] - q) };
+}
 const kinetics = {
   id: 'reactor-point-kinetics',
   title: 'Reactor point kinetics after a reactivity step',
@@ -25,19 +66,23 @@ const kinetics = {
     inp('t_end', 'Duration simulated', 's', 60, { min: 1, max: 3600, kind: 'numerical', aliases: ['duration', 'time'] }),
   ],
   assumptions: [
-    asm('one_group', 'Delayed neutrons are represented by one effective precursor group.', { why: 'Captures the prompt jump and the stable period with two equations', alt: 'Six groups are needed to follow the transient accurately between the prompt jump and the asymptotic period.' }),
-    asm('no_feedback', 'Reactivity stays constant after the step: no temperature or void feedback.', { why: 'Isolates the neutron kinetics', alt: 'A negative power coefficient reduces the reactivity as the population rises and arrests the excursion.' }),
+    asm('one_group', 'Delayed neutrons are represented by one effective precursor group.', { why: 'Captures the prompt jump and the stable period with two equations', alt: 'Six precursor groups are used, with the relative abundances and decay constants of Keepin (1965) for thermal fission of uranium-235 scaled to the stated delayed-neutron fraction; the one-group decay constant is then not used.' }),
+    asm('no_feedback', 'Reactivity stays constant after the step: no temperature or void feedback.', { why: 'Isolates the neutron kinetics', alt: 'A negative power coefficient (an illustrative 0.002 of reactivity per unit rise of relative power) reduces the reactivity as the population rises and arrests the excursion.' }),
     asm('delayed', 'Delayed neutrons are present.', { why: 'They are, in every real reactor', alt: 'With all neutrons prompt the population follows exp(ρt/Λ): a counterfactual that shows why delayed neutrons matter.' }),
   ],
-  symbols: { n: ['Neutron population relative to its initial value', '1'], C: ['Precursor concentration (same normalisation)', '1'], t: ['Time', 's'], alpha_f: ['Power feedback coefficient of reactivity', '1'], T_p: ['Stable reactor period', 's'], T_pa: ['Approximate stable period', 's'], n_pj: ['Population after the prompt jump', '1'] },
-  equations: a => [
-    a.delayed
-      ? eq('n', 'Neutron balance', 'd(n,t)', `(${a.no_feedback ? 'rho_r' : '(rho_r - alpha_f*(n - 1))'} - beta_d)/Lambda_g*n + lambda_d*C`, { kind: 'law', origin: 'Neutron conservation in a point reactor', needs: ['one_group'] })
-      : eq('n', 'Neutron balance without delayed neutrons', 'd(n,t)', 'rho_r/Lambda_g*n', { kind: 'hypothesis', origin: 'Counterfactual: every neutron prompt' }),
-    ...(a.delayed ? [eq('c', 'Precursor balance', 'd(C,t)', 'beta_d/Lambda_g*n - lambda_d*C', { kind: 'law', origin: 'Production by fission and loss by radioactive decay' }),
+  symbols: { n: ['Neutron population relative to its initial value', '1'], C: ['Precursor concentration (same normalisation)', '1'], t: ['Time', 's'], alpha_f: ['Power feedback coefficient of reactivity (illustrative value 0.002)', '1'], S_d: ['Delayed-neutron source, the sum of λ_i C_i over the six groups', '1/s'], C_i: ['Precursor concentration of group i (same normalisation)', '1'], a_i: ['Relative abundance of group i', '1'], lambda_i: ['Decay constant of group i', '1/s'], T_p: ['Stable reactor period', 's'], T_pa: ['Approximate stable period', 's'], n_pj: ['Population after the prompt jump', '1'] },
+  equations: a => {
+    const react = a.no_feedback ? 'rho_r' : '(rho_r - alpha_f*(n - 1))';
+    if (!a.delayed) return [eq('n', 'Neutron balance without delayed neutrons', 'd(n,t)', `${react}/Lambda_g*n`, { kind: 'hypothesis', origin: 'Counterfactual: every neutron prompt' })];
+    return [
+      eq('n', 'Neutron balance', 'd(n,t)', `(${react} - beta_d)/Lambda_g*n + ${a.one_group ? 'lambda_d*C' : 'S_d'}`, { kind: 'law', origin: 'Neutron conservation in a point reactor', needs: a.one_group ? ['one_group'] : [] }),
+      a.one_group
+        ? eq('c', 'Precursor balance', 'd(C,t)', 'beta_d/Lambda_g*n - lambda_d*C', { kind: 'law', origin: 'Production by fission and loss by radioactive decay', needs: ['one_group'] })
+        : eq('c', 'Precursor balance (shown for group i of six)', 'd(C_i,t)', 'a_i*beta_d/Lambda_g*n - lambda_i*C_i', { kind: 'law', origin: 'Production by fission and loss by radioactive decay; group data of Keepin (1965)' }),
       eq('pj', 'Prompt jump', 'n_pj', 'beta_d/(beta_d - rho_r)', { kind: 'derived', origin: 'Precursors frozen during the fast transient; valid for ρ < β' }),
-      eq('per', 'Stable period, small-reactivity approximation', 'T_pa', '(beta_d - rho_r)/(lambda_d*rho_r)', { kind: 'derived', origin: 'Slow root of the inhour equation for ρ well below β; the solver reports the exact root' })] : []),
-  ],
+      ...(a.one_group ? [eq('per', 'Stable period, small-reactivity approximation', 'T_pa', '(beta_d - rho_r)/(lambda_d*rho_r)', { kind: 'derived', origin: 'Slow root of the inhour equation for ρ well below β and a short generation time; the solver reports the exact root', needs: ['one_group'] })] : []),
+    ];
+  },
   derivation: () => [
     { text: 'Count neutrons: each generation of duration Λ multiplies the prompt population by (1 − β + ρ), and precursors decaying at rate λ add delayed neutrons.', tex: '\\frac{\\mathrm{d}n}{\\mathrm{d}t} = \\frac{\\rho-\\beta}{\\Lambda}\\,n + \\lambda C' },
     { text: 'Precursors are produced in proportion to the fission rate and decay exponentially.', tex: '\\frac{\\mathrm{d}C}{\\mathrm{d}t} = \\frac{\\beta}{\\Lambda}\\,n - \\lambda C' },
@@ -45,38 +90,57 @@ const kinetics = {
     { text: 'On the fast time scale the precursors do not change, so the population settles almost at once to the prompt-jump level, then follows the slow root.', tex: 'n_{pj} = \\frac{\\beta}{\\beta-\\rho},\\qquad T_p \\approx \\frac{\\beta-\\rho}{\\lambda\\rho}' },
   ],
   solve(v, a) {
-    const { rho_r: rho, beta_d: beta, lambda_d: lam, Lambda_g: L } = v, alphaF = 2e-3, warnings = [];
-    const C0 = beta / (L * lam);
-    const f = (t, y) => { const r = a.no_feedback ? rho : rho - alphaF * (y[0] - 1); return a.delayed ? [(r - beta) / L * y[0] + lam * y[1], beta / L * y[0] - lam * y[1]] : [r / L * y[0], 0]; };
-    // the system is stiff (fast root ~ beta/Lambda): integrate the linear case exactly, otherwise with fine adaptive steps
-    let t, n;
-    const b = (beta - rho) / L + lam, c = -rho * lam / L, disc = Math.sqrt(b * b - 4 * c), w1 = (-b + disc) / 2, w2 = (-b - disc) / 2;
-    const tEnd = !a.delayed && rho > 0 ? Math.min(v.t_end, 30 * L / rho) : v.t_end;
-    if (a.delayed && a.no_feedback) {
-      t = N.linspace(0, tEnd, 500);
-      const A1 = (lam * C0 + (rho - beta) / L - w2) / (w1 - w2), A2 = 1 - A1;
-      n = t.map(x => A1 * Math.exp(w1 * x) + A2 * Math.exp(w2 * x));
-    } else if (!a.delayed) { t = N.linspace(0, tEnd, 500); const sol = N.rk45(f, [1, 0], 0, tEnd, 500, { rtol: 1e-8, maxSteps: 400000 }); t = sol.t; n = sol.y[0]; }
-    else { const sol = N.rk45(f, [1, C0], 0, tEnd, 500, { rtol: 1e-7, atol: 1e-12, maxSteps: 2000000 }); t = sol.t; n = sol.y[0]; }
-    const npj = beta / (beta - rho), Tp = rho !== 0 ? 1 / w1 : Infinity, dollars = rho / beta;
-    if (rho >= beta) warnings.push('Reactivity is at or above the delayed-neutron fraction: the reactor is prompt critical and the population rises on the prompt time scale.');
+    const { rho_r: rho, beta_d: beta, lambda_d: lam, Lambda_g: L } = v, alphaF = ALPHA_F, warnings = [];
+    const groups = a.one_group ? [{ b: beta, l: lam }] : KEEPIN_U235.map(([ai, li]) => ({ b: ai * beta, l: li }));
+    // the linear system is stiff (prompt root ~ β/Λ): its solution is the exact sum of exponential modes
+    const modes = inhourModes(rho, L, groups), w1 = modes[0].w, w2 = modes[modes.length - 1].w, linear = a.delayed && a.no_feedback;
+    let tEnd = v.t_end;
+    if (!a.delayed && rho > 0) tEnd = Math.min(v.t_end, 30 * L / rho);
+    else if (linear && w1 * v.t_end > 60) { tEnd = 60 / w1; warnings.push(`The population would grow by more than a factor of 10²⁶ within the requested duration; the run is shown to ${lab(tEnd, 's')} instead.`); }
+    let nOf;
+    if (linear) nOf = x => modes.reduce((q, c) => q + c.A * Math.exp(c.w * x), 0);
+    else if (!a.delayed) {
+      // dn/dt = (a1 − b1 n) n has the closed-form logistic solution; without feedback it is a pure exponential
+      const a1 = (a.no_feedback ? rho : rho + alphaF) / L, b1 = a.no_feedback ? 0 : alphaF / L;
+      nOf = x => (Math.abs(a1 * x) < 1e-12 ? 1 / (1 + b1 * x) : b1 === 0 ? Math.exp(a1 * x) : a1 / (b1 + (a1 - b1) * Math.exp(-a1 * x)));
+    } else { const sol = kineticsWithFeedback(rho, beta, L, groups, alphaF, tEnd); nOf = x => N.interp1(sol.t, sol.n, x); }
+    const t = N.linspace(0, tEnd, 500), n = t.map(nOf);
+    const prompt = rho >= beta, npj = prompt ? NaN : beta / (beta - rho), Tp = rho !== 0 ? 1 / w1 : Infinity, dollars = rho / beta;
+    if (prompt) warnings.push('Reactivity is at or above the delayed-neutron fraction: the reactor is prompt critical and the population rises on the prompt time scale.');
     if (!a.delayed) warnings.push('Counterfactual: with no delayed neutrons the population e-folds every Λ/ρ, far too fast for mechanical control.');
+    if (!a.one_group && a.delayed) warnings.push('Six-group kinetics uses the uranium-235 group data of Keepin (1965); the one-group decay constant entered above is not used.');
+    const tEarly = Math.min(tEnd, 60 * L / Math.max(beta - rho, 1e-4)), tt = N.linspace(0, tEarly, 200);
     return {
       scalars: [
-        scalar('dollars', 'Reactivity in dollars (ρ/β)', dollars, '1'), scalar('n_pj', 'Population after the prompt jump', a.delayed ? npj : NaN, '1', { text: a.delayed ? undefined : 'No prompt jump without delayed neutrons' }),
+        scalar('dollars', 'Reactivity in dollars (ρ/β)', dollars, '1'), scalar('n_pj', 'Population after the prompt jump', a.delayed ? npj : NaN, '1', { text: !a.delayed ? 'No prompt jump without delayed neutrons' : prompt ? 'Not defined: the reactor is prompt critical' : undefined }),
         scalar('T_p', 'Stable reactor period', a.delayed ? Tp : (rho !== 0 ? L / rho : Infinity), 's', { text: rho === 0 ? 'Infinite: the reactor is exactly critical' : undefined }),
         scalar('T_double', 'Doubling time', (a.delayed ? Tp : L / (rho || 1e-30)) * LN2, 's', { text: rho <= 0 ? 'Not applicable: the population is falling' : undefined }),
         scalar('omega_fast', 'Fast (prompt) decay rate', -w2, '1/s'), scalar('n_end', 'Relative population at the end of the run', n[n.length - 1], '1'),
       ],
-      series: [line('population', 'Neutron population after the step', 'Time', 's', t, [{ label: 'Relative population', data: n }, ...(a.delayed && a.no_feedback ? [{ label: 'Asymptote: prompt jump × exp(t/T)', data: t.map(x => npj * Math.exp(x / Tp)), dash: true }] : [])], 'n / n₀', '–'),
-        line('early', 'The first moments: the prompt jump', 'Time', 's', t.filter(x => x <= Math.min(tEnd, 60 * L / Math.max(beta - rho, 1e-4))).length > 5 ? N.linspace(0, Math.min(tEnd, 60 * L / Math.max(beta - rho, 1e-4)), 200) : t.slice(0, 50), (() => { const tt = N.linspace(0, Math.min(tEnd, 60 * L / Math.max(beta - rho, 1e-4)), 200); if (!(a.delayed && a.no_feedback)) return [{ label: 'Relative population', data: tt.map(x => N.interp1(t, n, x)) }]; const A1 = (lam * C0 + (rho - beta) / L - w2) / (w1 - w2); return [{ label: 'Relative population', data: tt.map(x => A1 * Math.exp(w1 * x) + (1 - A1) * Math.exp(w2 * x)) }]; })(), 'n / n₀', '–')],
-      checks: a.delayed && a.no_feedback ? [check('Roots satisfy the inhour equation', (w1 * L + w1 * beta / (w1 + lam) - rho) / Math.max(Math.abs(rho), 1e-9), 1e-8, 'Slow root substituted back')] : [],
+      series: [line('population', 'Neutron population after the step', 'Time', 's', t, [{ label: 'Relative population', data: n }, ...(linear && !prompt ? [{ label: 'Asymptote: prompt jump × exp(t/T)', data: t.map(x => npj * Math.exp(w1 * x)), dash: true }] : [])], 'n / n₀', '–'),
+        line('early', 'The first moments: the prompt jump', 'Time', 's', tt, [{ label: 'Relative population', data: tt.map(nOf) }], 'n / n₀', '–')],
+      checks: linear ? [
+        check('Roots satisfy the inhour equation', (w1 * L + groups.reduce((q, c) => q + w1 * c.b / (w1 + c.l), 0) - rho) / Math.max(Math.abs(rho), 1e-9), 1e-8, 'Slow root substituted back'),
+        check('Mode amplitudes sum to the initial population', modes.reduce((q, c) => q + c.A, 0) - 1, 1e-9, 'n(0) = 1'),
+      ] : [],
       warnings,
     };
   },
   benchmarks(v, a) {
-    const r = this.solve({ ...v, rho_r: 0.001, beta_d: 0.0065, lambda_d: 0.0767, Lambda_g: 1e-4 }, { one_group: true, no_feedback: true, delayed: true }), g = s => r.scalars.find(q => q.sym === s).value;
-    return [bench('Prompt jump for ρ = 0.001, β = 0.0065', g('n_pj'), 0.0065 / 0.0055, 'n = β/(β − ρ)', 1e-12), bench('Stable period against the small-reactivity formula', g('T_p'), 0.0055 / (0.0767 * 0.001), 'T ≈ (β − ρ)/(λρ); exact root is slightly longer', 0.03)];
+    const base = { one_group: true, no_feedback: true, delayed: true }, g = (r, s) => r.scalars.find(q => q.sym === s).value;
+    const r = this.solve({ ...v, rho_r: 0.001, beta_d: 0.0065, lambda_d: 0.0767, Lambda_g: 1e-4 }, base);
+    // independent Runge–Kutta integrations of the kinetics equations (generation time long enough for an explicit method)
+    const q1 = { rho_r: 0.002, beta_d: 0.0065, lambda_d: 0.0767, Lambda_g: 1e-3, t_end: 20 }, c0 = q1.beta_d / (q1.Lambda_g * q1.lambda_d);
+    const o1 = N.rk45((t, y) => [(q1.rho_r - q1.beta_d) / q1.Lambda_g * y[0] + q1.lambda_d * y[1], q1.beta_d / q1.Lambda_g * y[0] - q1.lambda_d * y[1]], [1, c0], 0, q1.t_end, 3, { rtol: 1e-10, atol: 1e-12, maxSteps: 400000 });
+    const o6 = N.rk45((t, y) => [(q1.rho_r - q1.beta_d) / q1.Lambda_g * y[0] + KEEPIN_U235.reduce((s, k, i) => s + k[1] * y[i + 1], 0), ...KEEPIN_U235.map((k, i) => k[0] * q1.beta_d / q1.Lambda_g * y[0] - k[1] * y[i + 1])], [1, ...KEEPIN_U235.map(k => k[0] * q1.beta_d / (q1.Lambda_g * k[1]))], 0, q1.t_end, 3, { rtol: 1e-10, atol: 1e-12, maxSteps: 400000 });
+    const oF = N.rk45((t, y) => [(q1.rho_r - ALPHA_F * (y[0] - 1) - q1.beta_d) / q1.Lambda_g * y[0] + q1.lambda_d * y[1], q1.beta_d / q1.Lambda_g * y[0] - q1.lambda_d * y[1]], [1, c0], 0, q1.t_end, 3, { rtol: 1e-10, atol: 1e-12, maxSteps: 400000 });
+    return [
+      bench('One-group population after 20 s vs numerical integration', g(this.solve({ ...v, ...q1 }, base), 'n_end'), o1.y[0].at(-1), 'Dormand–Prince integration of the two kinetics equations', 1e-6),
+      bench('Six-group population after 20 s vs numerical integration', g(this.solve({ ...v, ...q1 }, { ...base, one_group: false }), 'n_end'), o6.y[0].at(-1), 'Dormand–Prince integration of the seven kinetics equations', 1e-6),
+      bench('Population with power feedback after 20 s vs numerical integration', g(this.solve({ ...v, ...q1 }, { ...base, no_feedback: false }), 'n_end'), oF.y[0].at(-1), 'Dormand–Prince integration of the non-linear equations', 1e-4),
+      bench('Stable period against the small-reactivity formula', g(r, 'T_p'), 0.0055 / (0.0767 * 0.001), 'T ≈ (β − ρ)/(λρ); exact root is slightly longer', 0.03),
+      bench('One-group decay constant implied by the six-group data', 1 / KEEPIN_U235.reduce((s, k) => s + k[0] / k[1], 0), 0.0767, 'Keepin (1965): abundance-weighted mean precursor lifetime', 2e-3),
+    ];
   },
   validation: [],
   diagram(v) {
@@ -91,8 +155,8 @@ const kinetics = {
   alternatives: [{ name: 'Six-group kinetics', text: 'Resolves the transition between prompt jump and stable period accurately; the one-group model shortens it.' }, { name: 'Space–time kinetics', text: 'Needed when the flux shape changes during the transient, as in large loosely coupled cores.' }],
   hazards: [{ hazard: 'Prompt criticality', cause: 'Reactivity insertion approaching β', mitigation: 'Limits on rod worth and withdrawal rate; fast shutdown system' }],
   standards: ['IAEA Safety Standards Series No. SSR-3 (safety of research reactors)', 'ANSI/ANS-15.1 (technical specifications for research reactors)'],
-  limits: 'Point reactor with fixed flux shape, one delayed group, reactivity below β for the prompt-jump and period formulas. No thermal feedback unless the feedback assumption is released, and then only through a single illustrative power coefficient.',
-  numerics: { method: 'Exact two-exponential solution for the linear case; adaptive Runge–Kutta when feedback is included' },
+  limits: 'Point reactor with fixed flux shape, one effective delayed group or the six uranium-235 groups, reactivity below β for the prompt-jump and period formulas. No thermal feedback unless the feedback assumption is released, and then only through a single illustrative power coefficient.',
+  numerics: { method: 'Exact sum of exponential modes from the roots of the inhour equation for the linear case; backward Euler with Richardson extrapolation when feedback is included' },
   inverse: { series: 'population', fit: ['rho_r'] },
   extensions: ['Six delayed groups', 'Temperature and void feedback from a thermal-hydraulic model', 'Ramp and oscillating reactivity'],
 };
@@ -122,8 +186,8 @@ const shielding = {
   ],
   assumptions: [
     asm('buildup', 'Scattered photons are accounted for with a linear build-up factor.', { why: 'Broad-beam geometry is the realistic case', alt: 'Narrow-beam attenuation only: under-predicts dose and is not conservative.' }),
-    asm('point', 'The source is a point and the shield a slab normal to the line of sight.', { why: 'Valid when the distance is several source dimensions', alt: 'Extended sources need a point-kernel integration over the source.' }),
-    asm('mono', 'A single effective photon energy characterises the attenuation.', { why: 'Adequate for one or two close lines', alt: 'Each line must be attenuated separately; the spectrum hardens with depth.' }),
+    asm('point', 'The source is a point and the shield a slab normal to the line of sight.', { why: 'Valid when the distance is several source dimensions', alt: 'Not resolved here: the point-source result is still shown, with a warning that an extended source needs a point-kernel integration over its volume.' }),
+    asm('mono', 'A single effective photon energy characterises the attenuation.', { why: 'Adequate for one or two close lines', alt: 'Not resolved here: the single-energy result is still shown, with a warning that each line must be attenuated separately because the spectrum hardens with depth.' }),
   ],
   symbols: { H: ['Dose rate at the dose point', 'Sv/s'], H_0: ['Unshielded dose rate', 'Sv/s'], B: ['Build-up factor', '1'], x_half: ['Half-value layer', 'm'] },
   equations: a => [
@@ -149,12 +213,17 @@ const shielding = {
       series: [line('dose-thickness', 'Dose rate against shield thickness', 'Thickness', 'cm', xs.map(x => x * 100), [{ label: a.buildup ? 'Broad beam (with build-up)' : 'Narrow beam', data: xs.map(x => (g(x) + v.H_lim) * 3.6e9) }, ...(a.buildup ? [{ label: 'Narrow beam', data: xs.map(x => H0 * Math.exp(-v.mu_a * x) * 3.6e9), dash: true }] : []), { label: 'Limit', data: xs.map(() => v.H_lim * 3.6e9), dash: true }], 'Dose rate', 'µSv/h', { logy: true }),
         line('dose-distance', 'Dose rate against distance at the present thickness', 'Distance', 'm', N.logspace(0.1, 50, 80), [{ label: 'Dose rate', data: N.logspace(0.1, 50, 80).map(r => v.Gamma_k * v.A_s / r ** 2 * B * Math.exp(-mfp) * 3.6e9) }], 'Dose rate', 'µSv/h', { logx: true, logy: true })],
       checks: [check('Shield never increases the narrow-beam dose', Math.max(Math.exp(-mfp) - 1, 0), 0, 'Transmission of unscattered photons ≤ 1')],
-      warnings: [...(mfp > 20 ? ['Beyond about twenty mean free paths the linear build-up form is unreliable; use tabulated build-up factors.'] : []), ...(!a.buildup ? ['Narrow-beam attenuation under-predicts the dose in a real geometry: do not use it for design.'] : [])],
+      warnings: [...(mfp > 20 ? ['Beyond about twenty mean free paths the linear build-up form is unreliable; use tabulated build-up factors.'] : []), ...(!a.buildup ? ['Narrow-beam attenuation under-predicts the dose in a real geometry: do not use it for design.'] : []),
+        ...(!a.point ? ['An extended source is not resolved: the result is that of a point source of the same activity. Close to a large source the true dose rate is lower than the inverse-square value; integrate a point kernel over the source for design.'] : []),
+        ...(!a.mono ? ['Several photon energies are not resolved: one attenuation coefficient is applied to the whole dose. With a mixed spectrum the more penetrating lines dominate behind a thick shield, so attenuate each line separately with its own coefficient and dose constant.'] : [])],
     };
   },
   benchmarks(v, a) {
     const r = this.solve({ ...v, x_s: LN2 / v.mu_a }, { ...a, buildup: false });
-    return [bench('One half-value layer halves a narrow beam', r.scalars.find(s => s.sym === 'TF').value, 0.5, 'exp(−ln 2) = ½', 1e-12), bench('Inverse-square law', this.solve({ ...v, r_d: 2 * v.r_d }, a).scalars.find(s => s.sym === 'H_0').value / this.solve(v, a).scalars.find(s => s.sym === 'H_0').value, 0.25, 'Doubling the distance quarters the dose rate', 1e-12)];
+    const q = this.solve(v, a), xr = q.scalars.find(s => s.sym === 'x_req').value, need = [];
+    // the required thickness is found by bisection; substituting it back must return the limit
+    if (xr > 0 && Number.isFinite(xr)) need.push(bench('Dose rate at the required thickness equals the limit', this.solve({ ...v, x_s: xr }, a).scalars.find(s => s.sym === 'H').value, v.H_lim, 'Definition of the required thickness', 1e-6));
+    return [...need, bench('One half-value layer halves a narrow beam', r.scalars.find(s => s.sym === 'TF').value, 0.5, 'exp(−ln 2) = ½', 1e-12), bench('Inverse-square law', this.solve({ ...v, r_d: 2 * v.r_d }, a).scalars.find(s => s.sym === 'H_0').value / this.solve(v, a).scalars.find(s => s.sym === 'H_0').value, 0.25, 'Doubling the distance quarters the dose rate', 1e-12)];
   },
   validation: [],
   diagram(v) {
@@ -199,13 +268,18 @@ const decay = {
     asm('no_initial_daughter', 'Only the parent is present at the start.', { why: 'Freshly separated source', alt: 'The daughter starts in equilibrium with the parent.' }),
     asm('closed', 'Nothing is added or removed: a closed system.', { why: 'Sealed source', alt: 'The daughter is eluted (removed) once a day, as in a medical generator.' }),
   ],
-  symbols: { N_1: ['Parent nuclei', '1'], N_2: ['Daughter nuclei', '1'], N_3: ['Granddaughter nuclei', '1'], lambda_1: ['Parent decay constant', '1/s'], lambda_2: ['Daughter decay constant', '1/s'], lambda_3: ['Granddaughter decay constant', '1/s'], t: ['Time', 's'], A_2: ['Daughter activity', '1/s'], t_max: ['Time of maximum daughter activity', 's'] },
-  equations: () => [
+  symbols: { N_20: ['Daughter nuclei at the start', '1'], N_1: ['Parent nuclei', '1'], N_2: ['Daughter nuclei', '1'], N_3: ['Granddaughter nuclei', '1'], lambda_1: ['Parent decay constant', '1/s'], lambda_2: ['Daughter decay constant', '1/s'], lambda_3: ['Granddaughter decay constant', '1/s'], t: ['Time', 's'], A_2: ['Daughter activity', '1/s'], t_max: ['Time of maximum daughter activity', 's'] },
+  equations: a => [
     eq('p', 'Parent decay', 'd(N_1,t)', '-lambda_1*N_1', { kind: 'law', origin: 'Radioactive decay law' }),
     eq('d', 'Daughter balance', 'd(N_2,t)', 'f_b*lambda_1*N_1 - lambda_2*N_2', { kind: 'law', origin: 'Production by parent decay, loss by its own decay' }),
     eq('g', 'Granddaughter balance', 'd(N_3,t)', 'lambda_2*N_2 - lambda_3*N_3', { kind: 'law', origin: 'Production by daughter decay, loss by its own decay' }),
-    eq('lam', 'Decay constant', 'lambda_1', 'ln(2)/T_1', { kind: 'definition' }),
-    eq('tm', 'Time of maximum daughter activity', 't_max', 'ln(lambda_2/lambda_1)/(lambda_2 - lambda_1)', { kind: 'derived', origin: 'Setting dN₂/dt = 0 with no initial daughter' }),
+    eq('lam', 'Decay constant of the parent', 'lambda_1', 'ln(2)/T_1', { kind: 'definition' }),
+    eq('lam2', 'Decay constant of the daughter', 'lambda_2', 'ln(2)/T_2', { kind: 'definition' }),
+    eq('lam3', 'Decay constant of the granddaughter', 'lambda_3', 'ln(2)/T_3', { kind: 'definition' }),
+    a.no_initial_daughter
+      ? eq('ic', 'Initial daughter inventory', 'N_20', '0*N_0', { kind: 'initial', origin: 'Freshly separated parent', needs: ['no_initial_daughter'] })
+      : eq('ic', 'Initial daughter inventory', 'N_20', 'f_b*lambda_1*N_0/(lambda_2 - lambda_1)', { kind: 'initial', origin: 'Transient equilibrium with the parent (requires the daughter to be the shorter-lived)' }),
+    ...(a.no_initial_daughter ? [eq('tm', 'Time of maximum daughter activity', 't_max', 'ln(lambda_2/lambda_1)/(lambda_2 - lambda_1)', { kind: 'derived', origin: 'Setting dN₂/dt = 0 with no initial daughter', needs: ['no_initial_daughter'] })] : []),
   ],
   derivation: () => [
     { text: 'Each nucleus has the same probability of decaying per unit time, so the parent decays exponentially.', tex: 'N_1(t) = N_0\\,e^{-\\lambda_1 t}' },
@@ -215,32 +289,40 @@ const decay = {
   solve(v, a) {
     const l1 = LN2 / v.T_1, l2 = LN2 / v.T_2, l3 = LN2 / v.T_3, f = v.f_b, N0 = v.N_0, n = 400, t = N.linspace(0, v.t_end, n);
     const same = Math.abs(l2 - l1) < 1e-9 * Math.max(l1, l2);
-    const N20 = a.no_initial_daughter ? 0 : f * l1 * N0 / Math.max(l2 - l1, 1e-300) * (l2 > l1 ? 1 : 0);
+    const N20 = a.no_initial_daughter || same || l2 <= l1 ? 0 : f * l1 * N0 / (l2 - l1);
     const n1 = x => N0 * Math.exp(-l1 * x);
     const n2c = (x, start) => (same ? f * l1 * N0 * x * Math.exp(-l1 * x) : f * l1 * N0 / (l2 - l1) * (Math.exp(-l1 * x) - Math.exp(-l2 * x))) + start * Math.exp(-l2 * x);
     let N2;
     if (a.closed) N2 = t.map(x => n2c(x, N20));
-    else { const day = 86400; N2 = t.map(x => { const t0 = Math.floor(x / day) * day, dt = x - t0, p0 = n1(t0); return same ? f * l1 * p0 * dt * Math.exp(-l1 * dt) : f * l1 * p0 / (l2 - l1) * (Math.exp(-l1 * dt) - Math.exp(-l2 * dt)); }); }
-    // granddaughter by quadrature of its balance (stable for any ratio of half-lives)
-    const N3 = [0]; for (let i = 1; i < n; i++) { const h = t[i] - t[i - 1], src = 0.5 * l2 * (N2[i] + N2[i - 1]); N3.push((N3[i - 1] + h * src) * Math.exp(-l3 * h)); }
+    else { const day = 86400; N2 = t.map(x => { const t0 = Math.floor(x / day) * day, dt = x - t0, p0 = n1(t0); return (same ? f * l1 * p0 * dt * Math.exp(-l1 * dt) : f * l1 * p0 / (l2 - l1) * (Math.exp(-l1 * dt) - Math.exp(-l2 * dt))) + (t0 === 0 ? N20 * Math.exp(-l2 * dt) : 0); }); }
+    // granddaughter by an exponential integrator: exact for a source that is constant over a step, for any ratio of half-lives
+    const N3 = [0]; for (let i = 1; i < n; i++) { const h = t[i] - t[i - 1], src = 0.5 * l2 * (N2[i] + N2[i - 1]), q = l3 * h; N3.push(N3[i - 1] * Math.exp(-q) + src * h * (q > 1e-8 ? -Math.expm1(-q) / q : 1 - q / 2)); }
     const N1 = t.map(n1), A1 = N1.map(x => x * l1), A2 = N2.map(x => x * l2);
-    const tmax = !same && l2 > 0 && l1 > 0 ? Math.log(l2 / l1) / (l2 - l1) : 1 / l1;
+    // with the daughter initially in equilibrium its activity only falls, so the maximum is at the start
+    const tmax = N20 > 0 ? 0 : !same && l2 > 0 && l1 > 0 ? Math.log(l2 / l1) / (l2 - l1) : 1 / l1;
     const total = N1[n - 1] + N2[n - 1] + N3[n - 1] + (1 - f) * (N0 - N1[n - 1]);
     return {
       scalars: [scalar('lambda_1', 'Parent decay constant', l1, '1/s'), scalar('lambda_2', 'Daughter decay constant', l2, '1/s'), scalar('A_0', 'Initial parent activity', N0 * l1, 'Bq', { show: 'GBq' }),
-        scalar('t_max', 'Time of maximum daughter activity', tmax, 's', { show: 'h' }), scalar('A_2max', 'Maximum daughter activity', n2c(tmax, 0) * l2, 'Bq', { show: 'GBq' }),
+        scalar('t_max', 'Time of maximum daughter activity', tmax, 's', { show: 'h' }), scalar('A_2max', 'Maximum daughter activity', n2c(tmax, N20) * l2, 'Bq', { show: 'GBq' }),
         scalar('ratio', 'Daughter-to-parent activity ratio at the end', A2[n - 1] / Math.max(A1[n - 1], 1e-300), '1', { note: l2 > l1 ? `tends to ${(f * l2 / (l2 - l1)).toPrecision(4)} in equilibrium` : 'no equilibrium: the daughter outlives the parent' }),
         scalar('N_1_end', 'Parent nuclei remaining', N1[n - 1], '1'), scalar('N_3_end', 'Granddaughter nuclei at the end', N3[n - 1], '1')],
       series: [line('activity', 'Activities of parent and daughter', 'Time', 'd', t.map(x => x / 86400), [{ label: 'Parent', data: A1 }, { label: 'Daughter', data: A2 }], 'Activity', 'Bq'),
         line('amounts', 'Number of nuclei', 'Time', 'd', t.map(x => x / 86400), [{ label: 'Parent', data: N1 }, { label: 'Daughter', data: N2 }, { label: 'Granddaughter', data: N3 }], 'Nuclei', '–')],
       checks: a.closed && a.no_initial_daughter && l3 * v.t_end < 1e-3 ? [check('Nuclei are conserved', (total - N0) / N0, 2e-3, 'Parent + daughter + granddaughter + other branch against the initial number')] : [],
-      warnings: a.closed ? [] : ['Daughter removed completely once every 24 hours; real elution efficiency is below 100 %.'],
+      warnings: [...(a.closed ? [] : ['Daughter removed completely once every 24 hours; real elution efficiency is below 100 %. The maximum quoted is that of the first in-growth period.']),
+        ...(!a.no_initial_daughter && N20 === 0 ? ['The daughter is not shorter-lived than the parent, so no equilibrium inventory exists; the daughter starts at zero.'] : [])],
     };
   },
   benchmarks(v, a) {
     const r = this.solve({ ...v, t_end: v.T_1 }, { no_initial_daughter: true, closed: true });
     const l1 = LN2 / v.T_1, l2 = LN2 / v.T_2, tm = Math.log(l2 / l1) / (l2 - l1), q = this.solve({ ...v, t_end: 2 * tm }, { no_initial_daughter: true, closed: true }), s = q.series[0], i = s.y[1].data.indexOf(N.maxOf(s.y[1].data));
-    return [bench('Half the parent remains after one half-life', r.scalars.find(s2 => s2.sym === 'N_1_end').value / v.N_0, 0.5, 'Decay law', 1e-12), bench('Computed peak of daughter activity at the analytic time', s.x.data[i] * 86400 / tm, 1, 't_max = ln(λ₂/λ₁)/(λ₂ − λ₁)', 0.01)];
+    // molybdenum-99 → technetium-99m → technetium-99: the three balances integrated independently by Runge–Kutta
+    const mo = { ...v, N_0: 1, T_1: 2.75 * 86400, T_2: 6.01 * 3600, T_3: 2.11e5 * 3.15576e7, f_b: 0.875, t_end: 5 * 86400 }, k1 = LN2 / mo.T_1, k2 = LN2 / mo.T_2, k3 = LN2 / mo.T_3;
+    const ode = N.rk45((t, y) => [-k1 * y[0], mo.f_b * k1 * y[0] - k2 * y[1], k2 * y[1] - k3 * y[2]], [1, 0, 0], 0, mo.t_end, 3, { rtol: 1e-11, atol: 1e-14 });
+    const am = this.solve(mo, { no_initial_daughter: true, closed: true }).series[1];
+    return [bench('Half the parent remains after one half-life', r.scalars.find(s2 => s2.sym === 'N_1_end').value / v.N_0, 0.5, 'Decay law', 1e-12), bench('Computed peak of daughter activity at the analytic time', s.x.data[i] * 86400 / tm, 1, 't_max = ln(λ₂/λ₁)/(λ₂ − λ₁)', 0.01),
+      bench('Daughter inventory after five days vs numerical integration', am.y[1].data.at(-1), ode.y[1].at(-1), 'Dormand–Prince integration of the three decay balances', 1e-8),
+      bench('Granddaughter inventory after five days vs numerical integration', am.y[2].data.at(-1), ode.y[2].at(-1), 'Dormand–Prince integration of the three decay balances', 1e-4)];
   },
   validation: [],
   diagram(v) {

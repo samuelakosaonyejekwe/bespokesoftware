@@ -11,6 +11,7 @@ import * as Conn from '../core/connectors.js';
 import { DOMAINS } from '../data/domains.js';
 import { PHYSICS_FIELDS, ENGINEERING_FIELDS, SUITES, M1_PHASES, M2_PHASES } from '../data/catalogue.js';
 import { fmt } from '../core/units.js';
+import { ATLAS } from '../data/atlas.js';
 import { lineChart } from '../core/plot.js';
 
 const EXAMPLES = {
@@ -70,7 +71,7 @@ export async function home() {
         <a class="card modcard" href="#/re"><span class="big">↺</span><h2>Reverse engineering studio</h2><p class="dim">Start from results: measurements, signals, geometry or equations. Reconstruct the inputs and governing model, test whether the answer is unique, and validate on data held back.</p><span class="go">Open the studio →</span></a>
       </div>
       <div class="grid g4">
-        <div class="stat"><div class="v">${MODELS.length}</div><div class="l">computable models in the library</div></div>
+        <div class="stat"><div class="v">${MODELS.length} + ${ATLAS.length}</div><div class="l">full models and standard relations</div></div>
         <div class="stat"><div class="v">${Object.keys(DOMAINS).length}</div><div class="l">scientific and engineering domains</div></div>
         <div class="stat"><div class="v">${M1_PHASES.reduce((a, p) => a + p.items.length, 0)} + ${M2_PHASES.reduce((a, p) => a + p.items.length, 0)}</div><div class="l">output categories across the two modules</div></div>
         <div class="stat"><div class="v">${Conn.SOURCES.length}</div><div class="l">live scientific data sources</div></div>
@@ -98,13 +99,16 @@ export async function home() {
 
 function reading(prompt, module) {
   if (prompt.trim().length < 8) return raw('<p class="dim small">Start typing and this panel will show how your prompt is being read: its class, the fields involved, the quantities you gave and the closest models.</p>');
-  const ranked = P.rankModels(prompt, MODELS, module), model = P.strongMatch(ranked[0]) ? modelById(ranked[0].id) : null;
+  // the preview runs the same reading the investigation will use, so the two cannot disagree
+  const ranked = P.rankModels(prompt, MODELS, module), probe = createInvestigation({ module, prompt }), relation = probe.atlas ? ATLAS.find(x => x.id === probe.atlas) : null, ownEq = !probe.atlas && probe.custom.equations.length;
+  const model = probe.modelId && !probe.match ? modelById(probe.modelId) : null;
   const k = P.classifyClass(prompt, model), doms = P.rankDomains(prompt).slice(0, 5), q = P.extractQuantities(prompt).items, loc = P.locate(prompt);
   return html`
     <div class="row">${join(k.tags, c => html`<span class="klass">Class ${c}</span> <span class="small">${P.CLASS_NAME[c]}</span>`)}${k.hybrid ? chip('hybrid', 'warn') : ''}</div>
     <p class="small dim">${P.CLASS_BLURB[k.primary]}</p>
     ${doms.length ? html`<div>${join(doms, d => html`<span class="tag">${d.name}</span>`)}</div>` : ''}
-    ${model ? html`<p class="small" style="margin-top:.5rem"><b>Closest model:</b> ${model.title}${ranked.length > 1 ? html` <span class="dim">(also: ${ranked.slice(1, 3).map(r => r.title).join('; ')})</span>` : ''}</p>` : html`<p class="small note warn">No library model matches closely yet.${ranked[0] ? html` The nearest is <b>${ranked[0].title}</b>; it will be run and marked as a low-confidence match.` : ''} Equations written in your prompt (for example <code>d(x,t) = -k*x</code> with <code>k = 0.3</code>) are simulated directly.</p>`}
+    ${relation ? html`<p class="small" style="margin-top:.5rem"><b>Standard relation:</b> ${relation.title}${probe.match ? html` <span class="chip warn">nearest, low confidence</span>` : ''}</p>` : ownEq ? html`<p class="small" style="margin-top:.5rem"><b>Your own equations</b> will be simulated: ${probe.custom.equations.map(q => `${q.lhs} = ${q.rhs}`).join(' ; ')}</p>` : probe.modelId && probe.match ? html`<p class="small note warn">Nearest model, low confidence: <b>${modelById(probe.modelId).title}</b>. Check it is the system you mean.</p>` : !model ? html`<p class="small note warn">Nothing in the library or among the standard relations covers this. The investigation will record it, analyse its logic and dimensions, and let you enter equations. Writing the relation you have in mind into the prompt, for example <code>d(x,t) = -k*x</code> with <code>k = 0.3</code>, makes it computable at once.</p>` : ''}
+    ${!model ? '' : html`<p class="small" style="margin-top:.5rem"><b>Closest model:</b> ${model.title}${ranked.length > 1 ? html` <span class="dim">(also: ${ranked.slice(1, 3).map(r => r.title).join('; ')})</span>` : ''}</p>` }
     ${q.length ? html`<p class="small"><b>Quantities read from your text:</b> ${join(q.slice(0, 10), x => html`<span class="tag">${x.raw}${x.bare ? '' : ` · ${x.quantity}`}</span>`)}</p>` : html`<p class="small dim">No numbers yet: reference values will be supplied and marked as software-supplied.</p>`}
     ${loc ? html`<p class="small"><b>Location:</b> ${loc.name} — environmental data will be attached.</p>` : ''}`;
 }
@@ -231,11 +235,14 @@ export function libraryPage(_, q) {
       <div id="lib">${join(Object.keys(DOMAINS).filter(d => byDom[d]), d => html`<div class="card" data-group style="margin-bottom:.9rem"><h2>${DOMAINS[d].name}</h2><div class="grid g3">${join(byDom[d], m => html`
         <button class="card flat tight modcard" data-model="${m.id}" data-text="${(m.title + ' ' + m.summary + ' ' + m.keywords.join(' ') + ' ' + DOMAINS[d].name).toLowerCase()}">
           <div class="row">${join([].concat(m.klass), k => chip('Class ' + k, k === 'III' ? 'hypo' : k === 'II' ? 'soft' : 'ok'))}${m.hypothetical ? chip('hypothetical law', 'hypo') : ''}<span class="chip mute">Module ${[].concat(m.module).join(' + ')}</span></div>
-          <b>${m.title}</b><small>${m.summary}</small></button>`)}</div></div>`)}</div></div>`,
+          <b>${m.title}</b><small>${m.summary}</small></button>`)}</div></div>`)}
+        <div class="card" data-group><h2>Standard relations</h2><p class="small dim">${ATLAS.length} compact textbook relations for everyday and general questions that need no full model. Each is verified, simulated and exported like any other.</p><div class="grid g3">${join(ATLAS, a => html`
+          <button class="card flat tight modcard" data-atlas="${a.id}" data-model="" data-text="${(a.title + ' ' + a.summary + ' ' + a.kw.join(' ')).toLowerCase()}"><div class="row">${chip('Class I', 'ok')}<span class="chip mute">Standard relation</span></div><b>${a.title}</b><small>${a.summary}</small></button>`)}</div></div></div></div>`,
     after(root) {
       const f = () => { const s = $('#q', root).value.toLowerCase().trim(); $$('[data-model]', root).forEach(b => { b.style.display = !s || s.split(/\s+/).every(w => b.dataset.text.includes(w)) ? '' : 'none'; }); $$('[data-group]', root).forEach(g => { g.style.display = $$('[data-model]', g).some(b => b.style.display !== 'none') ? '' : 'none'; }); };
       $('#q', root).addEventListener('input', f); f();
-      on(root, 'click', '[data-model]', (_, el) => { const m = modelById(el.dataset.model); const mod = [].concat(m.module); start(mod.includes(2) && !mod.includes(1) ? 2 : mod[0], 'A', '', m.id); });
+      on(root, 'click', '[data-atlas]', (_, el) => { const a = ATLAS.find(x => x.id === el.dataset.atlas); start(1, 'A', `${a.title}: ${a.kw[0]}`); });
+      on(root, 'click', '[data-model]', (_, el) => { if (!el.dataset.model) return; const m = modelById(el.dataset.model); const mod = [].concat(m.module); start(mod.includes(2) && !mod.includes(1) ? 2 : mod[0], 'A', '', m.id); });
     },
   };
 }

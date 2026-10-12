@@ -55,6 +55,7 @@ function concept(X) {
           <p class="small">${k.hybrid ? 'This is a hybrid investigation: each part is treated according to its own class.' : P.CLASS_BLURB[k.primary]}</p>
           <div class="note ${feas[1] === 'ok' ? 'ok' : feas[1] === 'hypo' ? 'hypo' : feas[1]}"><b>Feasibility: ${feas[0]}.</b> ${feas[2]}</div></div>
       </div>
+      ${inv.match && inv.match.confidence === 'low' && !inv.modelId ? html`<div class="note warn"><b>${inv.estimate ? 'Order-of-magnitude estimate.' : 'Nearest standard relation, low confidence.'}</b> ${inv.match.note} <button class="btn sm" data-ws="equations">See or replace the equation</button></div>` : ''}
       ${inv.match && inv.match.confidence === 'low' && inv.modelId ? html`<div class="note warn"><b>Nearest available model, low confidence.</b> ${inv.match.note} <button class="btn sm" data-ws="equations">Enter my own equations</button> <a class="btn sm" href="#/library">Browse the library</a></div>` : ''}
       <div class="card"><h3>Consolidated scenario</h3>
         ${m ? html`<p>${m.custom ? 'No library model was needed: the equations found in your prompt or entered by you have been assembled into a computable model.' : html`The prompt is read as a question about <b>${m.title.toLowerCase()}</b>.`} ${m.summary}</p>${para(m.background)}${m.diagram && inv.module === 2 ? raw(`<div style="max-width:720px">${m.diagram(c.v, c.a)}</div>`) : ''}`

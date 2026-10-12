@@ -205,8 +205,12 @@ export function mapQuantities(extracted, inputs) {
   pairs.sort((a, b) => b.s - a.s);
   const qUsed = new Set();
   for (const p of pairs) {
-    if (qUsed.has(p.qi) || used.has(p.ii) || p.s < 0.6) continue;
+    if (qUsed.has(p.qi) || used.has(p.ii)) continue;
     const sameDim = inputs.filter(i => { const u = tryUnit(i.unit); return u && dimEq(u.dim, items[p.qi].dim) && i.kind !== 'numerical' && i.kind !== 'constant'; }).length;
+    const rivals = items.filter(q => !q.bare && !isDimless(q.dim) && dimEq(q.dim, items[p.qi].dim)).length;
+    // a quantity that is the only one of its kind in the prompt, for the only input of that kind, needs no further evidence
+    const sole = sameDim === 1 && rivals === 1 && !items[p.qi].bare && !isDimless(items[p.qi].dim) && p.s > -4;
+    if (!sole && p.s < 0.6) continue;
     if (sameDim > 1 && p.s < 1.2) continue;
     qUsed.add(p.qi); used.add(p.ii);
     mapped.push({ q: items[p.qi], sym: inputs[p.ii].sym, confidence: Math.min(1, p.s / 6) });

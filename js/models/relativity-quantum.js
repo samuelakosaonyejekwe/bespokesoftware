@@ -161,8 +161,9 @@ const twin = {
     out.push(bench('Traveller\'s time for 4 ly at 0.8 c (years)', val(r, 'tau_t') / YR, 6, 'Exact: 2L/(γv) = 6 yr against 10 yr at home', 1e-9));
     const k = val(r, 'k_D');
     out.push(bench('Signals received by the traveller from Doppler rates', v.f_s * val(r, 'tau_t') / 2 * (1 / k + k), val(r, 'N_h'), 'k-calculus (Bondi): half the trip at rate f/k, half at rate f·k', 1e-9));
-    const rf = this.solve(base, { ...on, instant: false }), g = 5 / 3, ap = v.a_p, xa = c2 / ap * (g - 1);
-    out.push(bench('Finite-acceleration proper time against closed form', val(rf, 'tau_t'), xa * 2 < 4 * LY ? 2 * (4 * LY - 2 * xa) / (g * 0.8 * c) + 4 * c / ap * Math.atanh(0.8) : val(rf, 'tau_t'), 'Hyperbolic motion joined to coasting', 1e-9));
+    const g = 5 / 3, ap = 9.80665, rf = this.solve({ ...base, a_p: ap }, { ...on, instant: false }), xa = c2 / ap * (g - 1);
+    out.push(bench('Finite-acceleration proper time at one standard gravity against closed form', val(rf, 'tau_t'), 2 * (4 * LY - 2 * xa) / (g * 0.8 * c) + 4 * c / ap * Math.atanh(0.8), 'Hyperbolic motion joined to coasting: 2(L − 2x_a)/(γv) + (4c/a) artanh(v/c)', 1e-9));
+    out.push(bench('Finite-acceleration home-frame duration against closed form', val(rf, 'T'), 2 * (4 * LY - 2 * xa) / (0.8 * c) + 4 * g * 0.8 * c / ap, '2(L − 2x_a)/v + 4γv/a', 1e-9));
     return out;
   },
   validation: [
@@ -315,6 +316,11 @@ const rocket = {
     out.push(bench('First-leg distance: numerical integration vs closed form', val(r, 'x_num'), q.dLeg, 'x = (c²/a)(cosh(aτ/c) − 1)', 1e-6));
     out.push(bench('Speed after one year of ship time at 1 g (fraction of c)', Math.tanh(9.80665 * YR / c), 0.7747, 'tanh(1.0323); standard textbook value', 1e-3));
     out.push(bench('Photon-rocket mass ratio equals γ(1 + β) per burn', Math.exp(q.phi), q.gam * (1 + q.vmax / c), 'e^φ = γ(1 + β)', 1e-9));
+    // rendezvous whose peak Lorentz factor is exactly 5/4: β = 3/5, rapidity ln 2 per burn
+    const ex = this.solve({ ...v, D: 2 * 0.25 * c2 / v.a }, on);
+    out.push(bench('Peak speed for a peak Lorentz factor of 5/4 (fraction of c)', val(ex, 'beta_max'), 0.6, 'Exact: γ = 1 + aD/(2c²) = 5/4 gives β = 3/5', 1e-12));
+    out.push(bench('Ship time of that journey in units of c/a', val(ex, 'tau_trip') * v.a / c, 2 * Math.LN2, 'Exact: τ = (2c/a) arcosh(5/4) = (2c/a) ln 2', 1e-12));
+    out.push(bench('Photon-rocket mass ratio of that journey', val(ex, 'MR'), 4, 'Exact: e^(2 ln 2) = 4', 1e-12));
     const near = { ...v, D: 1e9, a: 10 }, rn = rocketTrip(near, on);
     out.push(bench('Newtonian limit of ship time for a short hop', rn.tau, 2 * Math.sqrt(2 * 5e8 / 10), 'τ → 2√(D/a) when aD ≪ c²', 1e-6));
     return out;
@@ -452,10 +458,10 @@ const elevator = {
     return out;
   },
   validation: [
-    { name: 'Gravitational red-shift of 14.4 keV gamma rays', ref: 'Pound & Rebka (1960) Phys. Rev. Lett. 4, 337; Pound & Snider (1965) Phys. Rev. 140, B788', note: 'One-way shift over the 22.56 m (74 ft) tower. The 1960 figure is half the measured up-minus-down difference (5.13 ± 0.51) × 10⁻¹⁵; the 1965 figure is the reported ratio 0.9990 ± 0.0076 applied to the prediction.',
+    { name: 'Gravitational red-shift of 14.4 keV gamma rays', ref: 'Pound & Rebka (1960) Phys. Rev. Lett. 4, 337; Pound & Snider (1965) Phys. Rev. 140, B788', note: 'One-way shift in the Jefferson Laboratory tower. The 1960 figure is half the measured up-minus-down difference (5.13 ± 0.51) × 10⁻¹⁵ over 22.56 m (74 ft), predicted 4.92 × 10⁻¹⁵. The 1965 figure is the reported ratio 0.9990 ± 0.0076 (statistical; systematic limit ±0.010) applied to half the authors\' predicted 2gh/c² = 4.905 × 10⁻¹⁵, which corresponds to a path of 22.48 m.',
       cases: [
         { label: 'Pound & Rebka 1960', inputs: { g: 9.804, h: 22.56 }, observable: 'z', observed: 2.565e-15, sigma: 0.255e-15 },
-        { label: 'Pound & Snider 1965', inputs: { g: 9.804, h: 22.56 }, observable: 'z', observed: 2.459e-15, sigma: 0.019e-15 },
+        { label: 'Pound & Snider 1965', inputs: { g: 9.804, h: 22.48 }, observable: 'z', observed: 2.450e-15, sigma: 0.019e-15 },
       ] },
   ],
   diagram(v, a) {
@@ -571,25 +577,30 @@ const schwarzschild = {
     asm('test_particle', 'The orbiting body is a test particle of negligible mass.', { why: 'Planet-to-star mass ratios are tiny', alt: 'The total mass M + m₂ replaces M in the relative orbit (leading two-body correction).' }),
     asm('spherical', 'The central body is spherical and non-rotating.', { why: 'Schwarzschild geometry', alt: 'The Newtonian quadrupole (J₂) advance of an equatorial orbit is added.' }),
   ],
-  symbols: { u: ['Inverse radius 1/r', '1/m'], phi: ['Orbital angle', 'rad'], h_L: ['Specific angular momentum', 'm^2/s'], dphi: ['Perihelion advance per orbit', 'rad'], delta: ['Deflection angle of light', 'rad'], r_s: ['Schwarzschild radius', 'm'], r_isco: ['Innermost stable circular orbit', 'm'], r_ph: ['Photon-sphere radius', 'm'], V_eff: ['Effective potential per unit mass', 'J/kg'], r: ['Radial coordinate', 'm'], dphi_J: ['Quadrupole advance per orbit', 'rad'], M_t: ['Total mass', 'kg'] },
-  equations: a => [
+  symbols: { u: ['Inverse radius 1/r', '1/m'], phi: ['Orbital angle', 'rad'], h_L: ['Specific angular momentum', 'm^2/s'], dphi: ['Perihelion advance per orbit', 'rad'], dphi_formula: ['Perihelion advance per orbit, first-order formula', 'rad'], delta_1: ['Deflection angle of light, first-order formula', 'rad'], r_s: ['Schwarzschild radius', 'm'], r_isco: ['Innermost stable circular orbit', 'm'], r_ph: ['Photon-sphere radius', 'm'], V_eff: ['Effective potential per unit mass', 'J/kg'], r: ['Radial coordinate', 'm'], dphi_J: ['Quadrupole advance per orbit', 'rad'], p_l: ['Semi-latus rectum of the orbit used', 'm'], b_crit: ['Critical impact parameter for capture of light', 'm'], M_t: ['Total mass', 'kg'] },
+  equations: a => { const Mo = a.test_particle ? 'M' : '(M + m_2)'; return [
     a.gr
-      ? eq('orbit', 'Orbit equation', 'd2(u,phi) + u', 'G*M/h_L^2 + 3*G*M*u^2/c^2', { kind: 'law', origin: 'Geodesic equation in the Schwarzschild metric', needs: ['gr'] })
-      : eq('orbit', 'Orbit equation (Binet)', 'd2(u,phi) + u', 'G*M/h_L^2', { kind: 'law', origin: 'Newton\'s law of gravitation with conserved angular momentum' }),
+      ? eq('orbit', 'Orbit equation', 'd2(u,phi) + u', `G*${Mo}/h_L^2 + 3*G*${Mo}*u^2/c^2`, { kind: 'law', origin: 'Geodesic equation in the Schwarzschild metric', needs: ['gr'] })
+      : eq('orbit', 'Orbit equation (Binet)', 'd2(u,phi) + u', `G*${Mo}/h_L^2`, { kind: 'law', origin: 'Newton\'s law of gravitation with conserved angular momentum' }),
+    ...(a.gr ? [eq('slr', 'Semi-latus rectum of the orbit', 'p_l', `max(a*(1 - e^2), 1.05*(6 + 2*e)*G*${Mo}/c^2)`, { kind: 'definition', note: 'No bound orbit exists with a semi-latus rectum below (6 + 2e)GM/c²; smaller requested orbits are replaced by one 5 % outside that limit.' })]
+      : a.spherical ? [] : [eq('slr', 'Semi-latus rectum of the orbit', 'p_l', 'a*(1 - e^2)', { kind: 'definition' })]),
+    ...(a.spherical ? [] : [eq('j2', 'Quadrupole advance per orbit', 'dphi_J', '3*pi*J_2*(R_b/p_l)^2', { kind: 'derived', origin: 'Secular perturbation by an oblate primary, equatorial orbit' })]),
     ...(a.gr ? [
-      eq('veff', 'Effective potential', 'V_eff', '-G*M/r + h_L^2/(2*r^2) - G*M*h_L^2/(c^2*r^3)', { kind: 'derived', origin: 'First integral of the geodesic equation' }),
-      eq('prec', 'Perihelion advance per orbit', 'dphi', a.test_particle ? '6*pi*G*M/(c^2*a*(1 - e^2))' : '6*pi*G*(M + m_2)/(c^2*a*(1 - e^2))', { kind: 'derived', origin: 'First-order perturbation of the Kepler ellipse (Einstein 1915)', needs: ['weak_field'] }),
+      eq('veff', 'Effective potential', 'V_eff', `-G*${Mo}/r + h_L^2/(2*r^2) - G*${Mo}*h_L^2/(c^2*r^3)`, { kind: 'derived', origin: 'First integral of the geodesic equation' }),
+      a.weak_field
+        ? eq('prec', 'Perihelion advance per orbit', 'dphi', `6*pi*G*${Mo}/(c^2*p_l)${a.spherical ? '' : ' + dphi_J'}`, { kind: 'derived', origin: 'First-order perturbation of the Kepler ellipse (Einstein 1915)', needs: ['weak_field'] })
+        : eq('prec', 'Perihelion advance per orbit, first-order formula', 'dphi_formula', `6*pi*G*${Mo}/(c^2*p_l)`, { kind: 'derived', origin: 'First-order perturbation of the Kepler ellipse (Einstein 1915)', note: 'Shown for comparison: the reported advance is the exact quadrature of the first integral of the orbit equation' }),
       eq('null', 'Light-ray equation', 'd2(u,phi) + u', '3*G*M*u^2/c^2', { kind: 'law', origin: 'Null geodesic of the Schwarzschild metric' }),
-      eq('defl', 'Deflection of light', 'delta', '4*G*M/(c^2*b)', { kind: 'derived', origin: 'First-order solution of the null geodesic (Einstein 1915)' }),
+      eq('bcrit', 'Critical impact parameter', 'b_crit', '3*sqrt(3)*G*M/c^2', { kind: 'derived', origin: 'Unstable circular null geodesic: rays aimed closer are captured' }),
+      eq('defl', 'Deflection of light, first order', 'delta_1', '4*G*M/(c^2*max(b, 1.02*b_crit))', { kind: 'derived', origin: 'First-order solution of the null geodesic (Einstein 1915)', note: 'The reported deflection is obtained by integrating the null geodesic and exceeds this value close to a compact mass. A ray aimed inside the critical impact parameter is captured; it is replaced by one 2 % outside the critical value.' }),
       eq('rs', 'Schwarzschild radius', 'r_s', '2*G*M/c^2', { kind: 'definition' }),
       eq('isco', 'Innermost stable circular orbit', 'r_isco', '6*G*M/c^2', { kind: 'derived', origin: 'Marginal stability of the effective potential' }),
       eq('rph', 'Photon sphere', 'r_ph', '3*G*M/c^2', { kind: 'derived', origin: 'Circular null geodesic' }),
     ] : [
-      eq('veff', 'Effective potential', 'V_eff', '-G*M/r + h_L^2/(2*r^2)', { kind: 'derived', origin: 'Energy conservation in a central field' }),
-      eq('defl', 'Deflection of a particle moving at c', 'delta', '2*G*M/(c^2*b)', { kind: 'derived', origin: 'Newtonian hyperbolic orbit (Soldner 1801)' }),
+      eq('veff', 'Effective potential', 'V_eff', `-G*${Mo}/r + h_L^2/(2*r^2)`, { kind: 'derived', origin: 'Energy conservation in a central field' }),
+      eq('defl', 'Deflection of a particle moving at c, first order', 'delta_1', '2*G*M/(c^2*b)', { kind: 'derived', origin: 'Newtonian hyperbolic orbit (Soldner 1801)', note: 'The reported value is the exact hyperbolic result 2 arctan(GM/(c²b))' }),
     ]),
-    ...(a.spherical ? [] : [eq('j2', 'Quadrupole advance per orbit', 'dphi_J', '3*pi*J_2*(R_b/(a*(1 - e^2)))^2', { kind: 'derived', origin: 'Secular perturbation by an oblate primary, equatorial orbit' })]),
-  ],
+  ]; },
   derivation: a => [
     { text: 'The Schwarzschild metric has conserved energy and angular momentum per unit mass. Eliminating proper time in favour of the orbital angle and writing u = 1/r gives the orbit equation.', tex: '\\frac{\\mathrm{d}^2u}{\\mathrm{d}\\varphi^2} + u = \\frac{GM}{h^2} + \\frac{3GM}{c^2}\\,u^2' },
     { text: 'Its first integral is a cubic in u. The two smaller roots are the turning points, so the angle swept between successive perihelia is an elliptic integral, evaluated here without approximation.', tex: '\\left(\\frac{\\mathrm{d}u}{\\mathrm{d}\\varphi}\\right)^2 = r_s\\,(u-u_1)(u-u_2)(u-u_3),\\qquad \\Delta\\varphi = 2\\!\\int_{u_1}^{u_2}\\!\\frac{\\mathrm{d}u}{\\sqrt{r_s (u-u_1)(u_2-u)(u_3-u)}} - 2\\pi' },
@@ -604,13 +615,13 @@ const schwarzschild = {
     const Torb = 2 * Math.PI * Math.sqrt(o.aEff ** 3 / o.GM), perCentury = 36525 * 86400 / Torb;
     const dJ = a.spherical ? 0 : 3 * Math.PI * v.J_2 * (v.R_b / o.p) ** 2;
     const head = (a.gr ? (a.weak_field ? o.formula : o.exact) : 0) + dJ;
-    // light
-    const bCrit = 3 * Math.sqrt(3) * o.rg; let b = v.b;
+    // light and horizon-scale radii depend on the central mass alone
+    const rgC = G * v.M / c2, bCrit = 3 * Math.sqrt(3) * rgC; let b = v.b;
     if (a.gr && b < 1.02 * bCrit) { b = 1.02 * bCrit; warnings.push('The impact parameter is inside the critical value 3√3 GM/c²: the ray is captured. The deflection is shown for a ray just outside the critical value.'); }
     let defl, lx, ly;
-    if (a.gr) { const q = lightDeflection(o.rg, b); defl = q.delta; lx = q.xs; ly = q.ys; }
-    else { defl = 2 * Math.atan(o.rg / b); const ph = N.linspace(0.05, Math.PI + defl - 0.05, 200), uu = ph.map(f => Math.sin(f) + o.rg / b * (1 - Math.cos(f))); lx = ph.map((f, i) => Math.cos(f) / uu[i]); ly = ph.map((f, i) => Math.sin(f) / uu[i]); }
-    const deflF = (a.gr ? 4 : 2) * o.rg / b;
+    if (a.gr) { const q = lightDeflection(rgC, b); defl = q.delta; lx = q.xs; ly = q.ys; }
+    else { defl = 2 * Math.atan(rgC / b); const ph = N.linspace(0.05, Math.PI + defl - 0.05, 200), uu = ph.map(f => Math.sin(f) + rgC / b * (1 - Math.cos(f))); lx = ph.map((f, i) => Math.cos(f) / uu[i]); ly = ph.map((f, i) => Math.sin(f) / uu[i]); }
+    const deflF = (a.gr ? 4 : 2) * rgC / b;
     // sweeps
     const aMin = a.gr ? Math.max(o.aEff / 10, 1.2 * (6 + 2 * o.e) * o.rg / (1 - o.e * o.e)) : o.aEff / 10;
     const as = N.logspace(aMin, Math.max(o.aEff * 10, aMin * 10), 50);
@@ -627,13 +638,13 @@ const schwarzschild = {
         scalar('dphi_ode', 'Advance per orbit, direct integration of the orbit equation', ode.advance, 'rad', { text: Number.isFinite(ode.advance) ? undefined : 'Not defined: the orbit is circular to within 0.1 %' }),
         scalar('dphi_J', 'Quadrupole advance per orbit', dJ, 'rad'),
         scalar('T_orb', 'Orbital period (Kepler)', Torb, 's', { show: 'd' }),
-        scalar('r_p', 'Periapsis distance', o.p / (1 + o.e), 'm', { show: 'AU' }), scalar('r_a', 'Apoapsis distance', o.p / (1 - o.e), 'm', { show: 'AU' }),
+        scalar('p_l', 'Semi-latus rectum of the orbit used', o.p, 'm', { show: 'AU' }), scalar('r_p', 'Periapsis distance', o.p / (1 + o.e), 'm', { show: 'AU' }), scalar('r_a', 'Apoapsis distance', o.p / (1 - o.e), 'm', { show: 'AU' }),
         scalar('h_L', 'Specific angular momentum', Math.sqrt(o.h2), 'm^2/s'), scalar('E_orb', 'Newtonian specific orbital energy', Eorb, 'J/kg'),
         scalar('delta', 'Deflection of light', defl, 'rad'), scalar('defl_arcsec', 'Deflection of light (arcseconds)', defl * ARCSEC, '1'),
-        scalar('defl_formula', 'Deflection by the first-order formula (arcseconds)', deflF * ARCSEC, '1'),
-        scalar('r_s', 'Schwarzschild radius', o.rs, 'm', { show: 'km' }), scalar('r_isco', 'Innermost stable circular orbit', 6 * o.rg, 'm', { show: 'km' }),
-        scalar('r_ph', 'Photon-sphere radius', 3 * o.rg, 'm', { show: 'km' }), scalar('b_crit', 'Critical impact parameter for capture of light', bCrit, 'm', { show: 'km' }),
-        scalar('f_isco', 'Orbital frequency at the innermost stable orbit (distant observer)', c ** 3 / (2 * Math.PI * Math.pow(6, 1.5) * o.GM), 'Hz'),
+        scalar('delta_1', 'Deflection of light, first-order formula', deflF, 'rad'), scalar('defl_formula', 'Deflection by the first-order formula (arcseconds)', deflF * ARCSEC, '1'),
+        scalar('r_s', 'Schwarzschild radius', 2 * rgC, 'm', { show: 'km' }), scalar('r_isco', 'Innermost stable circular orbit', 6 * rgC, 'm', { show: 'km' }),
+        scalar('r_ph', 'Photon-sphere radius', 3 * rgC, 'm', { show: 'km' }), scalar('b_crit', 'Critical impact parameter for capture of light', bCrit, 'm', { show: 'km' }),
+        scalar('f_isco', 'Orbital frequency at the innermost stable orbit (distant observer)', c ** 3 / (2 * Math.PI * Math.pow(6, 1.5) * G * v.M), 'Hz'),
         scalar('eps_gr', 'Relativistic parameter GM/(c²p)', o.rg / o.p, '1'),
       ],
       series: [
@@ -641,7 +652,7 @@ const schwarzschild = {
         line('veff', 'Effective potential', 'Radius', 'GM/c²', rr.map(r => r / o.rg), [{ label: a.gr ? 'Schwarzschild' : 'Newtonian', data: vGR }, ...(a.gr ? [{ label: 'Newtonian', data: vN, dash: true }] : []), { label: 'Orbital energy', data: rr.map(() => Eorb / c2), dash: true }], 'Effective potential', 'c²', { logx: true }),
         line('orbit', 'Orbit in the orbital plane', 'x', 'p', ode.xs, [{ label: 'Orbit', data: ode.ys }], 'y', 'p', { equal: true, note: 'Lengths in units of the semi-latus rectum. The advance is invisible on this scale unless the orbit is close to the central mass.' }),
         line('light-path', 'Path of the light ray', 'x', 'b', lx, [{ label: 'Light ray', data: ly }], 'y', 'b', { note: 'Lengths in units of the impact parameter; the mass sits at the origin.' }),
-        line('deflection-sweep', 'Light deflection against impact parameter', 'Impact parameter', 'km', bs.map(x => x / 1000), [{ label: 'First-order formula', data: bs.map(x => (a.gr ? 4 : 2) * o.rg / x * ARCSEC) }], 'Deflection', 'arcsec', { logx: true, logy: true }),
+        line('deflection-sweep', 'Light deflection against impact parameter', 'Impact parameter', 'km', bs.map(x => x / 1000), [{ label: 'First-order formula', data: bs.map(x => (a.gr ? 4 : 2) * rgC / x * ARCSEC) }], 'Deflection', 'arcsec', { logx: true, logy: true }),
       ],
       checks: [
         check('Orbit integration reproduces the exact advance', a.gr && Number.isFinite(ode.advance) && o.exact > 0 ? (ode.advance - o.exact) / o.exact : 0, 5e-3, 'Fourth-order Runge–Kutta in the orbital angle against quadrature of the first integral'),
@@ -667,6 +678,11 @@ const schwarzschild = {
       cases: [{ label: 'Mercury', inputs: { M: SUN.mass, a: 0.38709893 * AU, e: 0.20563 }, observable: 'prec_arcsec', observed: 43.11, sigma: 0.45 }] },
     { name: 'Deflection of radio waves by the Sun', ref: 'Shapiro, S. S. et al. (2004) Phys. Rev. Lett. 92, 121101', note: 'VLBI result γ = 0.9998 ± 0.0004 expressed as the equivalent deflection at the solar limb, (1 + γ)/2 × 1.7512″.',
       cases: [{ label: 'Ray grazing the solar limb', inputs: { M: SUN.mass, b: 6.957e8 }, observable: 'defl_arcsec', observed: 1.7510, sigma: 0.0004 }] },
+    { name: 'Deflection of starlight at the 1919 eclipse', ref: 'Dyson, F. W., Eddington, A. S. & Davidson, C. (1920) Phil. Trans. R. Soc. A 220, 291–333', note: 'Deflections reduced to the solar limb, with the uncertainties (probable errors) published by the authors. Historically decisive against the Newtonian value of 0.87″, but far less precise than the radio measurement above.',
+      cases: [
+        { label: 'Sobral, 4-inch lens', inputs: { M: SUN.mass, b: 6.957e8 }, observable: 'defl_arcsec', observed: 1.98, sigma: 0.12 },
+        { label: 'Principe', inputs: { M: SUN.mass, b: 6.957e8 }, observable: 'defl_arcsec', observed: 1.61, sigma: 0.30 },
+      ] },
   ],
   diagram(v, a) {
     const e = Math.min(v.e, 0.9), rx = 150, ry = rx * Math.sqrt(1 - e * e), cx = 200 - rx * e;
@@ -739,14 +755,18 @@ const gps = {
     asm('circular', 'The orbit is circular, so the rate offset is constant.', { why: 'Navigation orbits are nearly circular', alt: 'An eccentric orbit adds a periodic term of amplitude 2e√(GMa)/c².' }),
     asm('spherical', 'The planet\'s potential is that of a point mass; the ground clock moves with the rotation at its latitude.', { why: 'Leading-order estimate', alt: 'The ground clock sits on the geoid, an equipotential of gravity plus rotation including the J₂ term, so its rate is the same at every latitude.' }),
   ],
-  symbols: { r: ['Orbital radius', 'm'], x_gr: ['Fractional rate offset, gravitational', '1'], x_sr: ['Fractional rate offset, velocity', '1'], x_net: ['Net fractional rate offset', '1'], v_s: ['Satellite speed', 'm/s'], v_g: ['Ground-clock speed', 'm/s'], dt: ['Accumulated clock offset', 's'], dx: ['Ranging error', 'm'], dt_e: ['Amplitude of the eccentricity term', 's'], tau: ['Proper time of a clock', 's'], t: ['Coordinate time', 's'], Phi: ['Newtonian potential (negative)', 'J/kg'], u: ['Clock speed', 'm/s'] },
+  symbols: { r: ['Orbital radius', 'm'], x_gr: ['Fractional rate offset, gravitational', '1'], x_sr: ['Fractional rate offset, velocity', '1'], x_net: ['Net fractional rate offset', '1'], v_s: ['Satellite speed', 'm/s'], v_g: ['Ground-clock speed', 'm/s'], dt: ['Accumulated clock offset', 's'], dx: ['Ranging error', 'm'], dt_e: ['Amplitude of the eccentricity term', 's'], tau: ['Proper time of a clock', 's'], t: ['Coordinate time', 's'], Phi: ['Newtonian potential (negative)', 'J/kg'], u: ['Clock speed', 'm/s'], J_2: ['Quadrupole coefficient of the planet', '1'] },
   equations: a => [
     eq('rate', 'Clock rate in a weak field', 'd(tau,t)', '1 + Phi/c^2 - u^2/(2*c^2)', { kind: 'law', origin: 'Schwarzschild metric to first order in Φ/c² and v²/c²' }),
     eq('rad', 'Orbital radius', 'r', 'R_E + h', { kind: 'definition' }),
     eq('vs', 'Circular orbital speed', 'v_s', 'sqrt(GM/r)', { kind: 'law', origin: 'Newton\'s law of gravitation' }),
-    ...(a.gr_term ? [eq('gr', 'Gravitational offset', 'x_gr', 'GM/c^2*(1/R_E - 1/r)', { kind: 'derived', origin: 'Difference of potentials between orbit and ground', needs: ['gr_term'] })] : []),
+    a.spherical ? eq('vg', 'Ground-clock speed', 'v_g', '2*pi*R_E*cos(lat)/T_rot', { kind: 'derived', origin: 'Rotation of the planet at the latitude of the clock' })
+      : eq('vg', 'Ground-clock speed on the equator of the geoid', 'v_g', '2*pi*R_E/T_rot', { kind: 'derived', origin: 'Rotation of the planet; the geoid is an equipotential, so the equatorial value represents every latitude' }),
+    ...(a.spherical || !a.gr_term ? [] : [eq('j2', 'Quadrupole coefficient of the planet', 'J_2', '1.08263e-3', { kind: 'empirical', origin: 'Earth value, held fixed', note: 'Not an input: it is the Earth\'s coefficient whatever planet the other inputs describe' })]),
+    ...(a.gr_term ? [a.spherical ? eq('gr', 'Gravitational offset', 'x_gr', 'GM/c^2*(1/R_E - 1/r)', { kind: 'derived', origin: 'Difference of potentials between orbit and ground', needs: ['gr_term'] })
+      : eq('gr', 'Gravitational offset from the geoid', 'x_gr', 'GM/c^2*((1 + J_2/2)/R_E - 1/r)', { kind: 'derived', origin: 'Difference of potentials between orbit and the equator of the geoid, including the quadrupole term', needs: ['gr_term'] })] : []),
     ...(a.sr_term ? [eq('sr', 'Velocity offset', 'x_sr', '-(v_s^2 - v_g^2)/(2*c^2)', { kind: 'derived', origin: 'Second-order Doppler (time dilation) of both clocks', needs: ['sr_term'] })] : []),
-    eq('net', 'Net fractional offset', 'x_net', a.gr_term && a.sr_term ? 'x_gr + x_sr' : a.gr_term ? 'x_gr' : a.sr_term ? 'x_sr' : '0*x_gr', { kind: 'derived' }),
+    eq('net', 'Net fractional offset', 'x_net', a.gr_term && a.sr_term ? 'x_gr + x_sr' : a.gr_term ? 'x_gr' : a.sr_term ? 'x_sr' : '0', { kind: 'derived' }),
     eq('acc', 'Accumulated time offset', 'dt', 'x_net*t_el', { kind: 'derived' }),
     eq('rng', 'Ranging error', 'dx', 'c*dt', { kind: 'derived', origin: 'Pseudorange = c × travel time' }),
     ...(a.circular ? [] : [eq('ecc', 'Eccentricity term amplitude', 'dt_e', '2*e*sqrt(GM*r)/c^2', { kind: 'derived', origin: 'Periodic variation of potential and speed around an eccentric orbit (Ashby 2003)' })]),
@@ -827,8 +847,8 @@ const gps = {
     safety: ['Radio-frequency exposure limits at uplink antennas', 'Laser-ranging aircraft-avoidance procedures'],
   },
   falsify: ['An orbiting clock whose rate, compared through a link free of first-order Doppler shift, does not differ from ground clocks by the predicted fraction within the measurement uncertainty.', 'A gravitational red-shift that depends on the type of atomic clock.', 'Navigation solutions that remain accurate with the relativistic corrections switched off.'],
-  alternatives: [{ name: 'Local-position-invariance violation', text: 'Parametrised as a red-shift of (1 + α)ΔΦ/c²; Gravity Probe A and eccentric Galileo satellites bound |α| to a few parts in 10⁵.' }, { name: 'Full post-Newtonian treatment', text: 'Adds the Sagnac correction for signal propagation in the rotating frame, Shapiro delay (millimetres to centimetres) and tidal potentials of the Sun and Moon.' }],
-  limits: 'First order in GM/(rc²) and v²/c². Ground clock on the equatorial radius (or the geoid when the J₂ option is selected). Signal-propagation effects (Sagnac, Shapiro, atmosphere) are not included.',
+  alternatives: [{ name: 'Local-position-invariance violation', text: 'Parametrised as a red-shift of (1 + α)ΔΦ/c²; Gravity Probe A bounded |α| at about 10⁻⁴ and the eccentric Galileo satellites at a few parts in 10⁵.' }, { name: 'Full post-Newtonian treatment', text: 'Adds the Sagnac correction for signal propagation in the rotating frame, Shapiro delay (millimetres to centimetres) and tidal potentials of the Sun and Moon.' }],
+  limits: 'First order in GM/(rc²) and v²/c². Ground clock on the equatorial radius (or the geoid when the J₂ option is selected; the J₂ coefficient is always that of the Earth). Signal-propagation effects (Sagnac, Shapiro, atmosphere) are not included.',
   numerics: { method: 'Closed-form weak-field rates; safeguarded secant root for the cancellation altitude' },
   optimise: { objective: 'x_net', sense: 'min', vars: ['h'], note: 'The net offset is most negative for the lowest orbits and crosses zero near half a planetary radius of altitude.' },
   inverse: { series: 'rate-altitude', curve: 0, fit: ['GM'] },
@@ -867,7 +887,7 @@ const blackHole = {
   assumptions: [
     asm('classical', 'The Schwarzschild solution is used all the way to r → 0, where the curvature diverges.', { why: 'It is the classical prediction; its divergence marks the limit of the theory', alt: 'A hypothetical Hayward-type regular metric with core length ℓ replaces it: the centre becomes a region of finite curvature. No evidence supports this particular form.' }),
     asm('hawking', 'The hole emits Hawking radiation as a black body of its horizon area.', { why: 'Semiclassical prediction (Hawking 1975)', alt: 'A purely classical hole: zero temperature, no emission, area can never decrease.' }),
-    asm('isolated', 'The hole is isolated in empty space at zero temperature.', { why: 'Defines the intrinsic evaporation time', alt: 'The hole absorbs ambient black-body radiation at T_bg over its capture cross-section 27πG²M²/c⁴ and evaporates only if hotter than its surroundings.' }),
+    asm('isolated', 'The hole is isolated in empty space at zero temperature.', { why: 'Defines the intrinsic evaporation time', alt: 'The hole absorbs ambient black-body radiation at T_bg over the same effective area as it emits, the horizon area in this black-body estimate, so that emission and absorption balance exactly when the two temperatures are equal; it evaporates only if hotter than its surroundings.' }),
   ],
   symbols: { r_s: ['Schwarzschild radius', 'm'], A_h: ['Horizon area', 'm^2'], kappa: ['Surface gravity', 'm/s^2'], T_H: ['Hawking temperature', 'K'], S_BH: ['Bekenstein–Hawking entropy', 'J/K'], P_H: ['Hawking luminosity', 'W'], t_ev: ['Evaporation time', 's'], K: ['Kretschmann curvature scalar', '1/m^4'], r: ['Radial coordinate', 'm'], da: ['Tidal acceleration across the body', 'm/s^2'], f_m: ['Metric function −g_tt', '1'], t: ['Time', 's'], M_0: ['Initial mass', 'kg'], P_abs: ['Power absorbed from the surroundings', 'W'] },
   equations: a => [
@@ -885,7 +905,7 @@ const blackHole = {
       a.isolated ? eq('ev', 'Mass loss', 'c^2*d(M,t)', '-P_H', { kind: 'law', origin: 'Conservation of energy', needs: ['isolated'] })
         : eq('ev', 'Mass loss with absorption', 'c^2*d(M,t)', '-P_H + P_abs', { kind: 'law', origin: 'Conservation of energy' }),
       eq('tev', 'Evaporation time', 't_ev', '5120*pi*G^2*M^3/(hbar*c^4)', { kind: 'derived', origin: 'Integration of the mass-loss equation' }),
-      ...(a.isolated ? [] : [eq('abs', 'Absorbed power', 'P_abs', '27*pi*G^2*M^2/c^4*sigma_SB*T_bg^4', { kind: 'derived', origin: 'Black-body flux over the photon capture cross-section' })]),
+      ...(a.isolated ? [] : [eq('abs', 'Absorbed power', 'P_abs', 'sigma_SB*A_h*T_bg^4', { kind: 'derived', origin: 'Black-body absorption over the same effective area as the emission (detailed balance)' })]),
     ] : [eq('ev', 'Mass is constant', 'M', 'M_0', { kind: 'law', origin: 'Classical area theorem: no emission' })]),
   ],
   derivation: a => [
@@ -900,7 +920,7 @@ const blackHole = {
     const TH = a.hawking ? hbar * c ** 3 / (8 * Math.PI * G * M * kB) : 0;
     const Sof = m => 4 * Math.PI * G * kB * m * m / (hbar * c), S = Sof(M);
     const PH = a.hawking ? hbar * c ** 6 / (15360 * Math.PI * G * G * M * M) : 0;
-    const Pabs = a.isolated ? 0 : 27 * Math.PI * G * G * M * M / c ** 4 * C.sigma_SB * v.T_bg ** 4;
+    const Pabs = a.isolated ? 0 : C.sigma_SB * A * v.T_bg ** 4; // same effective area as the emission, so that P_abs = P_H at T_bg = T_H
     const tev = 5120 * Math.PI * G * G * M ** 3 / (hbar * c ** 4);
     const grows = !a.hawking || (!a.isolated && Pabs >= PH);
     const Mcrit = v.T_bg > 0 ? hbar * c ** 3 / (8 * Math.PI * G * kB * v.T_bg) : Infinity;
@@ -927,7 +947,7 @@ const blackHole = {
         scalar('T_H', 'Hawking temperature', TH, 'K'), scalar('S_BH', 'Bekenstein–Hawking entropy', S, 'J/K'), scalar('S_kB', 'Entropy in units of the Boltzmann constant', S / kB, '1'),
         scalar('P_H', 'Hawking luminosity', PH, 'W'),
         scalar('P_net', 'Net power radiated', PH - Pabs, 'W'),
-        scalar('t_ev', 'Evaporation time', grows ? Infinity : tev, 's', { show: 'yr', text: grows ? (a.hawking ? 'Does not evaporate while colder than its surroundings' : 'Never: a classical black hole does not radiate') : undefined }),
+        scalar('t_ev', 'Evaporation time', grows ? Infinity : tev, 's', { show: 'yr', text: grows ? (a.hawking ? 'Does not evaporate while colder than its surroundings' : 'Never: a classical black hole does not radiate') : undefined, note: !grows && !a.isolated ? 'isolated-hole value: absorption lengthens it only while the hole is close to the background temperature' : undefined }),
         scalar('M_crit', 'Mass below which the hole is hotter than its surroundings', Mcrit, 'kg', { text: Number.isFinite(Mcrit) ? undefined : 'Any mass (zero background temperature)' }),
         scalar('da_h', 'Tidal acceleration across the body at the horizon', tidal(rs), 'm/s^2'), scalar('da_r', 'Tidal acceleration across the body at the chosen radius', tidal(r), 'm/s^2'),
         scalar('K_h', 'Kretschmann scalar at the horizon', 12 / rs ** 4, '1/m^4'), scalar('K_r', 'Kretschmann scalar at the chosen radius', Kr, '1/m^4', a.classical ? {} : { status: 'hypothetical' }),
@@ -954,6 +974,8 @@ const blackHole = {
     out.push(bench('Hawking temperature of one solar mass (K)', val(r, 'T_H'), 6.17e-8, 'ħc³/(8πGMk_B) ≈ 6.17 × 10⁻⁸ K', 2e-3));
     out.push(bench('Entropy of one solar mass in units of k_B', val(r, 'S_kB'), 1.049e77, '4πGM²/(ħc) ≈ 1.05 × 10⁷⁷', 2e-3));
     out.push(bench('Luminosity equals Stefan–Boltzmann law over the horizon', val(r, 'P_H'), C.sigma_SB * val(r, 'A_h') * val(r, 'T_H') ** 4, 'P = σ A T⁴ with σ = π²k_B⁴/(60ħ³c²)', 1e-6));
+    const eqm = this.solve({ ...v, M: hbar * c ** 3 / (8 * Math.PI * G * kB * 2.725), T_bg: 2.725 }, { ...on, isolated: false });
+    out.push(bench('Hole at the background temperature: absorbed over emitted power', 1 - val(eqm, 'P_net') / val(eqm, 'P_H'), 1, 'Detailed balance: no net exchange when T_H = T_bg', 1e-6));
     out.push(bench('Regular metric: central curvature tends to the de Sitter value', hayward(2953, 100, 1e-3).K, 24 / 100 ** 4, 'K(0) = 24/ℓ⁴', 1e-6));
     out.push(bench('Regular metric reduces to Schwarzschild far outside the core', hayward(2953, 1, 2953).K, kretschSchw(2953, 2953), 'ℓ ≪ r', 1e-5));
     return out;
@@ -1029,20 +1051,21 @@ const cosmology = {
     asm('lambda', 'Dark energy is a cosmological constant (w = −1).', { why: 'Simplest form consistent with all data', alt: 'Dark energy has a constant equation of state w₀ and density varying as a^(−3(1+w₀)).' }),
     asm('radiation', 'Radiation (photons and relativistic neutrinos) is included.', { why: 'It dominates before a redshift of about 3400', alt: 'Radiation is neglected, which permits closed-form solutions and shifts the age by under 0.1 %.' }),
   ],
-  symbols: { a_s: ['Scale factor (1 today)', '1'], t: ['Cosmic time', 's'], H: ['Hubble rate', '1/s'], Omega_k: ['Curvature density parameter', '1'], t_0: ['Age of the universe', 's'], D_C: ['Comoving distance', 'm'], D_M: ['Transverse comoving distance', 'm'], D_L: ['Luminosity distance', 'm'], D_A: ['Angular-diameter distance', 'm'], q_0: ['Deceleration parameter', '1'], rho_c: ['Critical density', 'kg/m^3'], t_L: ['Lookback time', 's'], w_de: ['Dark-energy equation of state', '1'] },
+  symbols: { a_s: ['Scale factor (1 today)', '1'], t: ['Cosmic time', 's'], H: ['Hubble rate', '1/s'], Omega_k: ['Curvature density parameter', '1'], t_0: ['Age of the universe', 's'], D_C: ['Comoving distance', 'm'], D_M: ['Transverse comoving distance', 'm'], D_L: ['Luminosity distance', 'm'], D_A: ['Angular-diameter distance', 'm'], q_0: ['Deceleration parameter', '1'], Omega_de: ['Dark-energy density parameter in use', '1'], rho_c: ['Critical density', 'kg/m^3'], t_L: ['Lookback time', 's'], w_de: ['Dark-energy equation of state', '1'] },
   equations: a => {
-    const de = a.lambda ? 'Omega_L' : 'Omega_L*a_s^(-3*(1 + w_0))', rad = a.radiation ? 'Omega_r/a_s^4 + ' : '', curv = a.flat ? '' : 'Omega_k/a_s^2 + ';
+    const de = a.lambda ? 'Omega_de' : 'Omega_de*a_s^(-3*(1 + w_0))', rad = a.radiation ? 'Omega_r/a_s^4 + ' : '', curv = a.flat ? '' : 'Omega_k/a_s^2 + ';
     return [
       eq('fried', 'Friedmann equation', '(d(a_s,t)/a_s)^2', `H_0^2*(${rad}Omega_m/a_s^3 + ${curv}${de})`, { kind: 'law', origin: 'Einstein field equations for a homogeneous, isotropic universe (Friedmann 1922)' }),
       eq('hub', 'Hubble rate', 'H', 'd(a_s,t)/a_s', { kind: 'definition' }),
-      a.flat ? eq('close', 'Flatness', 'Omega_L', a.radiation ? '1 - Omega_m - Omega_r' : '1 - Omega_m', { kind: 'closure', origin: 'Zero spatial curvature', needs: ['flat'] })
-        : eq('close', 'Curvature parameter', 'Omega_k', a.radiation ? '1 - Omega_m - Omega_r - Omega_L' : '1 - Omega_m - Omega_L', { kind: 'definition' }),
+      ...(a.flat ? [eq('close', 'Flatness fixes the dark-energy density', 'Omega_de', a.radiation ? '1 - Omega_m - Omega_r' : '1 - Omega_m', { kind: 'closure', origin: 'Zero spatial curvature', needs: ['flat'] })]
+        : [eq('de', 'Dark-energy density', 'Omega_de', 'Omega_L', { kind: 'definition', origin: 'Taken from its own input' }),
+          eq('close', 'Curvature parameter', 'Omega_k', a.radiation ? '1 - Omega_m - Omega_r - Omega_de' : '1 - Omega_m - Omega_de', { kind: 'definition' })]),
       eq('z', 'Redshift', '1 + z', '1/a_s', { kind: 'derived', origin: 'Stretching of wavelengths with the scale factor' }),
       eq('age', 'Age of the universe', 't_0', 'int(1/(a_s*H), a_s)', { kind: 'derived', origin: 'Integration of the Friedmann equation from a = 0 to 1' }),
       eq('dc', 'Comoving distance', 'D_C', 'c*int(1/H, z)', { kind: 'derived', origin: 'Null geodesic of the FLRW metric' }),
       eq('dl', 'Luminosity distance', 'D_L', '(1 + z)*D_M', { kind: 'derived', origin: 'Flux conservation with redshift of photon energy and arrival rate' }),
       eq('da', 'Angular-diameter distance', 'D_A', 'D_M/(1 + z)', { kind: 'derived', origin: 'Etherington reciprocity' }),
-      eq('q', 'Deceleration parameter today', 'q_0', `${a.radiation ? 'Omega_r + ' : ''}Omega_m/2 + ${a.lambda ? '-Omega_L' : '(1 + 3*w_0)/2*Omega_L'}`, { kind: 'derived', origin: 'Acceleration (second Friedmann) equation' }),
+      eq('q', 'Deceleration parameter today', 'q_0', `${a.radiation ? 'Omega_r + ' : ''}Omega_m/2 ${a.lambda ? '- Omega_de' : '+ (1 + 3*w_0)/2*Omega_de'}`, { kind: 'derived', origin: 'Acceleration (second Friedmann) equation' }),
       eq('rhoc', 'Critical density', 'rho_c', '3*H_0^2/(8*pi*G)', { kind: 'definition' }),
     ];
   },
@@ -1187,10 +1210,13 @@ const wormholeModel = {
     a.zero_tidal ? eq('tau', 'Radial tension required', 'tau_r', 'c^4/(8*pi*G)*b_s/r^3', { kind: 'law', origin: 'Einstein field equations, rr component', needs: ['zero_tidal'] })
       : eq('tau', 'Radial tension required', 'tau_r', 'c^4/(8*pi*G)*(b_s/r^3 - 2*(1 - b_s/r)*d(Phi,r)/r)', { kind: 'law', origin: 'Einstein field equations, rr component' }),
     eq('nec', 'Null-energy combination', 'w_nec', 'rho_e*c^2 - tau_r', { kind: 'definition', note: 'Negative values violate the null energy condition' }),
-    eq('lat', 'Lateral tidal acceleration at the throat', 'a_lat', a.ellis ? 'gamma^2*v^2*xi/b_0^2' : 'gamma^2*v^2*xi/(2*b_0^2)', { kind: 'derived', origin: 'Geodesic deviation in the traveller\'s frame (Morris & Thorne 1988)' }),
+    a.coast ? eq('gam', 'Lorentz factor of the traveller', 'gamma', '1/sqrt(1 - v^2/c^2)', { kind: 'definition' })
+      : eq('gm', 'Peak Lorentz factor, reached at the throat', 'g_m', '1 + a_c*l_1/c^2', { kind: 'derived', origin: 'Hyperbolic motion over proper distance l₁' }),
+    a.coast ? eq('lat', 'Lateral tidal acceleration at the throat', 'a_lat', a.ellis ? 'gamma^2*v^2*xi/b_0^2' : 'gamma^2*v^2*xi/(2*b_0^2)', { kind: 'derived', origin: 'Geodesic deviation in the traveller\'s frame (Morris & Thorne 1988)' })
+      : eq('lat', 'Lateral tidal acceleration at the throat', 'a_lat', a.ellis ? '(g_m^2 - 1)*c^2*xi/b_0^2' : '(g_m^2 - 1)*c^2*xi/(2*b_0^2)', { kind: 'derived', origin: 'Geodesic deviation in the traveller\'s frame (Morris & Thorne 1988), with γ²v² = (γ² − 1)c² at the throat' }),
     ...(a.zero_tidal ? [] : [eq('radt', 'Radial tidal acceleration at the throat', 'a_rad', a.ellis ? '2*phi_0*c^2*xi/b_0^2' : 'phi_0*c^2*xi/b_0^2', { kind: 'derived', origin: 'Geodesic deviation for a static observer' })]),
     ...(a.coast ? [eq('time', 'Proper crossing time', 'dtau', '2*l_1/(gamma*v)', { kind: 'derived', origin: 'Uniform motion in proper distance', needs: ['coast'] })]
-      : [eq('gm', 'Peak Lorentz factor', 'g_m', '1 + a_c*l_1/c^2', { kind: 'derived', origin: 'Hyperbolic motion over proper distance l₁' }), eq('time', 'Proper crossing time', 'dtau', '2*c/a_c*ln(g_m + sqrt(g_m^2 - 1))', { kind: 'derived', origin: 'Hyperbolic motion' })]),
+      : [eq('time', 'Proper crossing time', 'dtau', '2*c/a_c*ln(g_m + sqrt(g_m^2 - 1))', { kind: 'derived', origin: 'Hyperbolic motion' })]),
     ...(a.ellis ? [eq('mex', 'Integrated mass of the supporting matter', 'M_ex', '-pi*c^2*b_0/(2*G)', { kind: 'derived', origin: 'Proper-volume integral of the energy density over both sides of the throat' })] : []),
   ],
   derivation: a => [
@@ -1652,27 +1678,35 @@ const yukawa = {
     asm('point', 'Both bodies are treated as point masses.', { why: 'Simplest geometry', alt: 'Both are uniform spheres: the Yukawa term acquires a form factor for each sphere and the separation cannot be less than the sum of the radii.' }),
     asm('noise_free', 'The angular read-out is ideal: any deflection can be resolved.', { why: 'Shows the signal alone', alt: 'Thermal (Brownian) rotation of the pendulum, rms √(k_BT/κ), sets the scale against which the signal is compared.' }),
   ],
-  symbols: { F: ['Total force between the bodies', 'N'], F_N: ['Newtonian force', 'N'], V: ['Interaction potential energy', 'J'], dtheta: ['Anomalous deflection of the pendulum', 'rad'], E_med: ['Rest energy of the mediating boson', 'J'], theta_th: ['Thermal rms angle', 'rad'], x_1: ['Radius of the source sphere over the range', '1'], Phi_1: ['Form factor of the source sphere', '1'] },
-  equations: a => [
-    eq('newton', 'Newtonian force', 'F_N', 'G*m_1*m_2/r^2', { kind: 'law', origin: 'Newton\'s law of universal gravitation' }),
+  symbols: { F: ['Total force between the bodies', 'N'], F_N: ['Newtonian force', 'N'], V: ['Interaction potential energy', 'J'], dtheta: ['Anomalous deflection of the pendulum', 'rad'], E_med: ['Rest energy of the mediating boson', 'J'], theta_th: ['Thermal rms angle', 'rad'], R_1: ['Radius of the source sphere', 'm'], R_2: ['Radius of the test sphere', 'm'], Phi_1: ['Form factor of the source sphere, scaled by exp(−R₁/λ)', '1'], Phi_2: ['Form factor of the test sphere, scaled by exp(−R₂/λ)', '1'], r_eff: ['Separation used', 'm'] },
+  equations: a => { const r = a.point ? 'r' : 'r_eff', scr = k => `3*((R_${k}/lambda_Y - 1) + (R_${k}/lambda_Y + 1)*exp(-2*R_${k}/lambda_Y))/(2*(R_${k}/lambda_Y)^3)`; return [
+    ...(a.point ? [] : [
+      eq('R1', 'Radius of the source sphere', 'R_1', '(3*m_1/(4*pi*rho_m))^(1/3)', { kind: 'definition' }),
+      eq('R2', 'Radius of the test sphere', 'R_2', '(3*m_2/(4*pi*rho_m))^(1/3)', { kind: 'definition' }),
+      eq('reff', 'Separation used', 'r_eff', 'max(r, 1.0001*(R_1 + R_2))', { kind: 'boundary', origin: 'Solid spheres cannot overlap', note: 'A requested separation smaller than the sum of the radii is replaced by contact, with a margin of one part in 10⁴.' }),
+    ]),
+    eq('newton', 'Newtonian force', 'F_N', `G*m_1*m_2/${r}^2`, { kind: 'law', origin: 'Newton\'s law of universal gravitation' }),
     ...(a.yukawa ? [
-      eq('pot', 'Potential with a Yukawa term', 'V', '-G*m_1*m_2/r*(1 + alpha_Y*exp(-r/lambda_Y))', { kind: 'hypothesis', origin: 'Postulated exchange of a boson of mass ħ/(λc); α and λ are free parameters' }),
-      eq('force', 'Force with a Yukawa term', 'F', 'G*m_1*m_2/r^2*(1 + alpha_Y*(1 + r/lambda_Y)*exp(-r/lambda_Y))', { kind: 'hypothesis', origin: 'Negative gradient of the postulated potential' }),
+      ...(a.point ? [] : [
+        eq('form', 'Scaled Yukawa form factor of the source sphere', 'Phi_1', scr(1), { kind: 'derived', origin: 'Integration of the Yukawa potential over a uniform sphere', note: 'This is 3(x cosh x − sinh x)/x³ multiplied by exp(−x), with x = R₁/λ; the exponential is carried in the form factor so that the product stays finite when the sphere is much larger than the range.' }),
+        eq('form2', 'Scaled Yukawa form factor of the test sphere', 'Phi_2', scr(2), { kind: 'derived', origin: 'Integration of the Yukawa potential over a uniform sphere', note: 'This is 3(x cosh x − sinh x)/x³ multiplied by exp(−x), with x = R₂/λ.' }),
+      ]),
+      eq('pot', 'Potential with a Yukawa term', 'V', a.point ? '-G*m_1*m_2/r*(1 + alpha_Y*exp(-r/lambda_Y))' : '-G*m_1*m_2/r_eff*(1 + alpha_Y*Phi_1*Phi_2*exp(-(r_eff - R_1 - R_2)/lambda_Y))', { kind: 'hypothesis', origin: 'Postulated exchange of a boson of mass ħ/(λc); α and λ are free parameters' }),
+      eq('force', 'Force with a Yukawa term', 'F', a.point ? 'G*m_1*m_2/r^2*(1 + alpha_Y*(1 + r/lambda_Y)*exp(-r/lambda_Y))' : 'G*m_1*m_2/r_eff^2*(1 + alpha_Y*(1 + r_eff/lambda_Y)*Phi_1*Phi_2*exp(-(r_eff - R_1 - R_2)/lambda_Y))', { kind: 'hypothesis', origin: 'Negative gradient of the postulated potential' }),
       eq('med', 'Rest energy of the mediator', 'E_med', 'hbar*c/lambda_Y', { kind: 'hypothesis', origin: 'Range of a force carried by a massive boson (Yukawa 1935)' }),
-      ...(a.point ? [] : [eq('form', 'Yukawa form factor of a uniform sphere', 'Phi_1', '3*(x_1*cosh(x_1) - sinh(x_1))/x_1^3', { kind: 'derived', origin: 'Integration of the Yukawa potential over a uniform sphere' })]),
     ] : [
-      eq('pot', 'Potential with a power-law term', 'V', '-G*m_1*m_2/r*(1 + alpha_Y*(lambda_Y/r)^2)', { kind: 'hypothesis', origin: 'Postulated; of the form expected below the size of two extra dimensions' }),
-      eq('force', 'Force with a power-law term', 'F', 'G*m_1*m_2/r^2*(1 + 3*alpha_Y*(lambda_Y/r)^2)', { kind: 'hypothesis', origin: 'Negative gradient of the postulated potential' }),
+      eq('pot', 'Potential with a power-law term', 'V', `-G*m_1*m_2/${r}*(1 + alpha_Y*(lambda_Y/${r})^2)`, { kind: 'hypothesis', origin: 'Postulated; of the form expected below the size of two extra dimensions' }),
+      eq('force', 'Force with a power-law term', 'F', `G*m_1*m_2/${r}^2*(1 + 3*alpha_Y*(lambda_Y/${r})^2)`, { kind: 'hypothesis', origin: 'Negative gradient of the postulated potential' }),
     ]),
     eq('defl', 'Anomalous deflection of the pendulum', 'dtheta', '2*(F - F_N)*L_arm/kappa_t', { kind: 'derived', origin: 'Torque balance for two source–test pairs on opposite arms (Cavendish geometry)' }),
     ...(a.noise_free ? [] : [eq('noise', 'Thermal rms angle', 'theta_th', 'sqrt(k_B*T/kappa_t)', { kind: 'law', origin: 'Equipartition theorem for the torsional mode' })]),
-  ],
+  ]; },
   derivation: a => [
     { text: 'A static field carried by a boson of mass m obeys the screened Poisson equation, whose point-source solution falls off exponentially over the range λ = ħ/(mc).', tex: '\\left(\\nabla^2 - \\lambda^{-2}\\right)\\phi = 4\\pi G\\alpha\\,\\rho\\ \\Rightarrow\\ \\phi = -\\frac{G\\alpha m}{r}\\,e^{-r/\\lambda}' },
     { text: 'Adding this to the Newtonian potential and differentiating gives the force. For r ≪ λ gravity appears stronger by the factor 1 + α; for r ≫ λ it is Newtonian.', tex: 'F(r) = \\frac{G m_1 m_2}{r^2}\\left[1 + \\alpha\\left(1 + \\frac{r}{\\lambda}\\right)e^{-r/\\lambda}\\right]' },
     { text: 'The anomaly is largest, relative to gravity, at separations comparable with the range; this is why each experiment constrains α best near its own length scale.', tex: '\\frac{\\Delta F}{F_N} = \\alpha\\left(1 + \\frac{r}{\\lambda}\\right)e^{-r/\\lambda}' },
     { text: 'In a torsion balance with lever arm L and fibre constant κ the extra force on the two test masses twists the pendulum through a small angle.', tex: '\\Delta\\theta = \\frac{2\\,\\Delta F\\,L}{\\kappa}' },
-    ...(a.point ? [] : [{ text: 'For a uniform sphere of radius R the exterior Yukawa field is that of a point mass multiplied by a form factor greater than one.', tex: '\\Phi(x) = \\frac{3\\,(x\\cosh x - \\sinh x)}{x^3},\\qquad x = R/\\lambda' }]),
+    ...(a.point ? [] : [{ text: 'For a uniform sphere of radius R the exterior Yukawa field is that of a point mass multiplied by a form factor greater than one. The equations carry it multiplied by exp(−x), paired with the surface-to-surface gap in the exponential, which is the same product written so that it stays finite for spheres much larger than the range.', tex: '\\Phi(x) = \\frac{3\\,(x\\cosh x - \\sinh x)}{x^3},\\qquad \\Phi(x)\\,e^{-x} = \\frac{3\\left[(x-1)+(x+1)e^{-2x}\\right]}{2x^3},\\qquad x = R/\\lambda' }]),
   ],
   solve(v, a) {
     const q = fifthForce(v, a), warnings = [], lam = v.lambda_Y;
@@ -1823,7 +1857,7 @@ const tunnelling = {
     asm('rect', 'The barrier is rectangular.', { why: 'Standard idealisation', alt: 'The barrier is an inverted parabola of the same height and base width, solved by transfer matrix and compared with the Hill–Wheeler formula.' }),
     asm('symmetric', 'The potential is the same on both sides of the barrier.', { why: 'Unbiased junction', alt: 'The far side is lower by V_b, as in a biased junction; the transmitted wavenumber changes.' }),
   ],
-  symbols: { T: ['Transmission probability', '1'], R: ['Reflection probability', '1'], kappa: ['Decay constant inside the barrier', '1/m'], k_b: ['Wavenumber above the barrier', '1/m'], k_1: ['Incident wavenumber', '1/m'], k_3: ['Transmitted wavenumber', '1/m'], psi: ['Wavefunction (arbitrary normalisation)', '1'], x: ['Position', 'm'], V: ['Potential energy', 'J'], omega_b: ['Curvature frequency of the parabolic barrier', '1/s'] },
+  symbols: { T: ['Transmission probability', '1'], R: ['Reflection probability', '1'], kappa: ['Decay constant inside the barrier', '1/m'], k_b: ['Wavenumber above the barrier', '1/m'], k_1: ['Incident wavenumber', '1/m'], k_3: ['Transmitted wavenumber', '1/m'], psi: ['Wavefunction (arbitrary normalisation)', '1'], x: ['Position', 'm'], V: ['Potential energy', 'J'], omega_b: ['Curvature frequency of the parabolic barrier', '1/s'], T_hw: ['Transmission of an untruncated parabolic barrier', '1'] },
   equations: (a, v) => {
     const below = !v || v.E < v.V_0;
     return [
@@ -1833,7 +1867,7 @@ const tunnelling = {
         : eq('kap', 'Wavenumber above the barrier', 'k_b', 'sqrt(2*m_r*m_e*(E - V_0))/hbar', { kind: 'derived', origin: 'Schrödinger equation above the barrier top' }),
       ...(a.symmetric ? [] : [eq('k3', 'Transmitted wavenumber', 'k_3', 'sqrt(2*m_r*m_e*(E + V_b))/hbar', { kind: 'definition' })]),
       ...(!a.exact ? [below ? eq('T', 'WKB transmission', 'T', a.rect ? 'exp(-2*kappa*L)' : 'exp(-2*pi*(V_0 - E)/(hbar*omega_b))', { kind: 'closure', origin: 'Semiclassical approximation (Wentzel, Kramers, Brillouin 1926)' }) : eq('T', 'WKB transmission above the barrier', 'T', '1', { kind: 'closure', origin: 'Semiclassical approximation: no classically forbidden region' })]
-        : !a.rect ? [eq('T', 'Transmission of a parabolic barrier', 'T', '1/(1 + exp(2*pi*(V_0 - E)/(hbar*omega_b)))', { kind: 'derived', origin: 'Exact solution for an inverted parabola (Kemble 1935; Hill & Wheeler 1953)' })]
+        : !a.rect ? [eq('T', 'Transmission of an untruncated parabolic barrier', 'T_hw', '1/(1 + exp(2*pi*(V_0 - E)/(hbar*omega_b)))', { kind: 'derived', origin: 'Exact solution for an inverted parabola (Kemble 1935; Hill & Wheeler 1953)', note: 'Comparison value. The reported transmission is the transfer-matrix solution for the parabola cut off at its base, which has no closed form' })]
           : a.symmetric ? [below ? eq('T', 'Transmission below the barrier top', 'T', '1/(1 + V_0^2*sinh(kappa*L)^2/(4*E*(V_0 - E)))', { kind: 'derived', origin: 'Continuity of ψ and ψ′ at both edges', needs: ['exact', 'rect', 'symmetric'] })
             : eq('T', 'Transmission above the barrier top', 'T', '1/(1 + V_0^2*sin(k_b*L)^2/(4*E*(E - V_0)))', { kind: 'derived', origin: 'Continuity of ψ and ψ′ at both edges', needs: ['exact', 'rect', 'symmetric'] })]
             : [below ? eq('T', 'Transmission with unequal sides', 'T', '4*k_1*k_3*kappa^2/((k_1 + k_3)^2*kappa^2 + (kappa^2 + k_1^2)*(kappa^2 + k_3^2)*sinh(kappa*L)^2)', { kind: 'derived', origin: 'Continuity of ψ and ψ′ at both edges' })
@@ -2170,7 +2204,7 @@ const wavePacket = {
   summary: 'Evolution of a Gaussian wave packet: the analytic width σ(t), a Crank–Nicolson solution of the time-dependent Schrödinger equation, and the check that probability is conserved.',
   background: [
     'A particle localised to within σ₀ has, by the uncertainty principle, a spread of momenta of at least ħ/(2σ₀). Because the phase velocity of matter waves depends on momentum, the components drift apart and the packet broadens. For a free Gaussian the result is exact: the width grows as σ₀√(1 + (t/τ)²) with τ = 2mσ₀²/ħ, while the centre moves at the group velocity.',
-    'The spreading time is a few femtoseconds for an electron localised to an atom and far longer than the age of the universe for a dust grain, which is part of the reason macroscopic bodies do not visibly delocalise. In a harmonic trap the width does not grow without limit but breathes at twice the trap frequency.',
+    'The spreading time is about a tenth of a femtosecond for an electron localised to an atomic diameter and comparable with the age of the universe for a milligram grain localised to a few micrometres, which is part of the reason macroscopic bodies do not visibly delocalise. In a harmonic trap the width does not grow without limit but breathes at twice the trap frequency.',
   ],
   phenomena: ['Dispersion of matter waves', 'Group and phase velocity', 'Uncertainty principle', 'Unitary evolution', 'Interference of overlapping packets'],
   laws: ['schrodinger', 'uncertainty', 'born'],
@@ -2194,15 +2228,21 @@ const wavePacket = {
         : eq('tdse', 'Time-dependent Schrödinger equation in a trap', 'i_u*hbar*pd(psi,t)', '-hbar^2/(2*m_r*m_e)*pd2(psi,x) + m_r*m_e*omega_t^2*x^2/2*psi', { kind: 'law', origin: 'Schrödinger (1926)', note: 'i_u denotes the imaginary unit' }),
       eq('disp', 'Dispersion relation', 'omega_k', 'hbar*k^2/(2*m_r*m_e)', { kind: 'derived', origin: 'Plane-wave solution of the Schrödinger equation' }),
       eq('taus', 'Spreading time', 'tau_s', '2*m_r*m_e*sigma_0^2/hbar', { kind: 'definition' }),
-      a.free ? eq('sig', 'Width of the packet', 'sigma_t', 'sigma_0*sqrt(1 + (t/tau_s)^2)', { kind: 'derived', origin: 'Exact Gaussian solution (Kennard 1927)', needs: ['free', 'gaussian'] })
-        : eq('sig', 'Width of the packet in a trap', 'sigma_t', 'sigma_0*sqrt(cos(omega_t*t)^2 + sin(omega_t*t)^2/(omega_t*tau_s)^2)', { kind: 'derived', origin: 'Exact Gaussian solution in a harmonic potential' }),
+      ...(a.free ? [] : [eq('wt', 'Trap angular frequency', 'omega_t', '2*pi*f_t', { kind: 'definition' })]),
+      a.gaussian
+        ? (a.free ? eq('sig', 'Width of the packet', 'sigma_t', 'sigma_0*sqrt(1 + (t/tau_s)^2)', { kind: 'derived', origin: 'Exact Gaussian solution (Kennard 1927)', needs: ['free', 'gaussian'] })
+          : eq('sig', 'Width of the packet in a trap', 'sigma_t', 'sigma_0*sqrt(cos(omega_t*t)^2 + sin(omega_t*t)^2/(omega_t*tau_s)^2)', { kind: 'derived', origin: 'Exact Gaussian solution in a harmonic potential' }))
+        : (a.free ? eq('sig', 'Width of the two-packet state', 'sigma_t', 'sigma_0*sqrt((10 + exp(-9/2) + (1 - 8*exp(-9/2))*(t/tau_s)^2)/(1 + exp(-9/2)))', { kind: 'derived', origin: 'Exact second moments of two real Gaussians 6σ₀ apart under free evolution; exp(−9/2) is their overlap' })
+          : eq('sig', 'Width of the two-packet state in a trap', 'sigma_t', 'sigma_0*sqrt(((10 + exp(-9/2))*cos(omega_t*t)^2 + (1 - 8*exp(-9/2))*sin(omega_t*t)^2/(omega_t*tau_s)^2)/(1 + exp(-9/2)))', { kind: 'derived', origin: 'Exact second moments of two real Gaussians 6σ₀ apart in a harmonic potential' })),
+      eq('k0', 'Mean wavenumber', 'k_0', 'sqrt(2*m_r*m_e*E_k)/hbar', { kind: 'definition', origin: 'Mean kinetic energy ħ²k₀²/2m' }),
       eq('vg', 'Group velocity', 'v_g', 'hbar*k_0/(m_r*m_e)', { kind: 'derived', origin: 'dω/dk at the mean wavenumber' }),
     ] : [
       eq('disp', 'Dispersion relation', 'omega_k', 'c*k', { kind: 'law', origin: 'Wave equation for light in vacuum' }),
       eq('sig', 'Width of the packet', 'sigma_t', 'sigma_0', { kind: 'derived', origin: 'Non-dispersive propagation' }),
       eq('vg', 'Group velocity', 'v_g', 'c', { kind: 'derived', origin: 'dω/dk' }),
     ]),
-    eq('dp', 'Momentum uncertainty', 'dp', 'hbar/(2*sigma_0)', { kind: 'law', origin: 'Minimum-uncertainty Gaussian' }),
+    a.gaussian ? eq('dp', 'Momentum uncertainty', 'dp', 'hbar/(2*sigma_0)', { kind: 'law', origin: 'Minimum-uncertainty Gaussian' })
+      : eq('dp', 'Momentum uncertainty of the two-packet state', 'dp', 'hbar/(2*sigma_0)*sqrt((1 - 8*exp(-9/2))/(1 + exp(-9/2)))', { kind: 'derived', origin: 'Second moment of the momentum distribution of two real Gaussians 6σ₀ apart' }),
   ],
   derivation: a => [
     { text: 'Write the initial Gaussian as a superposition of plane waves. Its momentum distribution is also Gaussian, with the minimum spread allowed.', tex: '\\psi(x,0) = (2\\pi\\sigma_0^2)^{-1/4}\\,e^{-x^2/4\\sigma_0^2}\\,e^{ik_0x},\\qquad \\Delta p = \\frac{\\hbar}{2\\sigma_0}' },
@@ -2214,7 +2254,10 @@ const wavePacket = {
   solve(v, a) {
     const m = v.m_r * C.m_e, s0 = v.sigma_0, tauS = 2 * m * s0 * s0 / hbar, warnings = [];
     const p0 = Math.sqrt(2 * m * v.E_k), vg = a.massive ? p0 / m : c, om = 2 * Math.PI * v.f_t, wTau = a.free ? 0 : om * tauS;
-    const sigAn = t => (!a.massive ? s0 : a.free ? s0 * Math.sqrt(1 + (t / tauS) ** 2) : s0 * Math.sqrt(Math.cos(om * t) ** 2 + (Math.sin(om * t) / wTau) ** 2));
+    // second moments of the initial state in units of σ₀² and (ħ/2σ₀)²: one for a single Gaussian; for two real Gaussians
+    // at ±3σ₀ the overlap exp(−9/2) enters. With no initial position–momentum correlation these fix the width exactly.
+    const eC = Math.exp(-4.5), X2 = a.gaussian ? 1 : (10 + eC) / (1 + eC), P2 = a.gaussian ? 1 : (1 - 8 * eC) / (1 + eC);
+    const sigAn = t => (!a.massive ? s0 : a.free ? s0 * Math.sqrt(X2 + P2 * (t / tauS) ** 2) : s0 * Math.sqrt(X2 * Math.cos(om * t) ** 2 + P2 * (Math.sin(om * t) / wTau) ** 2));
     const tNum = Math.min(v.t, 4 * tauS), tp = tNum / tauS;
     if (v.t > 4 * tauS && a.massive) warnings.push('The numerical run covers the first four spreading times; beyond that the analytical width is reported and the grid would have to grow with the packet.');
     if (vg > 0.1 * c && a.massive) warnings.push('The group velocity exceeds a tenth of the speed of light; the non-relativistic equation is then only approximate.');
@@ -2226,19 +2269,19 @@ const wavePacket = {
       sigNum = sim.sig.at(-1) * s0; normErr = N.maxOf(sim.norms.map(q => Math.abs(q - 1)));
       if (a.free) { densAn = freeDensity(sim.x, tp, !a.gaussian); const nn = N.sum(densAn), m2 = N.sum(densAn.map((q, i) => q * sim.x[i] ** 2)); sigRef = Math.sqrt(m2 / nn) * s0; }
       else if (a.gaussian) { const s = sigAn(tNum) / s0; densAn = sim.x.map(q => Math.exp(-q * q / (2 * s * s)) / (Math.sqrt(2 * Math.PI) * s)); sigRef = s * s0; }
-      else sigRef = NaN;
+      else sigRef = sigAn(tNum);
     } else {
       const x = N.linspace(-12, 12, 481), d0 = x.map(q => Math.exp(-q * q / 2) / Math.sqrt(2 * Math.PI)), times = N.linspace(0, tp, 41);
       sim = { x, times, dens: times.map(() => d0), sig: times.map(() => 1), norms: times.map(() => 1) }; sigNum = s0; normErr = 0; densAn = d0; sigRef = s0;
     }
-    const sigT = a.gaussian ? sigAn(v.t) : (a.free && a.massive ? s0 * Math.sqrt(9 + 1 + (v.t / tauS) ** 2) : NaN);
+    const sigT = sigAn(v.t), sig0 = sigAn(0);
     const xc = a.massive && !a.free ? vg / om * Math.sin(om * v.t) : vg * v.t;
-    const tAx = sim.times.map(q => q * tauS * 1e15), sAn = sim.times.map(q => { const t = q * tauS; return a.gaussian ? sigAn(t) / s0 : (a.free ? Math.sqrt(10 + q * q) : NaN); });
-    const xnm = sim.x.map(q => q * s0 * 1e9), dp = hbar / (2 * s0);
+    const tAx = sim.times.map(q => q * tauS * 1e15), sAn = sim.times.map(q => sigAn(q * tauS) / s0);
+    const xnm = sim.x.map(q => q * s0 * 1e9), dp = (a.massive ? Math.sqrt(P2) : 1) * hbar / (2 * s0);
     return {
       scalars: [
-        scalar('sigma_t', 'Position uncertainty at the elapsed time', sigT, 'm', { show: 'nm', text: Number.isFinite(sigT) ? undefined : 'No closed form for two packets in a trap; see the numerical value' }),
-        scalar('spread', 'Growth factor σ(t)/σ₀', sigT / (a.gaussian ? s0 : s0 * Math.sqrt(10)), '1', { text: Number.isFinite(sigT) ? undefined : 'Not available in closed form' }),
+        scalar('sigma_t', 'Position uncertainty at the elapsed time', sigT, 'm', { show: 'nm' }),
+        scalar('spread', 'Growth factor σ(t)/σ(0)', sigT / sig0, '1'),
         scalar('tau_s', 'Spreading time 2mσ₀²/ħ', tauS, 's', { show: 'fs' }),
         scalar('t_num', 'Duration covered by the numerical run', tNum, 's', { show: 'fs' }),
         scalar('sigma_num', 'Width from the Crank–Nicolson solution at that time', sigNum, 'm', { show: 'nm' }),
@@ -2247,7 +2290,7 @@ const wavePacket = {
         scalar('norm_err', 'Largest departure of the norm from one', normErr, '1'),
         scalar('v_g', 'Group velocity', vg, 'm/s'), scalar('v_ph', 'Phase velocity', a.massive ? vg / 2 : c, 'm/s'),
         scalar('x_c', 'Displacement of the packet centre', xc, 'm', { show: 'nm' }),
-        scalar('v_sp', 'Asymptotic spreading speed ħ/(2mσ₀)', a.massive ? hbar / (2 * m * s0) : 0, 'm/s'),
+        scalar('v_sp', 'Asymptotic spreading speed Δp/m', a.massive ? dp / m : 0, 'm/s'),
         scalar('dp', 'Momentum uncertainty', dp, 'kg m/s'), scalar('unc', 'Uncertainty product σ(t)·Δp in units of ħ', (Number.isFinite(sigT) ? sigT : sigNum) * dp / hbar, '1'),
         scalar('lambda_dB', 'Mean de Broglie wavelength', p0 > 0 ? 2 * Math.PI * hbar / p0 : Infinity, 'm', { show: 'nm', text: p0 > 0 ? undefined : 'Infinite: the packet is at rest' }),
       ],
@@ -2275,6 +2318,8 @@ const wavePacket = {
     out.push(bench('Ground state of a matched trap keeps its width', s3.sig.at(-1), 1, 'ω_tτ_s = 1 makes the Gaussian the trap ground state', 2e-3));
     const s4 = crankNicolson({ tEnd: 2, cat: true }), d = freeDensity(s4.x, 2, true), l2 = Math.sqrt(N.sum(d.map((q, i) => (q - s4.dens.at(-1)[i]) ** 2)) / N.sum(d.map(q => q * q)));
     out.push(bench('Two interfering packets: numerical against analytical density', 1 + l2, 1, 'Relative L² difference of |ψ|²', 2e-2));
+    const eC = Math.exp(-4.5);
+    out.push(bench('Two packets: width after two spreading times', s4.sig.at(-1), Math.sqrt((10 + eC + (1 - 8 * eC) * 4) / (1 + eC)), 'Exact second moments: σ² = ⟨x²⟩₀ + (t/τ_s)²⟨p²⟩₀ in units of σ₀² and (ħ/2σ₀)²', 3e-3));
     return out;
   },
   validation: [],
@@ -2380,7 +2425,7 @@ const rabi = {
     const Om = 2 * Math.PI * v.f_R, D = 2 * Math.PI * v.f_D, tp = v.t_p, w0 = 2 * Math.PI * v.f_0, warnings = [];
     const g1 = a.markov ? v.gamma_1 : 0, g2 = a.markov ? v.gamma_1 / 2 + v.gamma_phi : 0, We = Math.hypot(Om, D), nOut = 601;
     let useRwa = a.rwa;
-    if (!a.rwa && v.f_0 * tp > 400) { useRwa = true; warnings.push('The pulse contains more than 400 carrier cycles; the counter-rotating ripple is not resolved and the rotating-wave result with the Bloch–Siegert shift is shown instead.'); }
+    if (!a.rwa && v.f_0 * tp > 400) { useRwa = true; warnings.push('The pulse contains more than 400 carrier cycles; the counter-rotating ripple is not resolved, so the rotating-wave result is shown instead; the Bloch–Siegert shift, listed separately, is not applied to it.'); }
     if (!a.rwa && v.f_R > 0.3 * v.f_0) warnings.push('The Rabi frequency is not small compared with the carrier frequency: the system is in the strong-driving regime and the Bloch–Siegert formula is only a first approximation.');
     const sG = tp / 6, env = t => (a.square ? 1 : tp / (sG * Math.sqrt(2 * Math.PI)) * Math.exp(-((t - tp / 2) ** 2) / (2 * sG * sG)));
     const peak = a.square ? 1 : tp / (sG * Math.sqrt(2 * Math.PI));
@@ -2490,7 +2535,6 @@ function decoherenceRates(v, a, aIn, dxIn) {
   return { LamAir, LamPh, dip, geo, lAir, lPh, gAir, gPh, grw, G: gAir + gPh + grw, M, Nn, nG, kth };
 }
 
-const catRateSum = a => [a.air ? 'Lambda_a' : '', a.photons ? 'Lambda_p' : ''].filter(Boolean).join(' + ') || '0*Lambda_a';
 
 const cat = {
   id: 'schrodinger-cat-decoherence',
@@ -2520,17 +2564,27 @@ const cat = {
     asm('saturate', 'The rate saturates once the separation exceeds the wavelength of the scattered particles, since one scattering event then fully resolves the two positions.', { why: 'Physical upper limit', alt: 'The long-wavelength formula ΛΔx² is applied at every separation, which overestimates the rate for large separations.' }),
     asm('no_collapse', 'The dynamics is exactly linear: there is no objective collapse.', { why: 'Standard quantum mechanics', alt: 'A hypothetical spontaneous-localisation term of Ghirardi–Rimini–Weber type is added (rate 10⁻¹⁶ s⁻¹ per nucleon, length 10⁻⁷ m). This is a modification of quantum mechanics with no experimental support to date.' }),
   ],
-  symbols: { Lambda_a: ['Localisation rate from gas collisions', '1/(m^2 s)'], Lambda_p: ['Localisation rate from thermal photons', '1/(m^2 s)'], Gamma: ['Decoherence rate', '1/s'], tau_D: ['Decoherence time', 's'], rho_c: ['Off-diagonal element of the density matrix', '1'], t: ['Time', 's'], n_g: ['Number density of the gas', '1/m^3'], zeta_9: ['Riemann zeta function at 9', '1'], Gamma_G: ['Hypothetical collapse rate', '1/s'], lambda_G: ['Collapse rate per nucleon', '1/s'], N_n: ['Number of nucleons', '1'], r_c: ['Collapse localisation length', 'm'], l_c: ['Coherence length of the scattering environment', 'm'], M_o: ['Mass of the object', 'kg'] },
+  symbols: { Lambda_a: ['Localisation rate from gas collisions', '1/(m^2 s)'], Lambda_p: ['Localisation rate from thermal photons', '1/(m^2 s)'], Gamma: ['Decoherence rate', '1/s'], tau_D: ['Decoherence time', 's'], rho_c: ['Off-diagonal element of the density matrix', '1'], t: ['Time', 's'], n_g: ['Number density of the gas', '1/m^3'], zeta_9: ['Riemann zeta function at 9', '1'], zeta_5: ['Riemann zeta function at 5', '1'], zeta_3: ['Riemann zeta function at 3', '1'], Lambda_d: ['Photon localisation rate of a sphere small compared with the thermal wavelength', '1/(m^2 s)'], Lambda_g: ['Photon localisation rate of a sphere large compared with the thermal wavelength', '1/(m^2 s)'], l_air: ['Separation at which gas collisions saturate', 'm'], l_ph: ['Separation at which photon scattering saturates', 'm'], Gamma_G: ['Hypothetical collapse rate', '1/s'], lambda_G: ['Collapse rate per nucleon', '1/s'], N_n: ['Number of nucleons', '1'], r_c: ['Collapse localisation length', 'm'], M_o: ['Mass of the object', 'kg'] },
   equations: a => [
     eq('rho', 'Decay of the interference term', 'd(rho_c,t)', '-Gamma*rho_c', { kind: 'law', origin: 'Master equation for scattering decoherence (Joos & Zeh 1985)' }),
     ...(a.air ? [eq('ng', 'Gas number density', 'n_g', 'p/(k_B*T)', { kind: 'closure', origin: 'Ideal-gas law' }),
       eq('la', 'Localisation rate from gas collisions', 'Lambda_a', '8/(3*hbar^2)*n_g*sqrt(2*pi*m_g)*a^2*(k_B*T)^(3/2)', { kind: 'derived', origin: 'Long-wavelength scattering of a thermal gas from a sphere (Joos & Zeh 1985)' })] : []),
-    ...(a.photons ? [eq('lp', 'Localisation rate from thermal photons', 'Lambda_p', '8*40320*zeta_9*c*a^6/(9*pi)*(k_B*T/(hbar*c))^9', { kind: 'derived', origin: 'Dipole scattering of black-body radiation from a dielectric sphere (Joos & Zeh 1985)' })] : []),
-    a.saturate
-      ? eq('gam', 'Decoherence rate with saturation', 'Gamma', `(${catRateSum(a)})*dx^2/(1 + dx^2/l_c^2)`, { kind: 'closure', origin: 'Interpolation between the long- and short-wavelength limits; written for a single coherence length for brevity' })
-      : eq('gam', 'Decoherence rate', 'Gamma', `(${catRateSum(a)})*dx^2`, { kind: 'derived', origin: 'Long-wavelength limit' }),
+    ...(a.photons ? [
+      eq('z9', 'Riemann zeta function at 9', 'zeta_9', '1.0020083928', { kind: 'definition' }),
+      eq('z5', 'Riemann zeta function at 5', 'zeta_5', '1.0369277551', { kind: 'definition' }),
+      eq('ld', 'Photon localisation rate, small sphere', 'Lambda_d', '8*40320*zeta_9*c*a^6/(9*pi)*(k_B*T/(hbar*c))^9', { kind: 'derived', origin: 'Dipole scattering of black-body radiation from a dielectric sphere (Joos & Zeh 1985)' }),
+      eq('lg', 'Photon localisation rate, large sphere', 'Lambda_g', '8*zeta_5*c*a^2/pi*(k_B*T/(hbar*c))^5', { kind: 'closure', origin: 'Geometric-optics estimate: black-body photon flux on the cross-section πa² times one third of the mean squared wavenumber; order of magnitude only' }),
+      eq('lp', 'Localisation rate from thermal photons', 'Lambda_p', 'Lambda_d*Lambda_g/(Lambda_d + Lambda_g)', { kind: 'closure', origin: 'Interpolation that follows the smaller of the two limiting rates' }),
+    ] : []),
+    ...(a.saturate && a.air ? [eq('lair', 'Separation at which gas collisions saturate', 'l_air', 'hbar*sqrt(3/(4*m_g*k_B*T))', { kind: 'derived', origin: 'The saturated rate equals the collision rate n v̄ πa²' })] : []),
+    ...(a.saturate && a.photons ? [
+      eq('z3', 'Riemann zeta function at 3', 'zeta_3', '1.2020569032', { kind: 'definition' }),
+      eq('lph', 'Separation at which photon scattering saturates', 'l_ph', 'sqrt(zeta_3/(4*zeta_5))*hbar*c/(k_B*T)', { kind: 'derived', origin: 'The saturated geometric rate equals the photon arrival rate on the cross-section' }),
+    ] : []),
+    eq('gam', a.saturate ? 'Decoherence rate with saturation' : 'Decoherence rate', 'Gamma', [a.air ? (a.saturate ? 'Lambda_a*dx^2/(1 + dx^2/l_air^2)' : 'Lambda_a*dx^2') : '', a.photons ? (a.saturate ? 'Lambda_p*dx^2/(1 + dx^2/l_ph^2)' : 'Lambda_p*dx^2') : '', a.no_collapse ? '' : 'Gamma_G'].filter(Boolean).join(' + ') || '0/t_obs',
+      a.saturate ? { kind: 'closure', origin: 'Sum over the active channels, each interpolated between its long- and short-wavelength limits' } : { kind: 'derived', origin: 'Sum over the active channels in the long-wavelength limit' }),
     eq('tau', 'Decoherence time', 'tau_D', '1/Gamma', { kind: 'definition' }),
-    ...(a.no_collapse ? [] : [eq('grw', 'Spontaneous-localisation rate', 'Gamma_G', 'lambda_G*N_n*(1 - exp(-dx^2/(4*r_c^2)))', { kind: 'hypothesis', origin: 'Ghirardi, Rimini & Weber (1986): a postulated modification of the Schrödinger equation' })]),
+    ...(a.no_collapse ? [] : [eq('grw', 'Spontaneous-localisation rate', 'Gamma_G', 'lambda_G*N_n*(1 - exp(-dx^2/(4*r_c^2)))', { kind: 'hypothesis', origin: 'Ghirardi, Rimini & Weber (1986): a postulated modification of the Schrödinger equation', note: 'λ_G = 10⁻¹⁶ s⁻¹ and r_c = 10⁻⁷ m; N_n is the mass of the object in atomic mass units' })]),
   ],
   derivation: a => [
     { text: 'Let the object be in a superposition of two positions and let a single environmental particle scatter from it. The particle\'s outgoing state depends on where the object is, so object and particle become entangled.', tex: '\\big(|x_1\\rangle + |x_2\\rangle\\big)|\\chi\\rangle\\ \\to\\ |x_1\\rangle|\\chi_1\\rangle + |x_2\\rangle|\\chi_2\\rangle' },
@@ -2557,6 +2611,7 @@ const cat = {
       scalars: [
         scalar('tau_D', 'Decoherence time', tauD, 's', { text: Number.isFinite(tauD) ? undefined : 'Infinite: no active channel' }), scalar('Gamma', 'Decoherence rate', G0, '1/s'),
         scalar('Lambda_a', 'Localisation rate from gas collisions', q.LamAir, '1/(m^2 s)'), scalar('Lambda_p', 'Localisation rate from thermal photons', q.LamPh, '1/(m^2 s)'),
+        scalar('Lambda_d', 'Photon localisation rate in the small-sphere (dipole) limit', a.photons ? q.dip : 0, '1/(m^2 s)'), scalar('Lambda_g', 'Photon localisation rate in the large-sphere (geometric) limit', a.photons ? q.geo : 0, '1/(m^2 s)'),
         scalar('G_air', 'Decoherence rate from gas collisions', q.gAir, '1/s'), scalar('G_ph', 'Decoherence rate from thermal photons', q.gPh, '1/s'),
         scalar('Gamma_G', 'Hypothetical spontaneous-localisation rate', q.grw, '1/s', { status: 'hypothetical' }),
         scalar('l_air', 'Separation at which gas collisions saturate', q.lAir, 'm', { show: 'pm' }), scalar('l_ph', 'Separation at which photon scattering saturates', q.lPh, 'm', { show: 'um' }),
@@ -2620,7 +2675,7 @@ const cat = {
   },
   falsify: ['Interference surviving for times much longer than the computed decoherence time under the stated environmental conditions.', 'Loss of visibility that does not scale with gas density or with the scattering cross-section.', 'For the hypothetical collapse term: loss of coherence in a well-isolated massive superposition beyond what every known environmental channel accounts for would support it; continued agreement with unmodified quantum mechanics at larger masses progressively excludes its parameter range.', 'The interpretive claims (which branch is "real") are not empirically falsifiable by this experiment.'],
   alternatives: [{ name: 'Copenhagen-type interpretations', text: 'A measurement yields one outcome with Born-rule probability; the quantum state is a tool for prediction. Same predictions as computed here.' }, { name: 'Everett (many-worlds)', text: 'All branches persist; decoherence defines the branches and explains why they do not interfere. Same predictions.' }, { name: 'de Broglie–Bohm', text: 'Particles have definite positions guided by the wavefunction; decoherence explains why empty branches no longer matter. Same predictions.' }, { name: 'Objective collapse (GRW, CSL, Diósi–Penrose)', text: 'The Schrödinger equation is modified so that superpositions of large objects collapse spontaneously. Different predictions, constrained by interferometry, heating and X-ray emission experiments.' }, { name: 'QBism and relational views', text: 'The state encodes an agent\'s information or is relative to an observer; there is no observer-independent fact for the formalism to settle.' }],
-  limits: 'Rigid sphere, two-branch position superposition, elastic scattering, dilute gas and black-body radiation at one common temperature. The photon rate assumes the dipole limit and switches to an order-of-magnitude geometric estimate for bodies larger than the thermal wavelength. Thermal emission by the object itself, internal degrees of freedom and gravity are not included. The saturation law is an interpolation.',
+  limits: 'Rigid sphere, two-branch position superposition, elastic scattering, dilute gas and black-body radiation at one common temperature. The photon rate interpolates between the dipole limit and an order-of-magnitude geometric estimate for bodies larger than the thermal wavelength. Thermal emission by the object itself, internal degrees of freedom and gravity are not included. The saturation law is an interpolation.',
   numerics: { method: 'Closed-form rates' },
   optimise: { objective: 'tau_D', sense: 'max', vars: ['p', 'T'], note: 'Coherence is preserved by ultra-high vacuum and low temperature.' },
   inverse: { series: 'tau-size', curve: 0, fit: ['p'] },
@@ -2681,12 +2736,13 @@ const doubleSlit = {
     asm('mono', 'All particles have the same speed.', { why: 'Ideal beam', alt: 'Speeds follow a Gaussian distribution of relative width dv_rel; the pattern is averaged and high-order fringes wash out.' }),
     asm('pure', 'The which-path marker is in a pure state, so visibility and distinguishability exhaust the budget: V² + D² = 1.', { why: 'Ideal detector', alt: 'The marker is partly mixed, with coherence γ: V = γ√(1 − D²), so V² + D² < 1.' }),
   ],
-  symbols: { lambda: ['de Broglie wavelength', 'm'], dy: ['Fringe spacing', 'm'], y: ['Position on the screen', 'm'], I_n: ['Normalised intensity', '1'], V_f: ['Fringe visibility', '1'], N_F: ['Far-field parameter', '1'] },
+  symbols: { lambda: ['de Broglie wavelength', 'm'], dy: ['Fringe spacing', 'm'], y: ['Position on the screen', 'm'], I_n: ['Normalised intensity', '1'], V_f: ['Fringe visibility', '1'], N_F: ['Far-field parameter', '1'], w_eff: ['Slit width used', 'm'] },
   equations: a => [
     eq('lam', 'de Broglie wavelength', 'lambda', '2*pi*hbar/(m*v)', { kind: 'law', origin: 'de Broglie (1924)' }),
+    eq('weff', 'Slit width used', 'w_eff', 'min(w_s, 0.95*d_s)', { kind: 'boundary', origin: 'Two slits cannot overlap', note: 'A slit wider than 95 % of the separation is reduced to that width.' }),
     eq('dy', 'Fringe spacing', 'dy', 'lambda*L/d_s', { kind: 'derived', origin: 'Path difference of one wavelength between the two slits', needs: ['fraunhofer'] }),
-    ...(a.fraunhofer ? [eq('I', 'Intensity on the screen', 'I_n', '(sin(pi*w_s*y/(lambda*L))/(pi*w_s*y/(lambda*L)))^2*(1 + V_f*cos(2*pi*d_s*y/(lambda*L)))/2', { kind: 'derived', origin: 'Superposition of the two slit amplitudes in the far field', needs: ['fraunhofer'] })] : []),
-    eq('nf', 'Far-field parameter', 'N_F', 'd_s*w_s/(lambda*L)', { kind: 'definition', note: 'Each slit throws its own diffraction envelope, centred on that slit; the far-field pattern applies when the offset d/2 is small compared with the envelope width λL/w, that is N_F ≪ 1' }),
+    ...(a.fraunhofer ? [eq('I', 'Intensity on the screen', 'I_n', '(sin(pi*w_eff*y/(lambda*L))/(pi*w_eff*y/(lambda*L)))^2*(1 + V_f*cos(2*pi*d_s*y/(lambda*L)))/2', { kind: 'derived', origin: 'Superposition of the two slit amplitudes in the far field', needs: ['fraunhofer'] })] : []),
+    eq('nf', 'Far-field parameter', 'N_F', 'd_s*w_eff/(lambda*L)', { kind: 'definition', note: 'Each slit throws its own diffraction envelope, centred on that slit; the far-field pattern applies when the offset d/2 is small compared with the envelope width λL/w, that is N_F ≪ 1' }),
     a.pure ? eq('vis', 'Visibility with which-path information', 'V_f', 'sqrt(1 - D_w^2)', { kind: 'law', origin: 'Duality relation for a pure marker state (Englert 1996)', needs: ['pure'] })
       : eq('vis', 'Visibility with a mixed marker', 'V_f', 'gamma_c*sqrt(1 - D_w^2)', { kind: 'derived', origin: 'Duality relation with a partly mixed marker' }),
     a.pure ? eq('dual', 'Duality relation', 'V_f^2 + D_w^2', '1', { kind: 'law', origin: 'Englert (1996); Jaeger, Shimony & Vaidman (1995)' })
@@ -2723,7 +2779,7 @@ const doubleSlit = {
     return {
       scalars: [
         scalar('lambda', 'de Broglie wavelength', lam, 'm', { show: 'nm' }), scalar('p', 'Momentum', v.m * v.v, 'kg m/s'), scalar('E_k', 'Kinetic energy', 0.5 * v.m * v.v ** 2, 'J', { show: 'meV' }),
-        scalar('dy', 'Fringe spacing λL/d', dy, 'm', { show: 'um' }), scalar('y_env', 'First zero of the single-slit envelope', lam * L / w, 'm', { show: 'um' }),
+        scalar('dy', 'Fringe spacing λL/d', dy, 'm', { show: 'um' }), scalar('w_eff', 'Slit width used', w, 'm', { show: 'um' }), scalar('y_env', 'First zero of the single-slit envelope', lam * L / w, 'm', { show: 'um' }),
         scalar('n_fr', 'Bright fringes inside the central envelope', 2 * Math.floor(d / w - 1e-9) + 1, '1'),
         scalar('V_f', 'Fringe visibility predicted', V, '1'), scalar('V_num', 'Fringe visibility measured on the computed pattern', Vnum, '1'),
         scalar('D_w', 'Path distinguishability', D, '1'), scalar('duality', 'V² + D²', V * V + D * D, '1', { note: V * V + D * D > 1 - 1e-9 ? 'equality: pure marker' : 'strictly below one: mixed marker' }),
@@ -3005,15 +3061,15 @@ const casimir = {
     asm('smooth', 'The surfaces are perfectly smooth.', { why: 'Idealisation', alt: 'Stochastic roughness of rms amplitude σ_r increases the mean force by the second-order factor 1 + n(n+1)σ_r²/(2a²).' }),
     asm('pfa', 'The sphere–plate force follows the proximity-force approximation.', { why: 'Accurate when the gap is much smaller than the radius', alt: 'The leading curvature correction, a factor 1 + (1/3 − 20/π²)a/(2R), is applied.' }),
   ],
-  symbols: { P_C: ['Casimir pressure between parallel plates', 'Pa'], F_sp: ['Sphere–plate force', 'N'], E_A: ['Casimir energy per unit area', 'J/m^2'], eta_c: ['Finite-conductivity factor', '1'], eta_T: ['Thermal factor', '1'], T_eff: ['Effective temperature of the gap', 'K'], delta_p: ['Penetration depth of the field into the metal', 'm'], F_pp: ['Force between the plates', 'N'] },
+  symbols: { P_C: ['Casimir pressure between parallel plates', 'Pa'], F_sp: ['Sphere–plate force', 'N'], E_A: ['Casimir energy per unit area', 'J/m^2'], eta_c: ['Finite-conductivity factor', '1'], eta_T: ['Thermal factor', '1'], T_eff: ['Effective temperature of the gap', 'K'], delta_p: ['Penetration depth of the field into the metal', 'm'], F_pp: ['Force between the plates', 'N'], eta_c1: ['Finite-conductivity factor to first order', '1'], eta_T1: ['Thermal factor to leading order', '1'], eta_cE: ['Finite-conductivity factor on the energy per unit area', '1'], eta_TE: ['Thermal factor on the free energy per unit area', '1'] },
   equations: a => [
     eq('P', 'Casimir pressure', 'P_C', `pi^2*hbar*c/(240*a^4)${a.ideal ? '' : '*eta_c'}${a.zero_T ? '' : '*eta_T'}${a.smooth ? '' : '*(1 + 10*sigma_r^2/a^2)'}`, { kind: 'law', origin: 'Zero-point energy of the electromagnetic field between ideal mirrors (Casimir 1948)' }),
     eq('E', 'Casimir energy per unit area (ideal, zero temperature)', 'E_A', '-pi^2*hbar*c/(720*a^3)', { kind: 'derived', origin: 'Integral of the pressure over separation' }),
     eq('F', 'Force between the plates', 'F_pp', 'P_C*A_p', { kind: 'definition' }),
-    eq('sp', 'Sphere–plate force', 'F_sp', `pi^3*hbar*c*R_s/(360*a^3)${a.smooth ? '' : '*(1 + 6*sigma_r^2/a^2)'}${a.pfa ? '' : '*(1 + (1/3 - 20/pi^2)*a/(2*R_s))'}`, { kind: 'derived', origin: 'Proximity-force approximation: F = 2πR × energy per unit area (Derjaguin 1934)', needs: ['pfa'] }),
+    eq('sp', 'Sphere–plate force', 'F_sp', `pi^3*hbar*c*R_s/(360*a^3)${a.ideal ? '' : '*eta_cE'}${a.zero_T ? '' : '*eta_TE'}${a.smooth ? '' : '*(1 + 6*sigma_r^2/a^2)'}${a.pfa ? '' : '*(1 + (1/3 - 20/pi^2)*a/(2*R_s))'}`, { kind: 'derived', origin: 'Proximity-force approximation: F = 2πR × energy per unit area (Derjaguin 1934)', needs: ['pfa'] }),
     eq('teff', 'Effective temperature', 'T_eff', 'hbar*c/(2*a*k_B)', { kind: 'definition', note: 'Thermal corrections are small for T ≪ T_eff' }),
-    ...(a.ideal ? [] : [eq('pen', 'Penetration depth', 'delta_p', 'lambda_p/(2*pi)', { kind: 'definition', origin: 'Plasma model' }), eq('etac', 'Leading finite-conductivity factor', 'eta_c', '1 - 16*delta_p/(3*a)', { kind: 'derived', origin: 'First-order expansion of the Lifshitz formula for the plasma model; the full integral is used in the calculation' })]),
-    ...(a.zero_T ? [] : [eq('etat', 'Low-temperature thermal factor', 'eta_T', '1 + (T/T_eff)^4/3', { kind: 'derived', origin: 'Matsubara sum for ideal mirrors, leading term; the full sum is used in the calculation' })]),
+    ...(a.ideal ? [] : [eq('pen', 'Penetration depth', 'delta_p', 'lambda_p/(2*pi)', { kind: 'definition', origin: 'Plasma model' }), eq('etac', 'Leading finite-conductivity factor', 'eta_c1', '1 - 16*delta_p/(3*a)', { kind: 'derived', origin: 'First-order expansion of the Lifshitz formula for the plasma model', note: 'Useful only for δ_p ≪ a. The factors η_c (pressure) and η_cE (energy) applied above come from the full Lifshitz integral' })]),
+    ...(a.zero_T ? [] : [eq('etat', 'Low-temperature thermal factor', 'eta_T1', '1 + (T/T_eff)^4/3', { kind: 'derived', origin: 'Matsubara sum for ideal mirrors, leading term', note: 'Valid for T ≪ T_eff. The factors η_T (pressure) and η_TE (free energy) applied above come from the full Matsubara sum' })]),
   ],
   derivation: a => [
     { text: 'Between perfect mirrors a distance a apart the field modes have discrete wavenumbers nπ/a normal to the plates. The zero-point energy per unit area is a divergent sum, but its difference from the free-space value is finite.', tex: '\\frac{E}{A} = \\frac{\\hbar c}{2}\\sum_{\\rm modes}\\!k\\ -\\ (\\text{same without plates}) = -\\frac{\\pi^2\\hbar c}{720\\,a^3}' },
@@ -3161,24 +3217,33 @@ const statistics = {
     asm('uniform', 'The gas is uniform, in a box of fixed density.', { why: 'Textbook case', alt: 'The gas is held in a three-dimensional harmonic trap with N_at particles: T_c and E_F then depend on particle number and trap frequency.' }),
     asm('nonrel', 'The fermions are non-relativistic, E = p²/2m.', { why: 'Valid when the Fermi energy is far below the rest energy', alt: 'The fermions are ultra-relativistic, E = pc, as for electrons in a massive white dwarf.' }),
   ],
-  symbols: { f_BE: ['Bose–Einstein occupation', '1'], f_FD: ['Fermi–Dirac occupation', '1'], f_MB: ['Maxwell–Boltzmann occupation', '1'], E_s: ['Single-particle energy', 'J'], mu_c: ['Chemical potential', 'J'], T_x: ['Temperature', 'K'], lambda_T: ['Thermal de Broglie wavelength', 'm'], T_c: ['Bose–Einstein condensation temperature', 'K'], f_0: ['Condensate fraction', '1'], E_F: ['Fermi energy', 'J'], T_F: ['Fermi temperature', 'K'], zeta_32: ['Riemann zeta function at 3/2', '1'], zeta_3: ['Riemann zeta function at 3', '1'], omega_t: ['Trap angular frequency', '1/s'], dT_rel: ['Fractional shift of T_c from interactions', '1'], a_ho: ['Oscillator length of the trap', 'm'] },
+  symbols: { f_BE: ['Bose–Einstein occupation', '1'], f_FD: ['Fermi–Dirac occupation', '1'], f_MB: ['Maxwell–Boltzmann occupation', '1'], E_s: ['Single-particle energy', 'J'], mu_c: ['Chemical potential', 'J'], T_x: ['Temperature', 'K'], lambda_T: ['Thermal de Broglie wavelength', 'm'], T_c: ['Bose–Einstein condensation temperature', 'K'], f_0: ['Condensate fraction', '1'], E_F: ['Fermi energy', 'J'], T_F: ['Fermi temperature', 'K'], T_c0: ['Condensation temperature of the ideal gas', 'K'], zeta_32: ['Riemann zeta function at 3/2', '1'], zeta_3: ['Riemann zeta function at 3', '1'], omega_t: ['Trap angular frequency', '1/s'], dT_rel: ['Fractional shift of T_c from interactions', '1'], a_ho: ['Oscillator length of the trap', 'm'] },
   equations: a => [
     eq('be', 'Bose–Einstein distribution', 'f_BE', '1/(exp((E_s - mu_c)/(k_B*T_x)) - 1)', { kind: 'law', origin: 'Symmetric states of identical bosons (Bose 1924; Einstein 1925)' }),
     eq('fd', 'Fermi–Dirac distribution', 'f_FD', '1/(exp((E_s - mu_c)/(k_B*T_x)) + 1)', { kind: 'law', origin: 'Pauli exclusion principle (Fermi 1926; Dirac 1926)' }),
     eq('mb', 'Maxwell–Boltzmann distribution', 'f_MB', 'exp(-(E_s - mu_c)/(k_B*T_x))', { kind: 'law', origin: 'Classical limit of both' }),
     eq('lam', 'Thermal de Broglie wavelength of the bosons', 'lambda_T', 'sqrt(2*pi*hbar^2/(m_b*k_B*T_b))', { kind: 'definition' }),
     ...(a.uniform ? [
-      eq('tc', 'Condensation temperature of a uniform gas', 'T_c', '2*pi*hbar^2/(m_b*k_B)*(n_b/zeta_32)^(2/3)', { kind: 'derived', origin: 'Saturation of the excited states: nλ³ = ζ(3/2) (Einstein 1925)', needs: ['uniform', 'ideal'] }),
-      eq('f0', 'Condensate fraction', 'f_0', '1 - (T_b/T_c)^(3/2)', { kind: 'derived', origin: 'Particles not accommodated in excited states' }),
+      eq('z32', 'Riemann zeta function at 3/2', 'zeta_32', '2.612375349', { kind: 'definition' }),
+      eq('tc', 'Condensation temperature of a uniform ideal gas', a.ideal ? 'T_c' : 'T_c0', '2*pi*hbar^2/(m_b*k_B)*(n_b/zeta_32)^(2/3)', { kind: 'derived', origin: 'Saturation of the excited states: nλ³ = ζ(3/2) (Einstein 1925)', needs: ['uniform', 'ideal'] }),
+      ...(a.ideal ? [] : [
+        eq('shift', 'Interaction shift of T_c', 'dT_rel', '1.3*a_sc*n_b^(1/3)', { kind: 'empirical', origin: 'Lattice Monte-Carlo result (Arnold & Moore 2001; Kashurnikov, Prokof\'ev & Svistunov 2001)' }),
+        eq('tcs', 'Condensation temperature with interactions', 'T_c', 'T_c0*(1 + dT_rel)', { kind: 'derived', origin: 'Leading interaction shift applied to the ideal-gas value' }),
+      ]),
+      eq('f0', 'Condensate fraction', 'f_0', 'max(0, 1 - (T_b/T_c)^(3/2))', { kind: 'derived', origin: 'Particles not accommodated in excited states' }),
       a.nonrel ? eq('ef', 'Fermi energy', 'E_F', 'hbar^2/(2*m_r*m_e)*(3*pi^2*n_f)^(2/3)', { kind: 'derived', origin: 'Filling of momentum states up to the Fermi sphere, two spin states', needs: ['nonrel'] })
         : eq('ef', 'Fermi energy, ultra-relativistic', 'E_F', 'hbar*c*(3*pi^2*n_f)^(1/3)', { kind: 'derived', origin: 'Filling of momentum states with E = pc' }),
-      ...(a.ideal ? [] : [eq('shift', 'Interaction shift of T_c', 'dT_rel', '1.3*a_sc*n_b^(1/3)', { kind: 'empirical', origin: 'Lattice Monte-Carlo result (Arnold & Moore 2001; Kashurnikov, Prokof\'ev & Svistunov 2001)' })]),
     ] : [
       eq('wt', 'Trap angular frequency', 'omega_t', '2*pi*f_tr', { kind: 'definition' }),
-      eq('tc', 'Condensation temperature in a harmonic trap', 'k_B*T_c', 'hbar*omega_t*(N_at/zeta_3)^(1/3)', { kind: 'derived', origin: 'Saturation of the excited states of a three-dimensional oscillator' }),
-      eq('f0', 'Condensate fraction', 'f_0', '1 - (T_b/T_c)^3', { kind: 'derived', origin: 'Density of states of a harmonic trap' }),
+      eq('z3', 'Riemann zeta function at 3', 'zeta_3', '1.2020569032', { kind: 'definition' }),
+      eq('tc', 'Condensation temperature of an ideal gas in a harmonic trap', a.ideal ? 'T_c' : 'T_c0', 'hbar*omega_t/k_B*(N_at/zeta_3)^(1/3)', { kind: 'derived', origin: 'Saturation of the excited states of a three-dimensional oscillator' }),
+      ...(a.ideal ? [] : [
+        eq('aho', 'Oscillator length of the trap', 'a_ho', 'sqrt(hbar/(m_b*omega_t))', { kind: 'definition' }),
+        eq('shift', 'Interaction shift of T_c', 'dT_rel', '-3.426*a_sc/a_ho*N_at^(1/6)', { kind: 'derived', origin: 'Mean-field theory (Giorgini, Pitaevskii & Stringari 1996)' }),
+        eq('tcs', 'Condensation temperature with interactions', 'T_c', 'T_c0*(1 + dT_rel)', { kind: 'derived', origin: 'Leading interaction shift applied to the ideal-gas value' }),
+      ]),
+      eq('f0', 'Condensate fraction', 'f_0', 'max(0, 1 - (T_b/T_c)^3)', { kind: 'derived', origin: 'Density of states of a harmonic trap' }),
       eq('ef', 'Fermi energy in a harmonic trap', 'E_F', 'hbar*omega_t*(6*N_at)^(1/3)', { kind: 'derived', origin: 'Filling of oscillator states, one spin state' }),
-      ...(a.ideal ? [] : [eq('shift', 'Interaction shift of T_c', 'dT_rel', '-3.426*a_sc/a_ho*N_at^(1/6)', { kind: 'derived', origin: 'Mean-field theory (Giorgini, Pitaevskii & Stringari 1996)' })]),
     ]),
     eq('tf', 'Fermi temperature', 'T_F', 'E_F/k_B', { kind: 'definition' }),
   ],

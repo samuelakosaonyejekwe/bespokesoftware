@@ -537,6 +537,15 @@ function catenary(v, a, H) {
   const Ta = Va > 0 ? Math.hypot(H, Va) : Math.max(H - mu * w * Lg, 0);
   return { H, s, Va, Vt, Lg, xs, X: Lg + stretch + xs, xg: Lg + stretch, Ttop, Ta, theta: Math.atan2(Vt, H), Lt, ac, zOf, xOf, resid: (zOf(Va, s) - d) / d };
 }
+/** Horizontal stiffness dT_H/dX of the inextensible line: grounded line, or fully suspended with anchor uplift. */
+function catenaryStiffness(v, H) {
+  const w = v.w, d = v.d, Lt = v.scope * d, ac = H / w;
+  if (!(Math.sqrt(d * (d + 2 * ac)) > Lt)) return w / (Math.acosh(1 + d / ac) - 2 / Math.sqrt(1 + 2 * ac / d));
+  const q2 = Lt * Lt - d * d, p = Math.sqrt(q2 / (4 * ac * ac + q2)), p2 = p * p;
+  // atanh(p) − p, from its power series when the line is nearly taut
+  const f = p > 0.1 ? Math.atanh(p) - p : p * p2 * (1 / 3 + p2 * (1 / 5 + p2 * (1 / 7 + p2 * (1 / 9 + p2 / 11))));
+  return w / (2 * f);
+}
 function catenaryFromTop(v, a, T0) {
   const f = H => catenary(v, a, H).Ttop - T0, lo = 1e-6 * T0;
   if (f(lo) >= 0) return { c: catenary(v, a, lo), slack: true };
@@ -569,38 +578,53 @@ const catenaryMooring = {
     asm('h_given', 'The specified tension is the horizontal component at the fairlead.', { why: 'Natural variable of the catenary equations', alt: 'The specified tension is the total tension at the fairlead; the horizontal component is found from it.' }),
     asm('no_friction', 'Seabed friction on the grounded length is neglected, so the anchor sees the full horizontal tension.', { why: 'Conservative for anchor load', alt: 'Coulomb friction μ·w per unit length reduces the tension along the grounded line towards the anchor.' }),
   ],
-  symbols: { T_H: ['Horizontal tension', 'N'], T_top: ['Tension at the fairlead', 'N'], T_a: ['Tension at the anchor', 'N'], a_c: ['Catenary parameter', 'm'], s_s: ['Suspended (unstretched) length', 'm'], l_f: ['Grounded length over which friction is mobilised', 'm'], x_s: ['Horizontal span of the suspended length', 'm'], X: ['Horizontal distance from anchor to fairlead', 'm'], L_t: ['Total line length', 'm'], theta_top: ['Line angle to the horizontal at the fairlead', 'rad'], k_h: ['Horizontal restoring stiffness', 'N/m'] },
-  equations: a => [
-    a.h_given ? eq('spec', 'Specified tension', 'T_H', 'T_0', { kind: 'boundary', needs: ['h_given'] }) : eq('spec', 'Specified tension', 'T_top', 'T_0', { kind: 'boundary' }),
-    eq('ac', 'Catenary parameter', 'a_c', 'T_H/w', { kind: 'definition' }),
-    eq('lt', 'Total line length', 'L_t', 'scope*d', { kind: 'definition' }),
-    a.inelastic
-      ? eq('ss', 'Suspended length', 's_s', 'sqrt(d*(d + 2*a_c))', { kind: 'derived', origin: 'Vertical equilibrium and geometry of the catenary with zero slope at touchdown', needs: ['inelastic'], note: 'Holds while some line rests on the seabed (s_s ≤ L_t). Once the whole line is lifted the anchor carries uplift and the solver finds the anchor vertical force numerically.' })
-      : eq('ss', 'Vertical span of the elastic catenary', 'd', 'a_c*(sqrt(1 + (w*s_s/T_H)^2) - 1) + w*s_s^2/(2*EA)', { kind: 'derived', origin: 'Irvine (1981), elastic catenary' }),
-    eq('xs', 'Horizontal span of the suspended line', 'x_s', `a_c*ln(w*s_s/T_H + sqrt(1 + (w*s_s/T_H)^2))${a.inelastic ? '' : ' + T_H*s_s/EA'}`, { kind: 'derived', origin: 'Integration of the catenary slope along the line' }),
-    a.inelastic
-      ? eq('tt', 'Tension at the fairlead', 'T_top', 'T_H + w*d', { kind: 'derived', origin: 'Force equilibrium of the suspended line', needs: ['inelastic'] })
-      : eq('tt', 'Tension at the fairlead', 'T_top', 'sqrt(T_H^2 + (w*s_s)^2)', { kind: 'law', origin: 'Force equilibrium of the suspended line' }),
-    eq('ang', 'Line angle at the fairlead', 'tan(theta_top)', 'w*s_s/T_H', { kind: 'law', origin: 'Ratio of vertical to horizontal tension' }),
-    ...(a.inelastic || a.no_friction ? [] : [eq('lf', 'Grounded length carrying tension', 'l_f', 'min(L_t - s_s, T_H/(mu_s*w))', { kind: 'derived', origin: 'Friction reduces the tension to zero a distance T_H/(μ·w) behind the touchdown point' })]),
-    eq('X', 'Anchor-to-fairlead distance', 'X', `(L_t - s_s)${a.inelastic ? '' : a.no_friction ? '*(1 + T_H/EA)' : ' + (T_H*l_f - mu_s*w*l_f^2/2)/EA'} + x_s`, { kind: 'derived', origin: 'Grounded length' + (a.inelastic ? '' : ', its elastic stretch') + ' plus suspended span' }),
-    a.no_friction ? eq('ta', 'Anchor tension', 'T_a', 'T_H', { kind: 'law', origin: 'Horizontal equilibrium', needs: ['no_friction'] }) : eq('ta', 'Anchor tension with seabed friction', 'T_a', 'max(T_H - mu_s*w*(L_t - s_s), 0)', { kind: 'law', origin: 'Coulomb friction on the grounded length' }),
-    a.inelastic
-      ? eq('kh', 'Horizontal stiffness', 'k_h', 'w/(ln(1 + d/a_c + sqrt((1 + d/a_c)^2 - 1)) - 2/sqrt(1 + 2*a_c/d))', { kind: 'derived', origin: 'Derivative of the anchor-to-fairlead distance with respect to horizontal tension', needs: ['inelastic'] })
-      : eq('kh', 'Horizontal stiffness', 'k_h', '1/pd(X, T_H)', { kind: 'definition' }),
-  ],
+  symbols: { T_H: ['Horizontal tension', 'N'], T_top: ['Tension at the fairlead', 'N'], T_a: ['Tension at the anchor', 'N'], a_c: ['Catenary parameter', 'm'], s_s: ['Suspended (unstretched) length', 'm'], l_f: ['Grounded length over which friction is mobilised', 'm'], x_s: ['Horizontal span of the suspended length', 'm'], X: ['Horizontal distance from anchor to fairlead', 'm'], L_t: ['Total line length', 'm'], theta_top: ['Line angle to the horizontal at the fairlead', 'rad'], k_h: ['Horizontal restoring stiffness', 'N/m'], s_c: ['Suspended length of a line that meets the seabed tangentially', 'm'], V_a: ['Uplift at the anchor', 'N'], p_t: ['Tautness of the fully suspended line, tanh(x_s/2a)', '1'] },
+  equations: a => {
+    const up = '(V_a + w*s_s)/T_H', lo = 'V_a/T_H', taut = 'sqrt(1 + 4*a_c^2/(L_t^2 - d^2))';
+    return [
+      a.h_given ? eq('spec', 'Specified tension', 'T_H', 'T_0', { kind: 'boundary', needs: ['h_given'] })
+        : eq('spec', 'Specified tension', 'T_top', `max(T_0, ${a.inelastic ? 'w*d' : '2*w*d/(1 + sqrt(1 + 2*w*d/EA))'})`, { kind: 'boundary', note: 'A line hanging vertically already carries its own submerged weight over the water depth; a smaller specified tension leaves the line slack, with a horizontal tension that is effectively zero.' }),
+      eq('ac', 'Catenary parameter', 'a_c', 'T_H/w', { kind: 'definition' }),
+      eq('lt', 'Total line length', 'L_t', 'scope*d', { kind: 'definition' }),
+      ...(a.inelastic ? [
+        eq('sc', 'Suspended length with tangential touchdown', 's_c', 'sqrt(d*(d + 2*a_c))', { kind: 'derived', origin: 'Vertical equilibrium and geometry of the catenary with zero slope at touchdown', needs: ['inelastic'] }),
+        eq('ss', 'Suspended length', 's_s', 'ifpos(L_t - s_c, s_c, L_t)', { kind: 'derived', origin: 'Line on the seabed while the touchdown length is shorter than the line; otherwise the whole line is suspended', needs: ['inelastic'] }),
+        eq('va', 'Uplift at the anchor', 'V_a', `ifpos(L_t - s_c, 0, w/2*(d*${taut} - L_t))`, { kind: 'derived', origin: 'Catenary of fixed length between two points: L_t² − d² = 4a² sinh²(x_s/2a)', needs: ['inelastic'] }),
+      ] : [
+        eq('ss', 'Vertical span of the elastic catenary', 'd', `a_c*(sqrt(1 + (${up})^2) - sqrt(1 + (${lo})^2)) + ((V_a + w*s_s)^2 - V_a^2)/(2*w*EA)`, { kind: 'derived', origin: 'Irvine (1981), elastic catenary' }),
+        eq('up', 'Uplift only when the whole line is lifted', 'V_a*s_s', 'V_a*L_t', { kind: 'boundary', origin: 'Contact condition at the seabed', note: 'With V_a ≥ 0 and s_s ≤ L_t: either some line rests on the seabed and the anchor carries no uplift, or the whole line is suspended and the uplift follows from the vertical span.' }),
+      ]),
+      eq('xs', 'Horizontal span of the suspended line', 'x_s', `a_c*(ln(${up} + sqrt(1 + (${up})^2)) - ln(${lo} + sqrt(1 + (${lo})^2)))${a.inelastic ? '' : ' + T_H*s_s/EA'}`, { kind: 'derived', origin: 'Integration of the catenary slope along the line' }),
+      a.inelastic
+        ? eq('tt', 'Tension at the fairlead', 'T_top', `ifpos(L_t - s_c, T_H + w*d, w/2*(d + L_t*${taut}))`, { kind: 'derived', origin: 'Force equilibrium of the suspended line: line on the seabed, otherwise fully suspended', needs: ['inelastic'] })
+        : eq('tt', 'Tension at the fairlead', 'T_top', 'sqrt(T_H^2 + (V_a + w*s_s)^2)', { kind: 'law', origin: 'Force equilibrium of the suspended line' }),
+      eq('ang', 'Line angle at the fairlead', 'tan(theta_top)', up, { kind: 'law', origin: 'Ratio of vertical to horizontal tension' }),
+      ...(a.inelastic || a.no_friction ? [] : [eq('lf', 'Grounded length carrying tension', 'l_f', 'min(L_t - s_s, T_H/(mu_s*w))', { kind: 'derived', origin: 'Friction reduces the tension to zero a distance T_H/(μ·w) behind the touchdown point' })]),
+      eq('X', 'Anchor-to-fairlead distance', 'X', `(L_t - s_s)${a.inelastic ? '' : a.no_friction ? '*(1 + T_H/EA)' : ' + (T_H*l_f - mu_s*w*l_f^2/2)/EA'} + x_s`, { kind: 'derived', origin: 'Grounded length' + (a.inelastic ? '' : ', its elastic stretch') + ' plus suspended span' }),
+      a.no_friction ? eq('ta', 'Anchor tension', 'T_a', 'sqrt(T_H^2 + V_a^2)', { kind: 'law', origin: 'Horizontal equilibrium, with the uplift once the whole line is lifted', needs: ['no_friction'] }) : eq('ta', 'Anchor tension with seabed friction', 'T_a', 'sqrt(max(T_H - mu_s*w*(L_t - s_s), 0)^2 + V_a^2)', { kind: 'law', origin: 'Coulomb friction on the grounded length; uplift once the whole line is lifted' }),
+      ...(a.inelastic ? [eq('pt', 'Tautness of the fully suspended line', 'p_t', 'sqrt((L_t^2 - d^2)/(4*a_c^2 + L_t^2 - d^2))', { kind: 'definition', origin: 'Equal to tanh(x_s/2a) for a catenary of length L_t spanning the depth d' })] : []),
+      a.inelastic
+        ? eq('kh', 'Horizontal stiffness', 'k_h', 'ifpos(L_t - s_c, w/(ln(1 + d/a_c + sqrt((1 + d/a_c)^2 - 1)) - 2/sqrt(1 + 2*a_c/d)), w/(2*ifpos(p_t - 0.1, ln((1 + p_t)/(1 - p_t))/2 - p_t, p_t^3/3 + p_t^5/5 + p_t^7/7 + p_t^9/9 + p_t^11/11)))', { kind: 'derived', origin: 'Derivative of the anchor-to-fairlead distance with respect to horizontal tension: line on the seabed, otherwise fully suspended', needs: ['inelastic'], note: 'For the fully suspended line the compliance is (2/w)·(atanh p_t − p_t). For a nearly taut line (p_t ≤ 0.1) the difference is taken from its power series, because the closed form loses precision there.' })
+        : eq('kh', 'Horizontal stiffness', 'k_h', '1/pd(X, T_H)', { kind: 'definition' }),
+    ];
+  },
   derivation: a => [
     { text: 'Consider an element of the suspended line. With no horizontal load the horizontal tension T_H is constant; the vertical component increases by the submerged weight w per unit length.', tex: '\\frac{\\mathrm{d}}{\\mathrm{d}s}(T\\cos\\theta) = 0,\\qquad \\frac{\\mathrm{d}}{\\mathrm{d}s}(T\\sin\\theta) = w' },
     { text: 'Starting from zero slope at the touchdown point, tan θ = w·s/T_H. Integrating dz = sin θ ds and dx = cos θ ds gives the catenary with parameter a = T_H/w.', tex: 'z = a\\left(\\cosh\\frac{x}{a} - 1\\right),\\qquad s = a\\sinh\\frac{x}{a}' },
     { text: a.inelastic ? 'Setting z = d at the fairlead gives the suspended length and the top tension.' : 'Allowing for axial strain T/EA adds a stretch term to both spans; the suspended length then follows from a root-finding step.', tex: a.inelastic ? 's_s = \\sqrt{d\\,(d + 2a)},\\qquad T_{top} = T_H + w\\,d' : 'd = a\\left(\\sqrt{1 + (w s_s/T_H)^2} - 1\\right) + \\frac{w s_s^2}{2EA}' },
-    { text: 'The anchor-to-fairlead distance is the grounded length plus the suspended span. Differentiating with respect to T_H gives the restoring stiffness felt by the vessel.', tex: 'k_h = \\left(\\frac{\\partial X}{\\partial T_H}\\right)^{-1} = w\\left[\\cosh^{-1}\\!\\left(1 + \\frac{d}{a}\\right) - \\frac{2}{\\sqrt{1 + 2a/d}}\\right]^{-1}' },
+    a.inelastic
+      ? { text: 'If that suspended length exceeds the line available, the whole line is lifted and the anchor carries an uplift V_a. A catenary of length L_t between two points a height d apart satisfies L_t² − d² = 4a² sinh²(x_s/2a), which fixes the span, the uplift and the top tension.', tex: 'V_a = \\frac{w}{2}\\left(d\\sqrt{1 + \\frac{4a^2}{L_t^2 - d^2}} - L_t\\right),\\qquad T_{top} = \\frac{w}{2}\\left(d + L_t\\sqrt{1 + \\frac{4a^2}{L_t^2 - d^2}}\\right)' }
+      : { text: 'If the suspended length found in this way exceeds the line available, the whole line is lifted: the suspended length is fixed at L_t and the same vertical-span condition is solved instead for the uplift V_a at the anchor.', tex: 'V_a\\,s_s = V_a\\,L_t,\\qquad V_a \\ge 0,\\quad s_s \\le L_t' },
+    { text: 'The anchor-to-fairlead distance is the grounded length plus the suspended span. Differentiating with respect to T_H gives the restoring stiffness felt by the vessel; for the fully suspended line the same derivative gives w/[2(atanh p − p)] with p = tanh(x_s/2a).', tex: 'k_h = \\left(\\frac{\\partial X}{\\partial T_H}\\right)^{-1} = w\\left[\\cosh^{-1}\\!\\left(1 + \\frac{d}{a}\\right) - \\frac{2}{\\sqrt{1 + 2a/d}}\\right]^{-1}' },
   ],
   solve(v, a) {
     const warnings = [];
     let c;
     if (a.h_given) c = catenary(v, a, v.T_0);
     else { const q = catenaryFromTop(v, a, v.T_0); c = q.c; if (q.slack) warnings.push('The specified top tension does not exceed the weight of a vertically hanging line: the line is slack and the horizontal tension is effectively zero.'); }
-    const H = c.H, Xof = h => catenary(v, a, h).X, dH = 1e-4 * H, kh = 2 * dH / (Xof(H + dH) - Xof(H - dH));
+    const H = c.H, Xof = h => catenary(v, a, h).X, dH = 1e-4 * H;
+    // the inextensible line has a closed-form stiffness; a finite difference of X loses all precision as the suspended line becomes taut
+    const kh = a.inelastic ? catenaryStiffness(v, H) : 2 * dH / (Xof(H + dH) - Xof(H - dH));
     if (c.Va > 0) warnings.push('The whole line is lifted off the seabed: the anchor carries uplift. Drag-embedment anchors are not designed for this; lengthen the line or reduce tension.');
     if (c.Ttop > v.MBL) warnings.push('The fairlead tension exceeds the minimum breaking load.');
     const Hs = N.logspace(0.1 * H, 4 * H, 50), cs = Hs.map(h => catenary(v, a, h));
@@ -666,7 +690,7 @@ const catenaryMooring = {
   hazards: [{ hazard: 'Line failure', cause: 'Tension above breaking strength, fatigue or wear at the touchdown and fairlead', mitigation: 'Design safety factors, inspection and replacement' }, { hazard: 'Anchor uplift and drag', cause: 'Insufficient grounded length in the extreme offset', mitigation: 'Longer line, clump weights or vertically loaded anchors' }],
   standards: ['DNV-OS-E301 (position mooring)', 'API RP 2SK (stationkeeping systems)', 'ISO 19901-7 (stationkeeping systems for floating offshore structures)'],
   limits: 'A single uniform line in a vertical plane on a flat, horizontal seabed, loaded only by its own submerged weight. No current drag, no bending stiffness, no dynamics. The elastic option assumes a linear axial stiffness.',
-  numerics: { method: 'Closed-form catenary; bisection for the elastic suspended length, the anchor uplift and the horizontal tension when top tension is specified; central difference for stiffness' },
+  numerics: { method: 'Closed-form catenary; bisection for the elastic suspended length, the anchor uplift and the horizontal tension when top tension is specified; closed-form stiffness for the inextensible line, central difference for the elastic line' },
   optimise: { objective: 'T_top', sense: 'min', vars: ['scope'], note: 'A longer line does not reduce tension once some line already rests on the bed; it increases the offset capacity before uplift.' },
   inverse: { series: 'tension-offset', fit: ['w'] },
   extensions: ['Multi-line spread mooring with vessel offset equilibrium', 'Chain–wire–chain composite lines and buoys', 'Quasi-dynamic tension amplification'],
@@ -1218,25 +1242,25 @@ const mudmat = {
     asm('incl', 'Horizontal load inclines the resultant and reduces vertical capacity through an inclination factor.', { why: 'Combined loading', alt: 'Vertical capacity is computed for vertical load only; sliding is checked separately.' }),
     asm('no_depth', 'Embedment contributes overburden only; no depth factor is applied.', { why: 'Conservative for shallow skirts in disturbed soil', alt: 'A depth factor is applied (Brinch Hansen undrained: 0.4·D/B; Meyerhof drained).' }),
   ],
-  symbols: { N_c: ['Bearing-capacity factor for cohesion', '1'], N_q: ['Bearing-capacity factor for surcharge', '1'], N_gamma: ['Bearing-capacity factor for self-weight', '1'], K_p: ['Passive earth-pressure coefficient', '1'], s_ca: ['Shape term', '1'], d_ca: ['Depth term', '1'], i_ca: ['Inclination term', '1'], s_g: ['Shape factor', '1'], d_g: ['Depth factor', '1'], i_q: ['Inclination factor on surcharge', '1'], i_g: ['Inclination factor on self-weight', '1'], theta_l: ['Load inclination from the vertical', 'rad'], q_u: ['Ultimate bearing pressure', 'Pa'], Q_u: ['Ultimate vertical capacity', 'N'], H_u: ['Ultimate sliding resistance', 'N'], FS_b: ['Factor of safety on bearing', '1'], FS_s: ['Factor of safety on sliding', '1'] },
+  symbols: { B_s: ['Shorter plan dimension', 'm'], L_l: ['Longer plan dimension', 'm'], N_c: ['Bearing-capacity factor for cohesion', '1'], N_q: ['Bearing-capacity factor for surcharge', '1'], N_gamma: ['Bearing-capacity factor for self-weight', '1'], K_p: ['Passive earth-pressure coefficient', '1'], s_ca: ['Shape term', '1'], d_ca: ['Depth term', '1'], i_ca: ['Inclination term', '1'], s_g: ['Shape factor', '1'], d_g: ['Depth factor', '1'], i_q: ['Inclination factor on surcharge', '1'], i_g: ['Inclination factor on self-weight', '1'], theta_l: ['Load inclination from the vertical', 'rad'], q_u: ['Ultimate bearing pressure', 'Pa'], Q_u: ['Ultimate vertical capacity', 'N'], H_u: ['Ultimate sliding resistance', 'N'], FS_b: ['Factor of safety on bearing', '1'], FS_s: ['Factor of safety on sliding', '1'] },
   equations: a => {
-    const out = [];
+    const out = [eq('bs', 'Shorter plan dimension', 'B_s', 'min(B, L)', { kind: 'definition' }), eq('ll', 'Longer plan dimension', 'L_l', 'max(B, L)', { kind: 'definition' })];
     if (a.undrained) {
       out.push(eq('nc', 'Prandtl bearing-capacity factor', 'N_c', 'pi + 2', { kind: 'law', origin: 'Exact plasticity solution for a strip on a weightless Tresca material; Prandtl (1921)' }));
-      if (a.shape) out.push(eq('sc', 'Shape term', 's_ca', '0.2*B/L', { kind: 'empirical', origin: 'Skempton (1951); Brinch Hansen (1970)', needs: ['shape'] }));
-      if (!a.no_depth) out.push(eq('dc', 'Depth term', 'd_ca', '0.4*D_f/B', { kind: 'empirical', origin: 'Brinch Hansen (1970), D ≤ B', note: 'For embedment deeper than the width the solver uses 0.4·atan(D_f/B), as Brinch Hansen gives.' }));
+      if (a.shape) out.push(eq('sc', 'Shape term', 's_ca', '0.2*B_s/L_l', { kind: 'empirical', origin: 'Skempton (1951); Brinch Hansen (1970)', needs: ['shape'] }));
+      if (!a.no_depth) out.push(eq('dc', 'Depth term', 'd_ca', '0.4*ifpos(D_f - B_s, atan(D_f/B_s), D_f/B_s)', { kind: 'empirical', origin: 'Brinch Hansen (1970): D/B for embedment up to the width, atan(D/B) beyond it' }));
       if (a.incl) out.push(eq('ic', 'Inclination term', 'i_ca', '0.5 - 0.5*sqrt(max(1 - H/(B*L*s_u), 0))', { kind: 'empirical', origin: 'Brinch Hansen (1970)', needs: ['incl'] }));
-      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `N_c*s_u*(1${a.shape ? ' + s_ca' : ''}${a.no_depth ? '' : ' + d_ca'}${a.incl ? ' - i_ca' : ''}) + gamma_sub*D_f`, { kind: 'closure', origin: 'Brinch Hansen (1970) for φ = 0', needs: ['undrained'], note: 'B is the shorter and L the longer plan dimension; the solver swaps them if they are entered the other way round.' }));
+      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `N_c*s_u*(1${a.shape ? ' + s_ca' : ''}${a.no_depth ? '' : ' + d_ca'}${a.incl ? ' - i_ca' : ''}) + gamma_sub*D_f`, { kind: 'closure', origin: 'Brinch Hansen (1970) for φ = 0', needs: ['undrained'] }));
       out.push(eq('hu', 'Sliding resistance', 'H_u', 'alpha_s*s_u*B*L', { kind: 'closure', origin: 'Base shear at a fraction of the undrained strength' }));
     } else {
       out.push(eq('kp', 'Passive coefficient', 'K_p', 'tan(pi/4 + phi/2)^2', { kind: 'definition' }));
       out.push(eq('nq', 'Surcharge factor', 'N_q', 'exp(pi*tan(phi))*K_p', { kind: 'law', origin: 'Prandtl–Reissner plasticity solution' }));
       out.push(eq('ng', 'Self-weight factor', 'N_gamma', '(N_q - 1)*tan(1.4*phi)', { kind: 'empirical', origin: 'Meyerhof (1963)' }));
-      if (a.shape) out.push(eq('sg', 'Shape factor', 's_g', '1 + 0.1*K_p*B/L', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['shape'] }));
-      if (!a.no_depth) out.push(eq('dg', 'Depth factor', 'd_g', '1 + 0.1*sqrt(K_p)*D_f/B', { kind: 'empirical', origin: 'Meyerhof (1963)' }));
-      if (a.incl) { out.push(eq('th', 'Load inclination', 'tan(theta_l)', 'H/V', { kind: 'definition' })); out.push(eq('iq', 'Inclination factor on surcharge', 'i_q', '(1 - 2*theta_l/pi)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); out.push(eq('ig', 'Inclination factor on self-weight', 'i_g', 'max(1 - theta_l/phi, 0)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); }
+      if (a.shape) out.push(eq('sg', 'Shape factor', 's_g', '1 + 0.1*K_p*B_s/L_l', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['shape'] }));
+      if (!a.no_depth) out.push(eq('dg', 'Depth factor', 'd_g', '1 + 0.1*sqrt(K_p)*D_f/B_s', { kind: 'empirical', origin: 'Meyerhof (1963)' }));
+      if (a.incl) { out.push(eq('th', 'Load inclination', 'theta_l', 'atan(H/V)', { kind: 'definition' })); out.push(eq('iq', 'Inclination factor on surcharge', 'i_q', '(1 - 2*theta_l/pi)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); out.push(eq('ig', 'Inclination factor on self-weight', 'i_g', 'max(1 - theta_l/phi, 0)^2', { kind: 'empirical', origin: 'Meyerhof (1963)', needs: ['incl'] })); }
       const f = `${a.shape ? '*s_g' : ''}${a.no_depth ? '' : '*d_g'}`;
-      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `0.5*gamma_sub*B*N_gamma${f}${a.incl ? '*i_g' : ''} + gamma_sub*D_f*N_q${f}${a.incl ? '*i_q' : ''}`, { kind: 'closure', origin: 'Terzaghi superposition with Meyerhof factors, c′ = 0', note: 'B is the shorter and L the longer plan dimension; the solver swaps them if they are entered the other way round.' }));
+      out.push(eq('qu', 'Ultimate bearing pressure', 'q_u', `0.5*gamma_sub*B_s*N_gamma${f}${a.incl ? '*i_g' : ''} + gamma_sub*D_f*N_q${f}${a.incl ? '*i_q' : ''}`, { kind: 'closure', origin: 'Terzaghi superposition with Meyerhof factors, c′ = 0' }));
       out.push(eq('hu', 'Sliding resistance', 'H_u', 'alpha_s*V*tan(phi)', { kind: 'law', origin: 'Coulomb friction on the base' }));
     }
     out.push(eq('Qu', 'Ultimate vertical capacity', 'Q_u', 'q_u*B*L', { kind: 'definition' }));
@@ -1818,15 +1842,16 @@ const columnBuckling = {
     asm('imperfect', 'The column has an initial geometric imperfection of the stated size.', { why: 'All real columns are imperfect', alt: 'The column is perfectly straight and concentrically loaded: it stays straight up to the critical load.' }),
     asm('bow', 'The imperfection is a half-sine initial bow.', { why: 'Basis of the Perry–Robertson formula', alt: 'The imperfection is an equal load eccentricity at both ends (secant formula).' }),
   ],
-  symbols: { r_g: ['Radius of gyration', 'm'], lambda: ['Slenderness ratio', '1'], lambda_c: ['Transition slenderness', '1'], P_E: ['Euler critical load', 'N'], sigma_cr: ['Critical stress', 'Pa'], delta: ['Lateral deflection at mid-height', 'm'], sigma_max: ['Peak compressive stress', 'Pa'] },
+  symbols: { r_g: ['Radius of gyration', 'm'], lambda: ['Slenderness ratio', '1'], lambda_c: ['Transition slenderness', '1'], P_E: ['Euler critical load', 'N'], sigma_cr: ['Critical stress', 'Pa'], P_cr: ['Critical load', 'N'], delta: ['Lateral deflection at mid-height', 'm'], sigma_max: ['Peak compressive stress', 'Pa'] },
   equations: a => [
     eq('rg', 'Radius of gyration', 'r_g', 'sqrt(I_b/A)', { kind: 'definition' }),
     eq('lam', 'Slenderness ratio', 'lambda', 'K*L/r_g', { kind: 'definition' }),
     eq('pe', 'Euler critical load', 'P_E', 'pi^2*E*I_b/(K*L)^2', { kind: 'law', origin: 'Bifurcation of the elastic beam–column equation; Euler (1744)' }),
     eq('lc', 'Transition slenderness', 'lambda_c', 'pi*sqrt(2*E/sigma_y)', { kind: 'derived', origin: 'Tangency of the Johnson parabola and the Euler hyperbola at half the yield strength' }),
     a.johnson
-      ? eq('scr', 'Johnson parabola (λ < λ_c)', 'sigma_cr', 'sigma_y*(1 - sigma_y*lambda^2/(4*pi^2*E))', { kind: 'empirical', origin: 'J. B. Johnson\'s parabolic column formula', needs: ['johnson'], note: 'Applies below the transition slenderness; for λ ≥ λ_c the solver uses the Euler stress π²E/λ².' })
+      ? eq('scr', 'Critical stress: Johnson parabola below the transition, Euler hyperbola above', 'sigma_cr', 'ifpos(lambda_c - lambda, sigma_y*(1 - sigma_y*lambda^2/(4*pi^2*E)), pi^2*E/lambda^2)', { kind: 'empirical', origin: 'J. B. Johnson\'s parabolic column formula for λ < λ_c; Euler stress for λ ≥ λ_c', needs: ['johnson'] })
       : eq('scr', 'Critical stress', 'sigma_cr', 'min(sigma_y, pi^2*E/lambda^2)', { kind: 'closure', origin: 'Euler stress limited by yield' }),
+    eq('pcr', 'Critical load', 'P_cr', 'sigma_cr*A', { kind: 'definition' }),
     ...(a.imperfect ? [
       a.bow
         ? eq('dl', 'Amplified bow', 'delta', 'e_0/(1 - P/P_E)', { kind: 'derived', origin: 'Beam–column equation with a sinusoidal initial bow', needs: ['imperfect', 'bow'] })
@@ -1852,7 +1877,7 @@ const columnBuckling = {
     return {
       scalars: [
         scalar('r_g', 'Radius of gyration', r.r, 'm', { show: 'mm' }), scalar('lambda', 'Slenderness ratio', r.lam, '1', { note: r.lam < r.lamC ? 'intermediate or stocky column' : 'slender (Euler) column' }), scalar('lambda_c', 'Transition slenderness', r.lamC, '1'),
-        scalar('P_E', 'Euler critical load', r.PE, 'N', { show: 'kN' }), scalar('P_cr', a.johnson ? 'Critical load (Euler or Johnson)' : 'Critical load (Euler capped at yield)', r.Pcr, 'N', { show: 'kN' }),
+        scalar('P_E', 'Euler critical load', r.PE, 'N', { show: 'kN' }), scalar('sigma_cr', a.johnson ? 'Critical stress (Euler or Johnson)' : 'Critical stress (Euler capped at yield)', r.Pcr / v.A, 'Pa', { show: 'MPa' }), scalar('P_cr', a.johnson ? 'Critical load (Euler or Johnson)' : 'Critical load (Euler capped at yield)', r.Pcr, 'N', { show: 'kN' }),
         scalar('P_y', a.imperfect ? (a.bow ? 'First-yield load (Perry–Robertson)' : 'First-yield load (secant formula)') : 'Squash or Euler load', r.Py, 'N', { show: 'kN' }),
         scalar('P_fail', 'Governing failure load', r.Pfail, 'N', { show: 'kN' }), scalar('SF', 'Factor of safety on the applied load', r.Pfail / v.P, '1'),
         scalar('eta', 'Imperfection parameter e₀c/r²', r.eta, '1'),
@@ -2268,8 +2293,8 @@ const pressureVessel = {
         : eq('eq', 'Von Mises equivalent stress (zero axial stress)', 'sigma_eq', a.thick ? 'sqrt(sigma_theta^2 - sigma_theta*sigma_r + sigma_r^2)' : 'abs(sigma_theta)', { kind: 'closure', origin: 'Distortion-energy yield criterion', needs: ['von_mises'] }))
       : eq('eq', 'Tresca equivalent stress', 'sigma_eq', a.thick ? (a.closed ? 'abs(sigma_theta - sigma_r)' : 'max(max(sigma_theta, sigma_r), 0) - min(min(sigma_theta, sigma_r), 0)') : (a.closed ? 'max(max(sigma_theta, sigma_z), 0) - min(min(sigma_theta, sigma_z), 0)' : 'abs(sigma_theta)'), { kind: 'closure', origin: 'Maximum shear-stress yield criterion' }),
     a.faupel
-      ? eq('pb', 'Burst pressure', 'p_b', '2/sqrt(3)*sigma_y*(2 - sigma_y/sigma_u)*ln(r_o/r_i)', { kind: 'empirical', origin: 'Faupel (1956)', needs: ['faupel'] })
-      : eq('pb', 'Fully plastic pressure at the tensile strength', 'p_b', '2/sqrt(3)*sigma_u*ln(r_o/r_i)', { kind: 'derived', origin: 'Limit analysis of a von Mises cylinder; Hill (1950)' }),
+      ? eq('pb', 'Burst pressure', 'p_b', '2/sqrt(3)*sigma_y*(2 - sigma_y/max(sigma_u, sigma_y))*ln(r_o/r_i)', { kind: 'empirical', origin: 'Faupel (1956)', needs: ['faupel'], note: 'A stated tensile strength below the yield strength is replaced by the yield strength.' })
+      : eq('pb', 'Fully plastic pressure at the tensile strength', 'p_b', '2/sqrt(3)*max(sigma_u, sigma_y)*ln(r_o/r_i)', { kind: 'derived', origin: 'Limit analysis of a von Mises cylinder; Hill (1950)', note: 'A stated tensile strength below the yield strength is replaced by the yield strength.' }),
   ],
   derivation: a => (a.thick ? [
     { text: 'Radial equilibrium of an element bounded by radii r and r + dr relates the two in-plane stresses.', tex: '\\frac{\\mathrm{d}\\sigma_r}{\\mathrm{d}r} + \\frac{\\sigma_r - \\sigma_\\theta}{r} = 0' },

@@ -34,54 +34,75 @@ const pipeline = {
     inp('n_seg', 'Number of integration segments', '1', 200, { min: 10, max: 4000, kind: 'numerical' }),
   ],
   assumptions: [
-    asm('steady', 'Flow is steady; no transients or line-packing.', { why: 'Design operating point', alt: 'A transient (water-hammer or thermal cool-down) model is needed instead.' }),
-    asm('incompressible', 'The fluid is incompressible, so velocity is constant along the pipe.', { why: 'Liquid service', alt: 'Density follows the gas law and velocity rises as pressure falls.' }),
+    asm('steady', 'Flow is steady; no transients or line-packing.', { why: 'Design operating point', alt: 'Not resolved here: the steady profiles are still shown and a warning points to a transient (water-hammer or thermal cool-down) model.' }),
+    asm('incompressible', 'The fluid is incompressible, so velocity is constant along the pipe.', { why: 'Liquid service', alt: 'Density follows the ideal-gas law (molar mass fixed by the inlet density), velocity rises as pressure falls and the acceleration of the gas is included in the momentum balance.' }),
     asm('const_mu', 'Viscosity is constant at its inlet value.', { why: 'Simplest closure', alt: 'Viscosity follows an Andrade law μ = μ₀·exp[B(1/T − 1/T₀)], so friction rises as the fluid cools.' }),
-    asm('no_fric_heat', 'Frictional heating and Joule–Thomson effects are neglected in the energy balance.', { why: 'Small against wall heat loss for liquids', alt: 'Viscous dissipation is added as a heat source.' }),
+    asm('no_fric_heat', 'Frictional heating and Joule–Thomson effects are neglected in the energy balance.', { why: 'Small against wall heat loss for liquids', alt: 'For a liquid, viscous dissipation is added as a heat source. For an ideal gas the Joule–Thomson coefficient is zero, so friction leaves the temperature unchanged; the kinetic- and potential-energy terms are added instead.' }),
   ],
   symbols: { u: ['Mean velocity', 'm/s'], A: ['Flow area', 'm^2'], Re: ['Reynolds number', '1'], f: ['Darcy friction factor', '1'], p: ['Pressure', 'Pa'], T: ['Fluid temperature', 'K'], x: ['Distance along pipe', 'm'], mdot: ['Mass flow rate', 'kg/s'], g: ['Gravitational acceleration', 'm/s^2'], theta: ['Pipe inclination', 'rad'], T_0: ['Reference temperature', 'K'], mu_0: ['Viscosity at reference temperature', 'Pa s'], M_g: ['Molar mass', 'kg/mol'], R_u: ['Molar gas constant', 'J/(mol K)'] },
-  equations: a => [
+  equations: (a, v) => [
     eq('cont', 'Continuity', 'mdot', 'rho*u*A', { kind: 'law', origin: 'Conservation of mass' }),
     eq('area', 'Flow area', 'A', 'pi*D^2/4', { kind: 'definition' }),
     eq('re', 'Reynolds number', 'Re', 'rho*u*D/mu', { kind: 'definition' }),
-    eq('mom', 'Momentum balance', 'pd(p,x)', '-f*rho*u^2/(2*D) - rho*g*sin(theta)', { kind: 'law', origin: 'Conservation of momentum (Darcy–Weisbach)', needs: ['steady'] }),
-    eq('cw', 'Colebrook–White friction factor', '1/sqrt(f)', '-2*log10(eps_r/(3.7*D) + 2.51/(Re*sqrt(f)))', { kind: 'empirical', origin: 'Colebrook (1939) fit to Nikuradse and commercial-pipe data' }),
+    a.incompressible
+      ? eq('mom', 'Momentum balance', 'pd(p,x)', '-f*rho*u^2/(2*D) - rho*g*sin(theta)', { kind: 'law', origin: 'Conservation of momentum (Darcy–Weisbach)', needs: ['steady', 'incompressible'] })
+      : eq('mom', 'Momentum balance with gas acceleration', 'pd(p,x)', '-f*rho*u^2/(2*D) - rho*g*sin(theta) - rho*u*pd(u,x)', { kind: 'law', origin: 'Conservation of momentum (Darcy–Weisbach) for a fluid of varying density', needs: ['steady'] }),
+    // the solver uses 64/Re below Re = 2000, Colebrook–White above 4000 and a linear blend of the two in between
+    v && 4 * v.rho * v.Q / (Math.PI * v.D * v.mu) < 2000
+      ? eq('cw', 'Laminar friction factor', 'f', '64/Re', { kind: 'law', origin: 'Hagen–Poiseuille flow; applies below a Reynolds number of 2000' })
+      : eq('cw', 'Colebrook–White friction factor', '1/sqrt(f)', '-2*log10(eps_r/(3.7*D) + 2.51/(Re*sqrt(f)))', { kind: 'empirical', origin: 'Colebrook (1939) fit to Nikuradse and commercial-pipe data; blended linearly with 64/Re between Reynolds numbers of 2000 and 4000' }),
     a.no_fric_heat
       ? eq('en', 'Energy balance', 'mdot*cp*pd(T,x)', '-U*pi*D*(T - T_amb)', { kind: 'law', origin: 'First law of thermodynamics', needs: ['steady', 'no_fric_heat'] })
-      : eq('en', 'Energy balance with viscous heating', 'mdot*cp*pd(T,x)', '-U*pi*D*(T - T_amb) + f*rho*u^3*A/(2*D)', { kind: 'law', origin: 'First law of thermodynamics', needs: ['steady'] }),
+      : a.incompressible
+        ? eq('en', 'Energy balance with viscous heating', 'mdot*cp*pd(T,x)', '-U*pi*D*(T - T_amb) + f*rho*u^3*A/(2*D)', { kind: 'law', origin: 'First law of thermodynamics for an incompressible liquid', needs: ['steady', 'incompressible'] })
+        : eq('en', 'Energy balance of an ideal gas', 'mdot*cp*pd(T,x)', '-U*pi*D*(T - T_amb) - mdot*(u*pd(u,x) + g*sin(theta))', { kind: 'law', origin: 'First law of thermodynamics with enthalpy a function of temperature only', needs: ['steady'] }),
     ...(a.const_mu ? [] : [eq('visc', 'Andrade viscosity law', 'mu', 'mu_0*exp(B_mu*(1/T - 1/T_0))', { kind: 'closure', origin: 'Andrade (1930) empirical liquid-viscosity relation' })]),
     ...(a.incompressible ? [] : [eq('eos', 'Ideal-gas density', 'rho', 'p*M_g/(R_u*T)', { kind: 'closure', origin: 'Ideal-gas equation of state' })]),
   ],
   derivation: a => [
     { text: 'Take a control volume of length dx. In steady flow the mass flow rate is the same through every cross-section.', tex: '\\dot m = \\rho\\,u\\,A = \\text{const}' },
     { text: 'Balance pressure force, wall shear and weight along the pipe axis. Writing the wall shear with the Darcy friction factor gives the pressure gradient.', tex: '\\frac{\\partial p}{\\partial x} = -\\frac{f\\,\\rho\\,u^2}{2D} - \\rho\\,g\\,\\sin\\theta' },
-    { text: 'The enthalpy carried by the flow changes only by heat exchanged through the wall' + (a.no_fric_heat ? '.' : ' and by viscous dissipation.'), tex: '\\dot m\\,c_p\\,\\frac{\\partial T}{\\partial x} = -U\\,\\pi D\\,(T-T_{amb})' },
+    { text: 'The enthalpy carried by the flow changes only by heat exchanged through the wall' + (a.no_fric_heat ? '.' : a.incompressible ? ' and by viscous dissipation.' : ' and by the small exchange with kinetic and potential energy.'), tex: '\\dot m\\,c_p\\,\\frac{\\partial T}{\\partial x} = -U\\,\\pi D\\,(T-T_{amb})' },
     { text: 'With constant U and c_p this integrates to an exponential decay toward ambient temperature over the thermal length ℓ = ṁ c_p/(U π D).', tex: 'T(x) = T_{amb} + (T_{in}-T_{amb})\\,e^{-x/\\ell}' },
   ],
   solve(v, a) {
-    const A = Math.PI * v.D ** 2 / 4, n = Math.round(v.n_seg), dx = v.L / n, sinT = v.dz / v.L;
+    const A = Math.PI * v.D ** 2 / 4, n = Math.round(v.n_seg), dx = v.L / n, sinT = N.clamp(v.dz / v.L, -1, 1);
     const mdot = v.rho * v.Q, x = [0], p = [v.p_in], T = [v.T_in], fs = [], Res = [];
     const Mg = v.rho * C.R_u * v.T_in / v.p_in; // molar mass consistent with inlet density (compressible branch)
-    let warnings = [];
+    let warnings = [], dpFric = 0, srcInt = 0, wallInt = 0, dudx = 0, machMax = 0;
     for (let i = 0; i < n; i++) {
-      const Ti = T[i], pi = p[i];
-      const rho = a.incompressible ? v.rho : Math.max(pi, 1) * Mg / (C.R_u * Ti);
+      const Ti = T[i], pi = Math.max(p[i], 1);
+      const rho = a.incompressible ? v.rho : pi * Mg / (C.R_u * Ti);
       const u = mdot / (rho * A);
       const mu = a.const_mu ? v.mu : v.mu * Math.exp(v.B_mu * (1 / Ti - 1 / v.T_in));
       const Re = rho * u * v.D / mu, f = frictionFactor(Re, v.eps_r / v.D);
       fs.push(f); Res.push(Re);
-      const dpdx = -f * rho * u * u / (2 * v.D) - rho * g * sinT;
-      const qf = a.no_fric_heat ? 0 : f * rho * u ** 3 * A / (2 * v.D);
+      const fric = f * rho * u * u / (2 * v.D);
+      // liquid: viscous dissipation heats the fluid; ideal gas: enthalpy depends on temperature only, so the
+      // source is the exchange with kinetic and potential energy (velocity gradient taken from the previous segment)
+      const qf = a.no_fric_heat ? 0 : a.incompressible ? fric * u * A : -mdot * (u * dudx + g * sinT);
       // exact exponential step for the linear energy equation keeps the scheme unconditionally stable
       const ell = mdot * v.cp / (v.U * Math.PI * v.D), Teq = v.T_amb + qf / (v.U * Math.PI * v.D);
-      T.push(Teq + (Ti - Teq) * Math.exp(-dx / ell));
-      p.push(pi + dpdx * dx); x.push((i + 1) * dx);
+      const Tn = Teq + (Ti - Teq) * Math.exp(-dx / ell);
+      let dpdx = -fric - rho * g * sinT;
+      if (!a.incompressible) {
+        // rho u du/dx = rho u^2 (T'/T − p'/p) for an ideal gas at constant mass flux
+        const m2 = rho * u * u / pi; machMax = Math.max(machMax, m2);
+        dpdx = (dpdx - rho * u * u * (Tn - Ti) / (dx * Ti)) / Math.max(1 - m2, 0.05);
+        dudx = u * ((Tn - Ti) / (dx * Ti) - dpdx / pi);
+      }
+      // wall heat over the segment, integrated exactly along the exponential profile
+      dpFric += fric * dx; srcInt += qf * dx; wallInt += v.U * Math.PI * v.D * ((Teq - v.T_amb) * dx + (Ti - Teq) * ell * -Math.expm1(-dx / ell));
+      T.push(Tn); p.push(p[i] + dpdx * dx); x.push((i + 1) * dx);
     }
     const pOut = p[n], u0 = mdot / (v.rho * A);
     if (pOut <= 0) warnings.push('The computed outlet pressure is not positive: this flow rate cannot be delivered with the stated inlet pressure.');
+    if (machMax > 0.5) warnings.push('The gas velocity approaches the isothermal speed of sound: the flow is close to choking and the marching solution is unreliable there.');
+    if (Math.abs(v.dz) > v.L) warnings.push('The elevation change exceeds the pipe length; the inclination has been limited to vertical.');
+    if (!a.steady) warnings.push('Transient behaviour is not resolved by this model: the profiles shown are the steady state. Use a water-hammer model for pressure surges or a cool-down model for shut-in.');
     const ell = mdot * v.cp / (v.U * Math.PI * v.D);
     const heatLoss = mdot * v.cp * (v.T_in - T[n]);
-    const fr = N.mean(fs), dpF = v.p_in - pOut - v.rho * g * v.dz * (a.incompressible ? 1 : 0);
+    const fr = N.mean(fs), dpF = dpFric;
     return {
       scalars: [
         scalar('u', 'Mean velocity at inlet', u0, 'm/s'), scalar('Re', 'Reynolds number at inlet', Res[0], '1', { note: Res[0] < 2000 ? 'laminar' : Res[0] < 4000 ? 'transitional' : 'turbulent' }),
@@ -95,7 +116,7 @@ const pipeline = {
         line('T-profile', 'Temperature along the pipeline', 'Distance', 'km', x.map(s => s / 1000), [{ label: 'Fluid', data: T.map(s => s - 273.15) }, { label: 'Ambient', data: x.map(() => v.T_amb - 273.15), dash: true }], 'Temperature', '°C'),
       ],
       checks: [
-        check('Energy balance residual', (heatLoss - N.trapz(x, T.map(t => v.U * Math.PI * v.D * (t - v.T_amb)))) / Math.max(Math.abs(heatLoss), 1), a.no_fric_heat ? 5e-3 : 0.2, 'Enthalpy lost by the fluid against integrated wall heat flux'),
+        check('Energy balance residual', (heatLoss + srcInt - wallInt) / Math.max(Math.abs(heatLoss), Math.abs(srcInt), Math.abs(wallInt), 1), 1e-9, 'Enthalpy lost by the fluid plus internal heating against the wall heat flux integrated along the profile'),
       ],
       warnings,
     };
@@ -111,6 +132,14 @@ const pipeline = {
       out.push(bench('Pressure drop vs closed-form Darcy–Weisbach', get('dp'), f * v.L / v.D * v.rho * u * u / 2 + v.rho * g * v.dz, 'Darcy–Weisbach with Colebrook–White', 1e-6));
     }
     out.push(bench('Laminar friction factor f·Re at Re = 1000', frictionFactor(1000) * 1000, 64, 'Hagen–Poiseuille exact solution', 1e-12));
+    {
+      // isothermal ideal-gas flow in a horizontal pipe: p1² − p2² = G²(R T/M)[f L/D + 2 ln(p1/p2)], G = mass flux
+      const gv = { ...v, rho: 50, mu: 1.2e-5, p_in: 6e6, T_in: 290, T_amb: 290, D: 0.3, L: 20000, dz: 0, Q: 0.6, eps_r: 4.5e-5, n_seg: 2000 };
+      const rg = this.solve(gv, { steady: true, incompressible: false, const_mu: true, no_fric_heat: true }), ff = rg.scalars.find(q => q.sym === 'f').value;
+      const G = gv.rho * gv.Q / (Math.PI * gv.D ** 2 / 4), rt = gv.p_in / gv.rho;
+      const p2 = N.bisect(q => gv.p_in ** 2 - q * q - G * G * rt * (ff * gv.L / gv.D + 2 * Math.log(gv.p_in / q)), 0.2 * gv.p_in, gv.p_in, 1e-13);
+      out.push(bench('Isothermal gas flow: outlet pressure vs closed-form solution', rg.scalars.find(q => q.sym === 'p_out').value, p2, 'p₁² − p₂² = G²(RT/M)[fL/D + 2 ln(p₁/p₂)], exact for isothermal ideal-gas flow', 2e-3));
+    }
     return out;
   },
   validation: [
@@ -169,12 +198,14 @@ function stratified(v, vsl, vsg) {
     return tG * q.SG / q.AG - tL * q.SL / q.AL + ti * q.Si * (1 / q.AL + 1 / q.AG) - (v.rho_l - v.rho_g) * g * Math.sin(th);
   };
   let lo = 1e-4, hi = 1 - 1e-4, h = 0.5;
-  if (resid(lo) * resid(hi) < 0) h = N.bisect(resid, lo, hi, 1e-10); else h = resid(0.5) > 0 ? hi : lo;
+  // with no sign change the net force on the liquid has one sign at every level: positive thins the layer, negative thickens it
+  if (resid(lo) * resid(hi) < 0) h = N.bisect(resid, lo, hi, 1e-10); else h = resid(0.5) > 0 ? lo : hi;
   const q = geom(h), uL = vsl * A / q.AL, uG = vsg * A / q.AG;
   const kh = (1 - h) * Math.sqrt((v.rho_l - v.rho_g) * g * Math.cos(th) * q.AG / (v.rho_g * Math.max(q.Si, 1e-12)));
   const fL = fan(v.rho_l * uL * (4 * q.AL / q.SL) / v.mu_l);
   const disp = Math.sqrt(4 * q.AG * g * Math.cos(th) * (1 - v.rho_g / v.rho_l) / (Math.max(q.Si, 1e-12) * fL));
-  // 0 stratified, 1 slug / intermittent, 2 annular, 3 dispersed bubble   (Taitel & Dukler 1976)
+  // 0 stratified, 1 slug / intermittent, 2 annular, 3 dispersed bubble (Taitel & Dukler 1976; the intermittent–annular
+  // boundary is taken at h/D = 0.35, the later revision by Barnea and co-workers of the original value of 0.5)
   const regime = uG < kh ? 0 : (h > 0.5 && uL > disp ? 3 : h > 0.35 ? 1 : 2);
   return { h, uL, uG, kh, regime };
 }
@@ -207,28 +238,36 @@ const slug = {
     inp('p_out', 'Outlet (separator) pressure', 'bar', 30, { min: 1, max: 300, aliases: ['separator pressure', 'outlet pressure'] }),
   ],
   assumptions: [
-    asm('developed', 'Slug flow is fully developed: slugs neither grow nor decay along the line.', { why: 'Long line, steady inlet rates', alt: 'Slug-tracking or transient two-fluid simulation is required.' }),
+    asm('developed', 'Slug flow is fully developed: slugs neither grow nor decay along the line.', { why: 'Long line, steady inlet rates', alt: 'Not resolved here: the developed-flow values are still shown and a warning points to slug-tracking or transient two-fluid simulation.' }),
     asm('bendiksen', 'Bubble translational velocity follows the Bendiksen (1984) drift-flux relation.', { why: 'Measured in inclined tubes over a wide range', alt: 'The simpler Nicklin value v_t = 1.2 v_m is used with no drift term.' }),
     asm('gregory_holdup', 'Slug-body liquid holdup follows Gregory, Nicholson & Aziz (1978).', { why: 'Widely used closure', alt: 'The slug body is treated as unaerated (holdup = 1).' }),
-    asm('incomp', 'Phase densities are constant along the line.', { why: 'Moderate pressure drop relative to line pressure', alt: 'Gas expansion accelerates the mixture toward the outlet.' }),
+    asm('incomp', 'Phase densities are constant along the line.', { why: 'Moderate pressure drop relative to line pressure', alt: 'Not resolved here: the stated velocities are taken as outlet values and a warning reports how much smaller the gas volume flow is at the inlet pressure.' }),
   ],
   symbols: { v_m: ['Mixture velocity', 'm/s'], v_t: ['Slug translational velocity', 'm/s'], C_0: ['Distribution coefficient', '1'], v_d: ['Drift velocity', 'm/s'], H_ls: ['Slug-body liquid holdup', '1'], H_l: ['Mean liquid holdup', '1'], f_s: ['Slug frequency', '1/s'], L_s: ['Slug length', 'm'], L_u: ['Slug-unit length', 'm'], g: ['Gravitational acceleration', 'm/s^2'], F_b: ['Peak force on a 90° bend', 'N'], A: ['Pipe area', 'm^2'], rho_s: ['Slug-body density', 'kg/m^3'], v_ref: ['Reference velocity 8.66 m/s', 'm/s'], f_ref: ['Reference frequency 1 Hz', '1/s'], v_c: ['Reference velocity, v_c² = 19.75 m²/s²', 'm/s'], u_G: ['Gas velocity in stratified flow', 'm/s'], h_L: ['Liquid level over diameter', '1'], A_G: ['Gas flow area', 'm^2'], S_i: ['Interface width', 'm'] },
-  equations: a => [
+  equations: (a, v) => {
+    // Bendiksen (1984) gives two branches, switching at a mixture Froude number v_m/sqrt(g D) of 3.5
+    const lowFr = !v || (v.v_sl + v.v_sg) / Math.sqrt(g * v.D) < 3.5;
+    return [
     eq('vm', 'Mixture velocity', 'v_m', 'v_sl + v_sg', { kind: 'law', origin: 'Conservation of volume for incompressible phases', needs: ['incomp'] }),
     a.bendiksen
       ? eq('vt', 'Translational velocity', 'v_t', 'C_0*v_m + v_d', { kind: 'closure', origin: 'Drift-flux relation; Nicklin (1962), Bendiksen (1984)' })
       : eq('vt', 'Translational velocity', 'v_t', '1.2*v_m', { kind: 'closure', origin: 'Nicklin et al. (1962)' }),
-    ...(a.bendiksen ? [eq('vd', 'Drift velocity (low Froude number)', 'v_d', '0.54*sqrt(g*D)*cos(theta) + 0.35*sqrt(g*D)*sin(theta)', { kind: 'closure', origin: 'Benjamin (1968) horizontal and Dumitrescu (1943) vertical limits, combined by Bendiksen (1984)' })] : []),
+    ...(a.bendiksen ? [
+      lowFr ? eq('c0', 'Distribution coefficient (Froude number below 3.5)', 'C_0', '1.05 + 0.15*sin(theta)^2', { kind: 'empirical', origin: 'Bendiksen (1984)' })
+        : eq('c0', 'Distribution coefficient (Froude number of 3.5 or more)', 'C_0', '1.2', { kind: 'empirical', origin: 'Bendiksen (1984)' }),
+      lowFr ? eq('vd', 'Drift velocity (Froude number below 3.5)', 'v_d', '0.54*sqrt(g*D)*cos(theta) + 0.35*sqrt(g*D)*sin(theta)', { kind: 'closure', origin: 'Benjamin (1968) horizontal and Dumitrescu (1943) vertical limits, combined by Bendiksen (1984)' })
+        : eq('vd', 'Drift velocity (Froude number of 3.5 or more)', 'v_d', '0.35*sqrt(g*D)*sin(theta)', { kind: 'closure', origin: 'Bendiksen (1984): the horizontal drift term vanishes at high mixture velocity' })] : []),
     a.gregory_holdup
       ? eq('hls', 'Slug-body holdup', 'H_ls', '1/(1 + (v_m/v_ref)^1.39)', { kind: 'empirical', origin: 'Gregory, Nicholson & Aziz (1978); v_ref = 8.66 m/s' })
       : eq('hls', 'Slug-body holdup', 'H_ls', '1', { kind: 'closure', origin: 'Unaerated slug idealisation' }),
     eq('fs', 'Slug frequency', 'f_s/f_ref', '0.0226*(v_sl/(g*D)*(v_c^2/v_m + v_m))^1.2', { kind: 'empirical', origin: 'Gregory & Scott (1969), SI form; v_c² = 19.75 m²/s², f_ref = 1 Hz' }),
     eq('ls', 'Slug length', 'L_s', 'n_ls*D', { kind: 'empirical', origin: 'Observed stable slug length' }),
     eq('lu', 'Slug-unit length', 'L_u', 'v_t/f_s', { kind: 'derived', origin: 'Kinematics of a periodic slug train', needs: ['developed'] }),
-    eq('hl', 'Mean liquid holdup', 'H_l', '1 - v_sg/(C_0*v_m + v_d)', { kind: 'derived', origin: 'Drift-flux gas continuity' }),
+    eq('hl', 'Mean liquid holdup', 'H_l', '1 - v_sg/v_t', { kind: 'derived', origin: 'Drift-flux gas continuity: the gas travels at the translational velocity' }),
     eq('kh', 'Stratified-to-intermittent transition', 'u_G', '(1 - h_L)*sqrt((rho_l - rho_g)*g*cos(theta)*A_G/(rho_g*S_i))', { kind: 'derived', origin: 'Kelvin–Helmholtz stability of a finite wave; Taitel & Dukler (1976)' }),
     eq('fb', 'Peak slug force on a 90° bend', 'F_b', 'sqrt(2)*rho_s*A*v_t^2', { kind: 'law', origin: 'Momentum flux change through a bend', needs: ['developed'] }),
-  ],
+    ];
+  },
   derivation: () => [
     { text: 'For incompressible phases the total volumetric flux through any cross-section is the sum of the superficial velocities.', tex: 'v_m = v_{sl} + v_{sg}' },
     { text: 'A long gas bubble moves faster than the mean flow because it travels in the fast central region of the liquid ahead (factor C₀) and because buoyancy drives it relative to the liquid (drift v_d).', tex: 'v_t = C_0\\,v_m + v_d' },
@@ -261,6 +300,8 @@ const slug = {
     const warnings = [];
     if (st.regime !== 1) warnings.push(`The Taitel–Dukler map places this operating point in ${REGIMES[st.regime].toLowerCase()} flow, not slug flow. The slug quantities below describe what slugging would look like if it occurred; treat them as indicative.`);
     if (Ls > Lu) warnings.push('The correlated slug length exceeds the slug-unit length: frequency and length correlations disagree here, a sign the point lies near the edge of their data range.');
+    if (!a.developed) warnings.push('Slug growth and decay along the line are not resolved: the values shown are those of a developed slug train. Use slug-tracking or a transient two-fluid simulation for developing flow.');
+    if (!a.incomp) { const pIn = v.p_out + Math.max(dpdx * v.L, 0); warnings.push(`Gas expansion along the line is not resolved. With the stated velocities taken at the outlet, the gas volume flow at the inlet pressure of ${lab(pIn / 1e5, 'bar')} is about ${lab(100 * v.p_out / pIn, '%')} of its outlet value, so slugs accelerate toward the outlet.`); }
 
     // sweeps
     const vsgs = N.logspace(0.2, 20, 60);
@@ -307,6 +348,8 @@ const slug = {
       const r1 = this.solve({ ...v, v_sl: 1e-9, v_sg: 1e-9, theta: Math.PI / 2 }, a).scalars.find(s => s.sym === 'v_t').value;
       out.push(bench('Vertical Taylor-bubble rise vs potential-flow theory', r1 / sgD, 0.351, 'Dumitrescu (1943): v = 0.351 √(gD)', 0.01));
     }
+    const half = this.solve({ ...v, v_sl: 2.66, v_sg: 6 }, { ...a, gregory_holdup: true }).scalars.find(s => s.sym === 'H_ls').value;
+    out.push(bench('Slug-body holdup at a mixture velocity of 8.66 m/s', half, 0.5, 'Gregory, Nicholson & Aziz (1978): the correlation passes through one half at its reference velocity', 1e-12));
     return out;
   },
   validation: [],
@@ -337,7 +380,7 @@ const slug = {
   alternatives: [{ name: 'Severe (terrain or riser-base) slugging', text: 'Liquid accumulating at a low point produces much longer slugs governed by riser height and gas compressibility, not by interfacial instability.' }, { name: 'Zabaras (2000) frequency correlation', text: 'Extends Gregory–Scott with an inclination correction.' }, { name: 'Transient two-fluid or slug-tracking simulation', text: 'Resolves slug initiation, growth and dissipation instead of assuming a developed train.' }],
   hazards: [{ hazard: 'Fatigue of bends and supports', cause: 'Cyclic slug loads', mitigation: 'Dynamic stress analysis; add supports; reduce velocity' }, { hazard: 'Separator flooding', cause: 'Slug volume exceeding surge capacity', mitigation: 'Slug catcher sized for the largest credible slug; inlet choking' }],
   standards: ['API RP 14E', 'DNV-RP-F105 (free-spanning pipelines)', 'Energy Institute guidelines for the avoidance of vibration-induced fatigue failure in process pipework'],
-  limits: 'Developed hydrodynamic slug flow in pipes inclined between about −10° and +30°, low-to-moderate viscosity liquids. The frequency correlation was built on small-diameter air–water data and is less reliable for large-diameter, high-pressure lines.',
+  limits: 'Developed hydrodynamic slug flow in pipes inclined between about −10° and +30°, low-to-moderate viscosity liquids. The frequency correlation was built on small-diameter data at low pressure and is less reliable for large-diameter, high-pressure lines. The regime map follows Taitel and Dukler with the intermittent–annular boundary at a liquid level of 0.35 diameters (their original value was 0.5); the drift relation was measured for horizontal and upward-inclined tubes.',
   numerics: { method: 'Algebraic closure relations; bisection for the stratified equilibrium level' },
   optimise: { objective: 'F_b', sense: 'min', vars: ['D'], note: 'Larger diameter lowers velocity and bend load but raises liquid inventory.' },
   inverse: { series: 'freq-sweep', fit: ['v_sl'] },
@@ -382,18 +425,21 @@ const hydrate = {
   assumptions: [
     asm('motiee', 'The hydrate boundary follows the Motiee (1991) gas-gravity correlation.', { why: 'Needs only gas gravity', alt: 'The boundary of pure methane (structure I) from Kamath (1984) is used.' }),
     asm('methanol', 'The thermodynamic inhibitor is methanol.', { why: 'Common for start-up and intermittent injection', alt: 'Mono-ethylene glycol is used instead.' }),
-    asm('linear_p', 'Pressure falls linearly along the line.', { why: 'Adequate when only the end pressures are known', alt: 'A coupled hydraulic model supplies the pressure profile.' }),
-    asm('lumped', 'During shut-in the fluid and steel cool as one lumped thermal mass.', { why: 'Biot number of the pipe wall is small', alt: 'Radial conduction through wall and insulation must be resolved.' }),
-    asm('free_water', 'A free-water phase is present, so hydrates can form whenever conditions are inside the boundary.', { why: 'Conservative', alt: 'Formation requires water condensation first; risk is lower in dehydrated gas.' }),
+    asm('linear_p', 'Pressure falls linearly along the line.', { why: 'Adequate when only the end pressures are known', alt: 'The square of the pressure falls linearly with distance, as in isothermal gas flow, so more of the drop occurs toward the outlet.' }),
+    asm('lumped', 'During shut-in the fluid and steel cool as one lumped thermal mass.', { why: 'Biot number of the pipe wall is small', alt: 'Radial conduction is not resolved; instead the heat stored in the steel is not credited, which gives a lower bound on the cool-down time.' }),
+    asm('free_water', 'A free-water phase is present, so hydrates can form whenever conditions are inside the boundary.', { why: 'Conservative', alt: 'No free water: the boundary, subcooling and inhibitor dose are still reported, but hydrate growth is set to zero because water must condense first.' }),
   ],
   symbols: { T_eq: ['Hydrate equilibrium temperature', 'K'], dT_sub: ['Subcooling', 'K'], W: ['Inhibitor mass fraction in the aqueous phase', '1'], K_H: ['Hammerschmidt constant', 'K kg/mol'], M_i: ['Inhibitor molar mass', 'kg/mol'], dT_H: ['Hydrate-temperature depression', 'K'], tau_c: ['Cool-down time constant', 's'], T: ['Fluid temperature', 'K'], x: ['Distance', 'm'], t: ['Time', 's'], A: ['Flow area', 'm^2'], A_s: ['Steel cross-section', 'm^2'], rho_s: ['Steel density', 'kg/m^3'], c_s: ['Steel specific heat', 'J/(kg K)'], phi: ['Hydrate volume fraction', '1'], p: ['Pressure', 'Pa'] },
   equations: a => [
     eq('en', 'Flowing energy balance', 'mdot*cp*pd(T,x)', '-U*pi*D*(T - T_amb)', { kind: 'law', origin: 'First law of thermodynamics' }),
-    ...(a.linear_p ? [eq('pp', 'Pressure profile', 'p', 'p_in - dp*x/L', { kind: 'closure', origin: 'Linear interpolation between end pressures', needs: ['linear_p'] })] : []),
+    a.linear_p ? eq('pp', 'Pressure profile', 'p', 'p_in - dp*x/L', { kind: 'closure', origin: 'Linear interpolation between end pressures', needs: ['linear_p'] })
+      : eq('pp', 'Pressure profile', 'p', 'sqrt(p_in^2 - (p_in^2 - (p_in - dp)^2)*x/L)', { kind: 'closure', origin: 'Isothermal gas flow with constant friction factor: p² is linear in distance' }),
     eq('sub', 'Subcooling', 'dT_sub', 'T_eq - T', { kind: 'definition' }),
     eq('ham', 'Inhibitor depression', 'dT_H', 'K_H*W/(M_i*(1 - W))', { kind: 'empirical', origin: 'Hammerschmidt (1934); K_H = 1.297 K·kg/mol' }),
-    eq('cool', 'Shut-in cool-down', '(rho*cp*A + rho_s*c_s*A_s)*d(T,t)', '-U*pi*D*(T - T_amb)', { kind: 'law', origin: 'First law for a lumped thermal mass', needs: ['lumped'] }),
-    eq('grow', 'Hydrate growth', 'd(phi,t)', 'k_g*max(dT_sub, 0)*(1 - phi)', { kind: 'hypothesis', origin: 'Subcooling-driven lumped kinetics; an engineering closure, not a first-principles law', needs: ['free_water'] }),
+    a.lumped ? eq('cool', 'Shut-in cool-down', '(rho*cp*A + rho_s*c_s*A_s)*d(T,t)', '-U*pi*D*(T - T_amb)', { kind: 'law', origin: 'First law for a lumped thermal mass of fluid and steel', needs: ['lumped'] })
+      : eq('cool', 'Shut-in cool-down, fluid heat capacity only', 'rho*cp*A*d(T,t)', '-U*pi*D*(T - T_amb)', { kind: 'law', origin: 'First law with the steel wall not credited (lower bound on cool-down time)' }),
+    a.free_water ? eq('grow', 'Hydrate growth', 'd(phi,t)', 'k_g*max(dT_sub, 0)*(1 - phi)', { kind: 'hypothesis', origin: 'Subcooling-driven lumped kinetics; an engineering closure, not a first-principles law', needs: ['free_water'] })
+      : eq('grow', 'Hydrate growth', 'd(phi,t)', '0*k_g*dT_sub', { kind: 'closure', origin: 'No free water, so no growth' }),
   ],
   derivation: a => [
     { text: 'The flowing temperature follows the same exponential law as any heat-losing pipeline.', tex: 'T(x) = T_{amb} + (T_{in}-T_{amb})\\,e^{-U\\pi D x/(\\dot m c_p)}' },
@@ -405,7 +451,8 @@ const hydrate = {
     const Teq = p => (a.motiee ? motiee(p, v.sg) : kamath(p));
     const n = 240, x = N.linspace(0, v.L, n), ell = v.mdot * v.cp / (v.U * Math.PI * v.D);
     const T = x.map(s => v.T_amb + (v.T_in - v.T_amb) * Math.exp(-s / ell));
-    const p = x.map(s => Math.max(v.p_in - v.dp * s / v.L, 1e5));
+    const pEnd = v.p_in - v.dp;
+    const p = x.map(s => Math.max(a.linear_p ? v.p_in - v.dp * s / v.L : Math.sqrt(Math.max(v.p_in ** 2 - (v.p_in ** 2 - Math.max(pEnd, 0) ** 2) * s / v.L, 0)), 1e5));
     const Te = p.map(Teq), sub = T.map((t, i) => Te[i] - t);
     const maxSub = N.maxOf(sub), iIn = sub.findIndex(s => s > 0);
     const xIn = iIn < 0 ? null : (iIn === 0 ? 0 : x[iIn - 1] + (x[iIn] - x[iIn - 1]) * (0 - sub[iIn - 1]) / (sub[iIn] - sub[iIn - 1]));
@@ -415,7 +462,7 @@ const hydrate = {
     const mWater = v.mdot * v.wc, mInh = mWater * W / Math.max(1 - W, 1e-9);
     // shut-in cool-down from the flowing profile, worst location = outlet end at settle-out pressure
     const A = Math.PI * v.D ** 2 / 4, As = Math.PI * ((v.D + 2 * v.t_w) ** 2 - v.D ** 2) / 4;
-    const tau = (v.rho * v.cp * A + 7850 * 480 * As) / (v.U * Math.PI * v.D);
+    const tau = (v.rho * v.cp * A + (a.lumped ? 7850 * 480 * As : 0)) / (v.U * Math.PI * v.D);
     const pSettle = v.p_in - v.dp / 2, TeS = Teq(pSettle);
     const tStar = xx => { const T0 = v.T_amb + (v.T_in - v.T_amb) * Math.exp(-xx / ell); if (T0 <= TeS) return 0; if (TeS <= v.T_amb) return Infinity; return tau * Math.log((T0 - v.T_amb) / (TeS - v.T_amb)); };
     const noTouch = tStar(v.L), tHot = tStar(0);
@@ -428,17 +475,18 @@ const hydrate = {
     const pp = N.logspace(1e6, 6e7, 80);
     const warnings = [];
     if (!a.motiee && v.sg > 0.6) warnings.push('The pure-methane boundary under-predicts hydrate temperature for heavier gas; it is not conservative for this gas gravity.');
+    if (pEnd < 1e5) warnings.push('The stated pressure drop exceeds the inlet pressure; the pressure has been limited to 1 bar.');
     if (v.p_in > 4.2e7 && a.motiee) warnings.push('Pressure exceeds the range over which the gravity correlation was fitted (to about 400 bar); treat the boundary as an extrapolation.');
     return {
       scalars: [
-        scalar('inside', 'Line enters the hydrate region', inside ? 1 : 0, '1', { text: inside ? 'Yes — hydrates can form' : 'No — the whole line stays outside the hydrate region' }),
+        scalar('inside', 'Line enters the hydrate region', inside ? 1 : 0, '1', { text: inside ? (a.free_water ? 'Yes — hydrates can form' : 'Yes — but hydrates form only once water condenses') : 'No — the whole line stays outside the hydrate region' }),
         scalar('dT_sub', 'Maximum subcooling', maxSub, 'K'), scalar('x_in', 'Distance at which the hydrate region is entered', xIn == null ? NaN : xIn, 'm', { show: 'km', text: xIn == null ? 'Not entered' : undefined }),
         scalar('T_out', 'Arrival temperature', T[n - 1], 'K', { show: '°C' }), scalar('T_eq_out', 'Hydrate equilibrium temperature at outlet pressure', Te[n - 1], 'K', { show: '°C' }),
         scalar('W', `${a.methanol ? 'Methanol' : 'MEG'} mass fraction required in the water phase`, W, '1', { show: '%' }),
         scalar('m_inh', `${a.methanol ? 'Methanol' : 'MEG'} injection rate`, mInh, 'kg/s', { show: 'kg/h' }),
         scalar('tau_c', 'Shut-in cool-down time constant', tau, 's', { show: 'h' }),
         scalar('t_nt', 'No-touch time at the cold end', noTouch, 's', { show: 'h', text: noTouch === 0 ? 'Zero — already inside the hydrate region while flowing' : !isFinite(noTouch) ? 'Unlimited — ambient is warmer than the hydrate temperature' : undefined }),
-        scalar('t_hot', 'Cool-down time at the hot end', tHot, 's', { show: 'h' }),
+        scalar('t_hot', 'Cool-down time at the hot end', tHot, 's', { show: 'h', text: tHot === 0 ? 'Zero — already inside the hydrate region while flowing' : !isFinite(tHot) ? 'Unlimited — ambient is warmer than the hydrate temperature' : undefined }),
         scalar('phi_24', 'Hydrate volume fraction after 24 h at the coldest point (uninhibited)', phi24, '1', { show: '%', status: 'hypothetical' }),
       ],
       series: [
@@ -453,14 +501,29 @@ const hydrate = {
     };
   },
   benchmarks(v, a) {
-    const out = [bench('Methane boundary: temperature recovered from pressure at 280 K', kamath(Math.exp(38.980 - 8533.80 / 280) * 1000), 280, 'Round trip through P = exp(38.980 − 8533.80/T) kPa', 1e-10)];
-    const tau = 1000, t = tau * Math.log(2);
-    out.push(bench('Lumped cool-down half-time', 0 + (1 - 0) * Math.exp(-t / tau), 0.5, 'Exact exponential solution', 1e-12));
+    const get = (r, s) => r.scalars.find(q => q.sym === s).value;
+    const b = { motiee: false, methanol: true, linear_p: true, lumped: true, free_water: true };
+    const rm = this.solve({ ...v, p_in: Math.exp(38.980 - 8533.80 / 280) * 1000, dp: 0 }, b);
+    const out = [bench('Methane boundary through the solver at the pressure for 280 K', get(rm, 'T_eq_out'), 280, 'P = exp(38.980 − 8533.80/T) kPa, Kamath (1984)', 1e-10)];
+    // Hammerschmidt worked value: 25 % by mass of methanol lowers the hydrate temperature by 1297 × 25/(32.04 × 75) = 13.49 K
+    const r0 = this.solve({ ...v, U: Math.max(v.U, 30), margin: 0 }, b), need = Math.max(get(r0, 'dT_sub'), 0);
+    if (need > 0) out.push(bench('Depression given by the computed methanol dose', 1297 * 100 * get(r0, 'W') / (32.04 * (100 - 100 * get(r0, 'W'))), need, 'Hammerschmidt (1934) in its original form ΔT = 1297 W/[M (100 − W)] with W in mass per cent and M in g/mol', 1e-9));
+    // shut-in: integrate the lumped energy balance numerically up to the reported hot-end time and compare the temperature reached
+    const tHot = get(r0, 't_hot'), tau = get(r0, 'tau_c');
+    if (Number.isFinite(tHot) && tHot > 0) {
+      const ode = N.rk45((t, y) => [-(y[0] - v.T_amb) / tau], [v.T_in], 0, tHot, 3, { rtol: 1e-10, atol: 1e-10 });
+      // the settle-out pressure is the mean of the end pressures
+      out.push(bench('Hot-end temperature at the reported cool-down time, by numerical integration', ode.y[0].at(-1), kamath(v.p_in - v.dp / 2), 'Independent Runge–Kutta integration of the lumped energy balance', 1e-6));
+    }
+    out.push(bench('Motiee correlation at 1000 psia and gas gravity 0.6', (motiee(1000 * 6894.757, 0.6) - 273.15) * 1.8 + 32, 56.26, 'Hand evaluation of the published polynomial, in °F', 1e-3));
     return out;
   },
   validation: [
-    { name: 'Methane hydrate three-phase equilibrium', ref: 'Deaton, W. M. & Frost, E. M. (1946) U.S. Bureau of Mines Monograph 8, as tabulated in Sloan & Koh (2008)', note: 'Compares the pure-methane boundary; switch off the gas-gravity assumption to reproduce.',
-      cases: [{ label: 'p = 3.85 MPa', inputs: { p_in: 3.85e6, dp: 0, L: 1 }, assumptions: { motiee: false }, observable: 'T_eq_out', observed: 277.2, sigma: 0.5 }] },
+    { name: 'Methane hydrate three-phase equilibrium', ref: 'Deaton, W. M. & Frost, E. M. (1946) U.S. Bureau of Mines Monograph 8, as tabulated in Sloan & Koh (2008)', note: 'Compares the pure-methane boundary; switch off the gas-gravity assumption to reproduce. The uncertainty covers the scatter between published data sets, not the precision of the original measurement.',
+      cases: [
+        { label: 'p = 3.81 MPa', inputs: { p_in: 3.81e6, dp: 0, L: 1 }, assumptions: { motiee: false }, observable: 'T_eq_out', observed: 277.1, sigma: 0.5 },
+        { label: 'p = 5.35 MPa', inputs: { p_in: 5.35e6, dp: 0, L: 1 }, assumptions: { motiee: false }, observable: 'T_eq_out', observed: 280.4, sigma: 0.5 },
+      ] },
   ],
   diagram(v) {
     return svg(`
