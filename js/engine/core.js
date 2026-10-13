@@ -27,6 +27,7 @@ export const PROV = {
   ESTIMATED: { key: 'ESTIMATED', label: 'Software-estimated', tone: 'soft', text: 'Estimated from bundled climatology or correlations, with stated uncertainty.' },
   SUPPLIED: { key: 'SUPPLIED', label: 'Software-supplied', tone: 'soft', text: 'Reference value supplied by the software because none was given.' },
   HYPOTHETICAL: { key: 'HYPOTHETICAL', label: 'Hypothetical', tone: 'hypo', text: 'Invented or altered for a counterfactual scenario. Not a measured fact.' },
+  LLM: { key: 'LLM', label: 'Language-model reading', tone: 'soft', text: 'Read from your prompt by a language model and checked against your wording. Confirm it.' },
   UNRESOLVED: { key: 'UNRESOLVED', label: 'Unresolved', tone: 'bad', text: 'Not reliably identifiable from the available information.' },
 };
 
@@ -34,6 +35,16 @@ const ATLAS_INDEX = ATLAS.map(a => ({ id: a.id, title: a.title, keywords: a.kw, 
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const modelClass = m => (Array.isArray(m.klass) ? m.klass : [m.klass]);
+
+/** Make a standard relation from the formula atlas the working model of an investigation, with the numbers given in the prompt. */
+export function useAtlas(inv, at, prompt) {
+    inv.atlas = at.id; inv.custom.equations = at.eqs.map(([lhs, rhs, name, origin]) => ({ lhs, rhs, name, origin, kind: /law|principle|conservation/i.test(origin) ? 'law' : /definition|ratio|sum|geometry/i.test(origin) ? 'definition' : 'derived' }));
+    inv.custom.symbols = Object.fromEntries(Object.entries(at.sym).map(([k, v]) => [k, v.length > 2 ? { name: v[0], unit: v[1], value: v[2], min: v[3], max: v[4], aliases: v[5], src: v[3] === v[4] ? 'Accepted value of the constant' : 'Typical reference value' } : { name: v[0], unit: v[1] }]));
+    inv.klass = P.classifyClass(prompt, { klass: 'I', title: at.title });
+    // numbers given in the prompt replace the reference values
+    const list = Object.entries(at.sym).filter(([, v]) => v.length > 2 && v[3] !== v[4]).map(([k, v]) => { const u = tryUnit(v[1]); return { sym: k, name: v[0], unit: v[1], aliases: v[5] || [], kind: 'operating', si: v[2] * u.f + u.o, rangeSI: [v[3] * u.f + u.o, v[4] * u.f + u.o] }; });
+    P.mapQuantities(P.extractQuantities(prompt), list).mapped.forEach(({ q, sym }) => { const d = inv.custom.symbols[sym]; d.value = fromSI(q.si, d.unit); d.min = Math.min(d.min, d.value); d.max = Math.max(d.max, d.value); d.src = `From your prompt: “${q.raw}”`; d.prov = 'USER'; });
+}
 
 /** Create a new investigation from a prompt. */
 export function createInvestigation({ module, mode = 'A', prompt, modelId = null }) {
@@ -77,14 +88,9 @@ export function createInvestigation({ module, mode = 'A', prompt, modelId = null
       const kwHit = r => !!r && (r.hits || []).length > 0;
       if (ar && (atlasWins || P.strongMatch(ar) || (kwHit(ar) && (!lib || !kwHit(lib))))) {
         const at = ATLAS.find(x => x.id === ar.id);
-        inv.atlas = at.id; inv.custom.equations = at.eqs.map(([lhs, rhs, name, origin]) => ({ lhs, rhs, name, origin, kind: /law|principle|conservation/i.test(origin) ? 'law' : /definition|ratio|sum|geometry/i.test(origin) ? 'definition' : 'derived' }));
-        inv.custom.symbols = Object.fromEntries(Object.entries(at.sym).map(([k, v]) => [k, v.length > 2 ? { name: v[0], unit: v[1], value: v[2], min: v[3], max: v[4], aliases: v[5], src: v[3] === v[4] ? 'Accepted value of the constant' : 'Typical reference value' } : { name: v[0], unit: v[1] }]));
-        inv.klass = P.classifyClass(prompt, { klass: 'I', title: at.title });
+        useAtlas(inv, at, prompt);
         if (!P.strongMatch(ar)) inv.match = { confidence: 'low', note: 'This is the nearest standard relation to your question. Check that it describes the situation you meant; you can replace it with your own equations.' };
         inv.audit.push({ ts: Date.now(), action: `Standard relation selected from the formula atlas: ${at.title}` });
-        // numbers given in the prompt replace the reference values
-        const list = Object.entries(at.sym).filter(([, v]) => v.length > 2 && v[3] !== v[4]).map(([k, v]) => { const u = tryUnit(v[1]); return { sym: k, name: v[0], unit: v[1], aliases: v[5] || [], kind: 'operating', si: v[2] * u.f + u.o, rangeSI: [v[3] * u.f + u.o, v[4] * u.f + u.o] }; });
-        P.mapQuantities(P.extractQuantities(prompt), list).mapped.forEach(({ q, sym }) => { const d = inv.custom.symbols[sym]; d.value = fromSI(q.si, d.unit); d.min = Math.min(d.min, d.value); d.max = Math.max(d.max, d.value); d.src = `From your prompt: “${q.raw}”`; d.prov = 'USER'; });
       } else if (lib && kwHit(lib) && lib.cov >= 0.3) {
         // a library model shares real vocabulary with the prompt but not enough to be sure: run it, flagged
         inv.modelId = lib.id; inv.match = { confidence: 'low', note: 'No model corresponds closely to this prompt. The nearest one has been run so that there is something concrete to examine; check that it is the system you meant, pick another, or enter your own equations.' }; inv.klass = P.classifyClass(prompt, modelById(lib.id)); inv.audit.push({ ts: Date.now(), action: `Nearest model selected with low confidence: ${lib.title}` });
@@ -317,12 +323,17 @@ export function sensitivity(c, step = 0.02) {
   const model = c.model; if (!model || c.result.status !== 'computed') return null;
   const base = scalarMap(c.result), outs = Object.keys(base), rows = [];
   for (const i of variable(c)) {
-    const h = Math.abs(i.si) > 0 ? Math.abs(i.si) * step : (i.rangeSI[1] - i.rangeSI[0]) * step || step;
+    // a whole-number input cannot move by 2 %: it is stepped by at least one, or the solver would round it back and report no influence
+    const h0 = Math.abs(i.si) > 0 ? Math.abs(i.si) * step : (i.rangeSI[1] - i.rangeSI[0]) * step || step, h = i.integer ? Math.max(1, Math.round(h0)) : h0;
     const up = scalarMap(runModel(model, { ...c.v, [i.sym]: N.clamp(i.si + h, i.rangeSI[0], i.rangeSI[1]) }, c.a, true));
     const dn = scalarMap(runModel(model, { ...c.v, [i.sym]: N.clamp(i.si - h, i.rangeSI[0], i.rangeSI[1]) }, c.a, true));
     const dx = N.clamp(i.si + h, i.rangeSI[0], i.rangeSI[1]) - N.clamp(i.si - h, i.rangeSI[0], i.rangeSI[1]);
     const s = {};
-    outs.forEach(o => { if (up[o] == null || dn[o] == null || dx === 0) { s[o] = NaN; return; } const d = (up[o] - dn[o]) / dx; s[o] = base[o] !== 0 && i.si !== 0 ? d * i.si / base[o] : d; });
+    const xu = N.clamp(i.si + h, i.rangeSI[0], i.rangeSI[1]), xd = N.clamp(i.si - h, i.rangeSI[0], i.rangeSI[1]);
+    outs.forEach(o => { if (up[o] == null || dn[o] == null || dx === 0) { s[o] = NaN; return; } const d = (up[o] - dn[o]) / dx;
+      // per cent per per cent is the slope on logarithmic axes; taken that way it is exact for a power law even when the
+      // step is large or one-sided (an input sitting at the end of its range)
+      s[o] = base[o] !== 0 && i.si !== 0 ? (xu > 0 && xd > 0 && up[o] * dn[o] > 0 ? Math.log(up[o] / dn[o]) / Math.log(xu / xd) : d * i.si / base[o]) : d; });
     rows.push({ sym: i.sym, name: i.name, prov: i.prov, s });
   }
   return { outputs: c.result.scalars.filter(s => outs.includes(s.sym)), rows };
@@ -366,8 +377,8 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
   xs = [...new Set(xs)].sort((p, q) => p - q);
   const cols = new Map(), meta = {};
   // each solve carries the model's own conservation and consistency checks: a point is trusted only where they pass
-  const failed = new Map();
-  const solve = x => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true), col = {}; const f = r.status === 'computed' ? (r.checks || []).filter(q => q.pass === false).map(q => q.name) : ['The solve did not complete']; if (f.length) failed.set(x, f); r.scalars.forEach(s => { meta[s.sym] = meta[s.sym] || s; col[s.sym] = Number.isFinite(s.value) ? s.value : NaN; }); cols.set(x, col); };
+  const failed = new Map(), why = {};
+  const solve = x => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true), col = {}; const f = r.status === 'computed' ? (r.checks || []).filter(q => q.pass === false).map(q => q.name) : ['The solve did not complete']; if (f.length) failed.set(x, f); r.scalars.forEach(s => { meta[s.sym] = meta[s.sym] || s; col[s.sym] = Number.isFinite(s.value) ? s.value : NaN; if (!Number.isFinite(s.value) && s.text) (why[s.sym] = why[s.sym] || new Map()).set(x, s.text); }); cols.set(x, col); };
   xs.forEach(solve);
   // refinement: where the middle of three neighbours lies far from the chord through the outer two, halve both intervals
   // a quick model can afford many more solves than a slow one: the allowance is about a second of computing
@@ -386,7 +397,7 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
     xs = [...xs, ...done].sort((p, q) => p - q);
   }
   const outputs = Object.keys(meta).map(k => ({ ...meta[k], data: xs.map(x => { const v = cols.get(x)[k]; return v === undefined ? NaN : v; }) })).filter(o => o.data.some(Number.isFinite));
-  outputs.forEach(o => Object.assign(o, curveShape(xs, o)));
+  outputs.forEach(o => { Object.assign(o, curveShape(xs, o)); o.why = xs.map(x => (why[o.sym] && why[o.sym].get(x)) || null); });
   // an irregular response is often a switch between distinct states: name the whole-number output that records the switching
   const state = outputs.filter(o => o.shape === 'steps' && o.data.filter(Number.isFinite).every(Number.isInteger)).map(o => { const f = o.data.filter(Number.isFinite); let n = 0; for (let k = 1; k < f.length; k++) if (f[k] !== f[k - 1]) n++; return { name: o.name, n }; }).sort((p, q) => q.n - p.n)[0];
   if (state && state.n >= 2) outputs.forEach(o => { if (o.shape === 'scattered') o.switches = state; });
@@ -400,7 +411,7 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
  */
 export function curveShape(xs, o) {
   const pts = xs.map((x, k) => [x, o.data[k]]).filter(p => Number.isFinite(p[1])), d = pts.map(p => p[1]);
-  if (d.length < 3) return { shape: 'line' };
+  if (d.length < 3) return { shape: 'line', law: { type: 'curved', trend: 'mixed', at: null } };
   const lo = Math.min(...d), hi = Math.max(...d), span = hi - lo, scale = Math.max(Math.abs(lo), Math.abs(hi));
   if (!(span > 1e-9 * scale)) return { shape: 'level' };
   const distinct = new Set(d.map(v => +v.toPrecision(9))).size;
@@ -416,7 +427,18 @@ export function curveShape(xs, o) {
     const w = Math.max(2, Math.round(pts.length / 14)), trend = pts.map((_, k) => { const win = d.slice(Math.max(0, k - w), k + w + 1).sort((a, b) => a - b); return win[win.length >> 1]; });
     const tr = new Array(o.data.length).fill(NaN); let j = 0; o.data.forEach((v, k) => { if (Number.isFinite(v)) tr[k] = trend[j++]; });
     return { shape: 'scattered', q1: q(0.25), median: q(0.5), q3: q(0.75), trend: tr, sampled: /simulat|random|sampled|percentile|monte carlo/i.test(o.name || '') }; }
-  return { shape: 'line' };
+  return { shape: 'line', law: responseLaw(pts) };
+}
+/** The simplest law a smooth response follows over the swept range: a power of the input, a straight line, an exponential, or none of these. */
+export function responseLaw(pts) {
+  const fit = (X, Y) => { const n = X.length, mx = N.mean(X), my = N.mean(Y); let sxx = 0, sxy = 0, syy = 0; for (let k = 0; k < n; k++) { sxx += (X[k] - mx) ** 2; sxy += (X[k] - mx) * (Y[k] - my); syy += (Y[k] - my) ** 2; } const b = sxy / sxx; return { b, a: my - b * mx, r2: syy > 0 ? sxy * sxy / (sxx * syy) : 1 }; };
+  const x = pts.map(p => p[0]), y = pts.map(p => p[1]), sgn = Math.sign(y[0]), oneSign = sgn !== 0 && y.every(v => Math.sign(v) === sgn), ly = oneSign ? y.map(v => Math.log(Math.abs(v))) : null;
+  if (oneSign && x.every(v => v > 0)) { const f = fit(x.map(Math.log), ly); if (f.r2 > 0.999999) { const snap = [1, 2, 3, 4, 5, 6, 1 / 2, 1 / 3, 2 / 3, 3 / 2, 1 / 4, 3 / 4, 4 / 3, 5 / 2, 5 / 3, 1 / 6, 7 / 2].flatMap(q => [q, -q]).find(q => Math.abs(f.b - q) < 2e-3); return { type: 'power', p: snap ?? f.b, exact: snap != null }; } }
+  const lin = fit(x, y); if (lin.r2 > 0.9999999) return { type: 'linear', slope: lin.b, intercept: lin.a };
+  if (oneSign) { const f = fit(x, ly); if (f.r2 > 0.999999) return { type: 'exponential', k: f.b }; }
+  let up = 0, dn = 0; for (let k = 1; k < y.length; k++) { if (y[k] > y[k - 1]) up++; else if (y[k] < y[k - 1]) dn++; }
+  const iMax = y.indexOf(Math.max(...y)), iMin = y.indexOf(Math.min(...y)), inner = k => k > 0 && k < y.length - 1;
+  return { type: 'curved', trend: !dn ? 'rises' : !up ? 'falls' : inner(iMax) && !inner(iMin) ? 'peak' : inner(iMin) && !inner(iMax) ? 'dip' : 'mixed', at: inner(iMax) ? x[iMax] : inner(iMin) ? x[iMin] : null };
 }
 
 /** Which conclusions depend on which assumptions: flip each assumption alone and measure the change in every output. */

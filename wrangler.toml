@@ -1,0 +1,13 @@
+# Second host (Cloudflare Pages). The static files are the same as on the first host; this adds one server function,
+# functions/api/read.js, which reads a prompt with a hosted language model when the user asks for that.
+name = "bespokesoftware"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "."
+
+[ai]
+binding = "AI"
+
+# counters for the daily allowance of the reading function (no prompt text is stored)
+[[kv_namespaces]]
+binding = "LIMITS"
+id = "800985f969fc47fb8dfdf4edaa1c2fcb"

@@ -5,6 +5,7 @@ import { go, rerender, install, canPromptInstall, isStandalone } from '../app.js
 import { MODELS, modelById } from '../models/index.js';
 import * as P from '../engine/prompt.js';
 import { createInvestigation, log } from '../engine/core.js';
+import { askModel, applyReading } from '../engine/reading.js';
 import * as Store from '../core/store.js';
 import { importFile, ACCEPT, FORMATS } from '../core/importers.js';
 import * as Conn from '../core/connectors.js';
@@ -134,6 +135,13 @@ async function takeFiles(files, listEl) {
 async function start(module, mode, prompt, modelId) {
   if (prompt.trim().length < 3 && !modelId) { toast('Describe your idea or problem first.'); return; }
   const inv = createInvestigation({ module, mode, prompt: prompt.trim() || modelById(modelId).summary, modelId });
+  // optional: a language model reads the prompt first. It only proposes; what it returns is checked before use.
+  if (!modelId && !mode.startsWith('re') && Store.prefs.get('llm', false) && navigator.onLine !== false) {
+    const btn = document.getElementById('go'), label = btn && btn.textContent; if (btn) { btn.disabled = true; btn.innerHTML = '<span class="busy"></span> Reading your prompt…'; }
+    try { const rd = await askModel(inv.prompt, module, { key: Store.prefs.get('llmKey', '') || undefined }); const did = applyReading(inv, rd); if (did) toast(did, 4200); else if (rd.dropped.length) inv.audit.push({ ts: Date.now(), action: `Language-model reading not used: ${rd.dropped[0]}` }); }
+    catch (err) { toast(`The language-model reading was not available (${err.name === 'AbortError' ? 'it took too long' : err.message}). Continuing with the built-in reading.`, 5200); inv.audit.push({ ts: Date.now(), action: 'Language-model reading unavailable; built-in reading used' }); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+  }
   for (const p of pending.filter(x => !x.rec.rejected)) { inv.uploads.push(p.rec); await Store.saveUpload(p.rec, p.file); log(inv, `File added: ${p.rec.name} (SHA-256 ${p.rec.sha256.slice(0, 12)}…)`); }
   pending = [];
   await Store.saveInvestigation(inv);
@@ -159,6 +167,7 @@ export function promptPage(module) {
             <textarea id="prompt" class="prompt" placeholder="${module === 1 ? 'For example: Suppose a twin travels to a nearby star at 80 % of the speed of light and comes back…' : 'For example: A 20 km subsea gas tieback, 10 inch diameter, wellhead at 150 bar and 60 °C…'}" autofocus spellcheck="true"></textarea></div>
           <div><label class="f">Or begin from an example</label><div class="examples">${join(EXAMPLES[module], e => html`<button type="button" data-ex="${e}">${e.length > 78 ? e.slice(0, 76) + '…' : e}</button>`)}</div></div>
           ${uploadZone()}
+          <label class="row small" style="gap:.5rem;align-items:flex-start;cursor:pointer"><input type="checkbox" id="llm-on" ${Store.prefs.get('llm', false) ? raw('checked') : ''} style="margin-top:.2rem"><span><b>Also read my prompt with a language model.</b> <span class="dim">It works out which model fits, which of your numbers belong to which inputs and, when nothing in the library fits, proposes the equations. Only the text of the prompt is sent${Store.prefs.get('llmKey', '') ? ', directly to the provider with your own key' : ', to this project’s reading service'}; everything it returns is checked and then verified like any other model. <a href="#/settings">Details and settings</a></span></span></label>
           <div class="row"><button class="btn primary" id="go">Create the investigation</button><a class="btn ghost" href="#/library">Browse the model library instead</a></div>
         </div>
         <div class="card"><h3>How your prompt is being read</h3><div id="reading">${reading('', module)}</div></div>
@@ -169,6 +178,7 @@ export function promptPage(module) {
       ta.addEventListener('input', upd);
       on(root, 'click', '[data-ex]', (_, el) => { ta.value = el.dataset.ex; upd(); ta.focus(); });
       on(root, 'click', '[data-opt]', (_, el) => { mode = el.dataset.opt; $$('[data-opt]', root).forEach(b => b.setAttribute('aria-pressed', String(b === el))); $('#opt-help', root).textContent = mode === 'A' ? 'Governing equations are generated from conservation of mass, momentum, energy, charge and chemical species, closed by stated constitutive relations.' : 'Candidate relationships are proposed by dimensional analysis, symbolic regression on your data and constrained search, then ranked and tested on held-out points. A candidate is a hypothesis: novelty is assessed against the literature searched, never certified.'; });
+      $('#llm-on', root)?.addEventListener('change', e => Store.prefs.set('llm', e.target.checked));
       bindUpload(root, 'up', f => takeFiles(f, $('#up-list', root)));
       $('#go', root).addEventListener('click', () => start(module, module === 2 ? mode : 'A', ta.value));
       ta.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') start(module, module === 2 ? mode : 'A', ta.value); });
@@ -340,9 +350,17 @@ export async function settingsPage() {
       </div>
       <div class="card"><h2>Data source key</h2><p class="small dim">Asteroid data uses NASA's open interface with a shared demonstration key that is rate-limited. If you have your own free key from api.nasa.gov, enter it here; it is stored only on this device.</p>
         <div class="row"><input type="text" id="nasa" placeholder="NASA API key (optional)" style="max-width:360px" autocomplete="off"><button class="btn" id="nasa-save">Save</button></div></div>
-      <div class="card"><h2>Privacy and security</h2><ul class="clean small"><li>Your prompts, inputs, files and results stay on this device. There is no account and no analytics.</li><li>Outgoing requests go only to the scientific data sources listed under Live data, and carry only the query (for example a latitude and longitude).</li><li>Uploaded files are hashed, checked against their claimed type and size limits, and parsed as data. Nothing in an upload is ever executed; macros and scripts are ignored.</li><li>Archives are guarded against decompression bombs and path traversal.</li></ul></div></div>`,
+      <div class="card"><h2>Language-model reading of prompts</h2>
+        <p class="small">Off unless you switch it on. When it is on, the text of a new prompt is sent to a language model, which proposes the model that fits, the inputs your numbers belong to and, when nothing in the library fits, a set of equations. It is used for reading only: every identifier, number, unit and equation it returns is checked on this device, numbers it did not find in your own words are discarded, and what remains goes through the same dimensional, numerical and proof checks as everything else and is labelled “Language-model reading”. Without it, or without a connection, the built-in reading is used.</p>
+        <label class="row small" style="gap:.5rem;cursor:pointer"><input type="checkbox" id="set-llm" ${Store.prefs.get('llm', false) ? raw('checked') : ''}> <b>Read new prompts with a language model</b></label>
+        <div style="margin-top:.6rem"><label class="f" for="set-llm-key">Your own API key (optional)</label><div class="row"><input type="password" id="set-llm-key" value="${Store.prefs.get('llmKey', '')}" placeholder="Leave empty to use this project’s reading service" autocomplete="off" spellcheck="false" style="flex:1;min-width:14rem"><button class="btn sm" id="set-llm-save">Save</button><button class="btn sm ghost" id="set-llm-clear">Remove</button></div>
+        <p class="small dim">With an Anthropic API key, prompts go straight from this device to that provider and are billed to that key. The key is kept only in this browser’s storage on this device and is sent nowhere else. Without a key, this project’s reading service is used: it runs an open-weight model, has a limited daily allowance shared by everyone, and falls back to the built-in reading when the allowance is spent.</p></div></div>
+      <div class="card"><h2>Privacy and security</h2><ul class="clean small"><li>Your prompts, inputs, files and results stay on this device. There is no account and no analytics.</li><li>The one exception is the language-model reading above, which is off unless you switch it on: it sends the text of a new prompt, and nothing else, to a language model.</li><li>Outgoing requests go only to the scientific data sources listed under Live data, and carry only the query (for example a latitude and longitude).</li><li>Uploaded files are hashed, checked against their claimed type and size limits, and parsed as data. Nothing in an upload is ever executed; macros and scripts are ignored.</li><li>Archives are guarded against decompression bombs and path traversal.</li></ul></div></div>`,
     after(root) {
       $('#do-install', root)?.addEventListener('click', install);
+      $('#set-llm', root).addEventListener('change', e => { Store.prefs.set('llm', e.target.checked); toast(e.target.checked ? 'New prompts will also be read by a language model' : 'Language-model reading switched off'); });
+      $('#set-llm-save', root).addEventListener('click', () => { Store.prefs.set('llmKey', $('#set-llm-key', root).value.trim()); toast($('#set-llm-key', root).value.trim() ? 'Key saved on this device' : 'No key: this project’s reading service will be used'); });
+      $('#set-llm-clear', root).addEventListener('click', () => { Store.prefs.set('llmKey', ''); $('#set-llm-key', root).value = ''; toast('Key removed from this device'); });
       const st = $('#sw-state', root);
       if (!('serviceWorker' in navigator)) st.textContent = 'not supported by this browser'; else navigator.serviceWorker.getRegistration().then(r => { st.innerHTML = r && r.active ? '<span style="color:var(--ok)">●</span> stored on this device and ready' : location.protocol === 'file:' ? 'not available when opened directly from a file; use a local web server' : 'being prepared…'; });
       const p = $('#persist', root); if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(v => { p.textContent = v ? 'yes' : 'not yet'; });

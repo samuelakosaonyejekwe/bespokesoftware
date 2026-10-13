@@ -49,6 +49,8 @@ export function lineChart(canvas, spec, opts = {}) {
   { const un = spec.yUnit && spec.yUnit !== '–' && spec.yUnit !== '1' ? ` (${spec.yUnit})` : ''; let name = spec.yLabel || ''; while (name.length > 8 && ctx.measureText(name + '…' + un).width > h - 8) name = name.slice(0, -2); if (name !== (spec.yLabel || '')) name = name.trimEnd() + '…';
     ctx.save(); ctx.translate(12, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'top'; ctx.fillText(name + un, 0, 0); ctx.restore(); }
   ctx.save(); ctx.beginPath(); ctx.rect(m.l, m.t, pw, ph); ctx.clip();
+  // intervals over which the plotted quantity has no value
+  if (spec.shade) spec.shade.forEach(z => { const a = Math.max(m.l, X(z.x0)), b = Math.min(m.l + pw, X(z.x1)); ctx.fillStyle = th.dim; ctx.globalAlpha = 0.16; ctx.fillRect(a, m.t, Math.max(2, b - a), ph); ctx.globalAlpha = 0.7; ctx.strokeStyle = th.dim; ctx.lineWidth = 1; ctx.beginPath(); for (let u = a - ph; u < b; u += 9) { ctx.moveTo(Math.max(a, u), m.t + ph - Math.max(0, a - u)); ctx.lineTo(Math.min(b, u + ph), m.t + ph - Math.min(ph, b - u)); } ctx.stroke(); ctx.globalAlpha = 1; });
   if (spec.band) { ctx.fillStyle = PALETTE[0] + '33'; ctx.beginPath(); spec.x.data.forEach((v, i) => { const px = X(v), py = Y(spec.band.hi[i]); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); for (let i = spec.x.data.length - 1; i >= 0; i--) ctx.lineTo(X(spec.x.data[i]), Y(spec.band.lo[i])); ctx.closePath(); ctx.fill(); }
   const draw = (xd, yd, color, dash, scatter, fill) => {
     ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2; ctx.setLineDash(dash ? [6, 4] : []);
