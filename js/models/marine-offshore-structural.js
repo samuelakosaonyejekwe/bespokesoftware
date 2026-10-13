@@ -837,7 +837,9 @@ const riserViv = {
   benchmarks(v) {
     const out = [], free = wakeOscillator({ delta: 1, c: 0.1, M: 0, A: 0, eps: v.eps_w, accel: true });
     out.push(bench('Free wake oscillator: van der Pol limit-cycle amplitude', free.qa, 2, 'Limit-cycle amplitude 2 for small ε (method of averaging)', 2e-2));
-    out.push(bench('Free wake oscillator: frequency equals the shedding frequency', free.wWake, 1, 'Van der Pol oscillator, small ε', 2e-2));
+    // the free oscillation is at the shedding frequency only to leading order: the Lindstedt–Poincaré series lowers it by ε²/16 (8 % at ε = 1.2).
+    // Carried to ε⁴ the series is within 0.04 % up to ε = 1.2 and 1.9 % at ε = 2, the top of the range; it diverges a little beyond that.
+    out.push(bench('Free wake oscillator: frequency equals the shedding frequency', free.wWake, 1 - v.eps_w ** 2 / 16 + 17 * v.eps_w ** 4 / 3072, 'Van der Pol oscillator: ω/Ω = 1 − ε²/16 + 17ε⁴/3072 (Lindstedt–Poincaré), equal to the shedding frequency as ε → 0', 2e-2));
     out.push(bench('Taut-string fundamental', riserFreq(1, 100, 1e5, 50, 0), Math.sqrt(1e5 / 50) / 200, 'f₁ = (1/2L)√(T/m)', 1e-12));
     out.push(bench('Pinned beam fundamental without tension', riserFreq(1, 10, 0, 50, 2e6), Math.PI / 200 * Math.sqrt(2e6 / 50), 'f₁ = (π/2L²)√(EI/m)', 1e-12));
     return out;
@@ -1362,9 +1364,10 @@ function consolRun(v, a) {
   const shape = z => (a.uniform ? 1 : 1 - z / H), fMean = a.uniform ? 1 : 0.5, tc = a.instant ? 0 : v.t_c;
   const tSim = Math.min(v.t_end, tc + 3 * dr * dr / cv), tA = 0.02 * tSim;
   const left = { type: 'dirichlet', value: 0 }, right = a.double ? { type: 'dirichlet', value: 0 } : { type: 'neumann', value: 0 };
-  const src = a.instant ? undefined : (z, t) => (t < tc ? v.dq * shape(z) / tc : 0);
-  const A = N.diffusion1D({ D: cv, L: H, nx, tEnd: tA, nt: 120, u0: a.instant ? z => v.dq * shape(z) : () => 0, left, right, source: src, frames: 12 });
-  const B = N.diffusion1D({ D: cv, L: H, nx, tEnd: tSim - tA, nt: 360, u0: (z, i) => A.final[i], left, right, source: src ? (z, t) => src(z, t + tA) : undefined, frames: 48 });
+  // loading rate averaged over each time step [t, t + dt]: the step in which the ramp ends receives only the part of the load still to come, so the load applied is exactly Δq
+  const src = (dt, t0) => (a.instant ? undefined : (z, t) => v.dq * shape(z) * (Math.min(t + t0 + dt, tc) - Math.min(t + t0, tc)) / (tc * dt));
+  const A = N.diffusion1D({ D: cv, L: H, nx, tEnd: tA, nt: 120, u0: a.instant ? z => v.dq * shape(z) : () => 0, left, right, source: src(tA / 120, 0), frames: 12 });
+  const B = N.diffusion1D({ D: cv, L: H, nx, tEnd: tSim - tA, nt: 360, u0: (z, i) => A.final[i], left, right, source: src((tSim - tA) / 360, tA), frames: 48 });
   const times = [...A.times, ...B.times.slice(1).map(t => t + tA)], snaps = [...A.snaps, ...B.snaps.slice(1)];
   if (tSim < v.t_end) { times.push(v.t_end); snaps.push(B.final.map(u => u * Math.exp(-(Math.PI * Math.PI / 4) * cv * (v.t_end - tSim) / (dr * dr)))); }
   const load = t => (a.instant ? 1 : Math.min(t / tc, 1)), tot = v.dq * fMean * H;

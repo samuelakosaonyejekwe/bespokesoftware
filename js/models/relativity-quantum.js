@@ -1129,7 +1129,8 @@ const cosmology = {
     out.push(bench('Einstein–de Sitter comoving distance', val(eds, 'D_C'), 2 * c / H0 * (1 - 1 / Math.sqrt(1 + v.z)), 'D_C = (2c/H₀)(1 − 1/√(1+z))', 1e-6));
     const Om = N.clamp(v.Omega_m, 0.05, 0.95), lc = this.solve({ ...v, Omega_m: Om }, { flat: true, lambda: true, radiation: false }), OL = 1 - Om;
     out.push(bench('Flat ΛCDM age against the closed form', val(lc, 't_0'), 2 / (3 * H0 * Math.sqrt(OL)) * Math.asinh(Math.sqrt(OL / Om)), 't₀ = 2/(3H₀√Ω_Λ) arsinh√(Ω_Λ/Ω_m)', 1e-6));
-    out.push(bench('Flat ΛCDM onset of acceleration', val(lc, 'z_acc'), Math.cbrt(2 * OL / Om) - 1, '1 + z_acc = (2Ω_Λ/Ω_m)^{1/3}', 1e-8));
+    // the expansion accelerates once Ω_m(1+z)³ < 2Ω_Λ: the onset lies in the past only if the universe accelerates today, Ω_m < 2Ω_Λ (Ω_m < 2/3 when flat); otherwise it is still decelerating and no redshift exists
+    if (Om < 2 * OL) out.push(bench('Flat ΛCDM onset of acceleration', val(lc, 'z_acc'), Math.cbrt(2 * OL / Om) - 1, '1 + z_acc = (2Ω_Λ/Ω_m)^{1/3}, for a universe accelerating today (Ω_m < 2Ω_Λ)', 1e-8));
     return out;
   },
   validation: [

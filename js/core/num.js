@@ -67,12 +67,12 @@ export function rk4(f, y0, t0, t1, n) {
   return { t, y: Y };
 }
 
-/** Adaptive Dormand–Prince RK45 with dense sampling at nOut equally spaced times. Options: rtol, atol, maxSteps, event(t,y)->stop. */
+/** Adaptive Dormand–Prince RK45 with dense sampling at nOut equally spaced times. Options: rtol, atol, maxSteps, event(t,y)->stop, h0 (upper bound on the first trial step). */
 export function rk45(f, y0, t0, t1, nOut = 400, opts = {}) {
-  const { rtol = 1e-7, atol = 1e-10, maxSteps = 200000, event } = opts;
+  const { rtol = 1e-7, atol = 1e-10, maxSteps = 200000, event, h0 } = opts;
   const m = y0.length;
   const tOut = linspace(t0, t1, nOut), Y = Array.from({ length: m }, () => new Array(nOut).fill(NaN));
-  let t = t0, y = y0.slice(), h = (t1 - t0) / 200, steps = 0, rejected = 0, io = 0, stopped = false, stopT = null;
+  let t = t0, y = y0.slice(), h = h0 > 0 ? Math.min(h0, (t1 - t0) / 200) : (t1 - t0) / 200, steps = 0, rejected = 0, io = 0, stopped = false, stopT = null;
   const rec = () => { while (io < nOut && tOut[io] <= t + 1e-14 * Math.abs(t1 - t0)) { for (let j = 0; j < m; j++) Y[j][io] = y[j]; io++; } };
   rec();
   const A = [[1 / 5], [3 / 40, 9 / 40], [44 / 45, -56 / 15, 32 / 9], [19372 / 6561, -25360 / 2187, 64448 / 6561, -212 / 729], [9017 / 3168, -355 / 33, 46732 / 5247, 49 / 176, -5103 / 18656], [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84]];

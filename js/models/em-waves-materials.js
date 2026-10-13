@@ -20,60 +20,131 @@ const dB = x => 20 * Math.log10(Math.max(x, 1e-300));
 const rootOr = (f, a, b, fallback) => { try { const r = N.findRoot(f, a, b); return Number.isFinite(r) ? r : fallback; } catch { return fallback; } };
 
 // ------------------------------------------------------------------ electrostatic field in a 2-D gap
-/** Successive over-relaxation for div(eps grad phi) = -rho with a dielectric layer occupying rows 0..jb. The control volume of a node on the barrier surface is half air, so it carries half the source. */
-function sorLayered(nx, ny, fixed, epsB, jb, src, tol = 1e-6, maxIt = 4000) {
-  const phi = Array.from({ length: ny }, () => new Float64Array(nx)), mask = Array.from({ length: ny }, () => new Uint8Array(nx));
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const q = fixed(i, j); if (q !== undefined) { phi[j][i] = q; mask[j][i] = 1; } }
-  const w = 2 / (1 + Math.sin(Math.PI / Math.max(nx, ny))), eh = (epsB + 1) / 2, den = 2 * eh + epsB + 1;
-  let it = 0, res = Infinity;
-  for (; it < maxIt; it++) {
-    res = 0;
-    for (let j = 1; j < ny - 1; j++) {
-      const pj = phi[j], pd = phi[j - 1], pu = phi[j + 1], mj = mask[j], sj = j > jb ? src : 0;
-      for (let i = 1; i < nx - 1; i++) {
-        if (mj[i]) continue;
-        const gq = j === jb ? (eh * (pj[i - 1] + pj[i + 1]) + epsB * pd[i] + pu[i] + 0.5 * src) / den : (pj[i - 1] + pj[i + 1] + pd[i] + pu[i] + sj) * 0.25;
-        const dl = gq - pj[i]; pj[i] += w * dl; if (Math.abs(dl) > res) res = Math.abs(dl);
-      }
+/**
+ * Direct solver for div(eps grad phi) = source on the half of the box to the right of its axis of symmetry, with a dielectric layer occupying rows 0..jb:
+ * cosine modes along x, one tridiagonal system per mode along y. Row j obeys up(s[j+1] − s[j]) + lo(s[j−1] − s[j]) + cx δ²ₓs[j] = rhs[j], the control-volume
+ * balance for rows that need not be equally spaced: lo and up are permittivity over row spacing (in units of dx), cx the permittivity-weighted half-sum of the spacings.
+ * `rhs` holds the boundary data already moved to the right-hand side; rows 1..J and columns 0..I are unknown.
+ * solve() returns the mode amplitudes row by row, which may be combined before synth() turns rows j0..j1, columns 0..i1, into grid values.
+ */
+function boxSolver(nh, ny, lo, up, cx, topD, sideD) {
+  const n = nh - 1, nk = sideD ? n : n + 1, J = topD ? ny - 2 : ny - 1, Q = [], lam = new Float64Array(nk), nrm = new Float64Array(nk);
+  for (let k = 0; k < nk; k++) { const th = (sideD ? k + 0.5 : k) * Math.PI / n, q = new Float64Array(nk); let s = 0; for (let i = 0; i < nk; i++) { q[i] = Math.cos(th * i); s += (i === 0 || i === n ? 0.5 : 1) * q[i] * q[i]; } Q.push(q); lam[k] = 2 * Math.cos(th) - 2; nrm[k] = s; }
+  const cp = new Float64Array(J + 1), dp = new Float64Array(J + 1), e = nk - 1, we = sideD ? 1 : 0.5;
+  const solve = rhs => {
+    const hat = Array.from({ length: ny }, () => new Float64Array(nk));
+    for (let j = 1; j <= J; j++) { // most rows carry boundary data in the outermost column only
+      const r = rhs[j], hj = hat[j]; let i0 = 0; while (i0 < e && r[i0] === 0) i0++;
+      if (i0 === e) { const c = we * r[e]; if (c !== 0) for (let k = 0; k < nk; k++) hj[k] = c * Q[k][e] / nrm[k]; continue; }
+      for (let k = 0; k < nk; k++) { const q = Q[k]; let s = 0.5 * r[0]; for (let i = 1; i < nk; i++) s += r[i] * q[i]; if (!sideD) s -= 0.5 * r[n] * q[n]; hj[k] = s / nrm[k]; }
     }
-    for (let i = 0; i < nx; i++) { if (!mask[0][i]) phi[0][i] = phi[1][i]; if (!mask[ny - 1][i]) phi[ny - 1][i] = phi[ny - 2][i]; }
-    for (let j = 0; j < ny; j++) { if (!mask[j][0]) phi[j][0] = phi[j][1]; if (!mask[j][nx - 1]) phi[j][nx - 1] = phi[j][nx - 2]; }
-    if (res < tol) break;
-  }
-  return { phi, iterations: it, residual: res, converged: res < tol };
+    for (let k = 0; k < nk; k++) { // Thomas algorithm
+      for (let j = 1; j <= J; j++) { const den = cx[j] * lam[k] - lo[j] - up[j] - (j > 1 ? lo[j] * cp[j - 1] : 0); cp[j] = (j === J ? 0 : up[j]) / den; dp[j] = (hat[j][k] - (j > 1 ? lo[j] * dp[j - 1] : 0)) / den; }
+      for (let j = J; j >= 1; j--) hat[j][k] = dp[j] - (j < J ? cp[j] * hat[j + 1][k] : 0);
+    }
+    return hat;
+  };
+  const synth = (hat, j0 = 1, j1 = J, i1 = e) => {
+    const out = Array.from({ length: ny }, () => new Float64Array(nh)), m = Math.min(i1, e) + 1;
+    for (let j = Math.max(1, j0); j <= Math.min(J, j1); j++) { const hj = hat[j], o = out[j]; for (let k = 0; k < nk; k++) { const c = hj[k], q = Q[k]; if (c !== 0) for (let i = 0; i < m; i++) o[i] += c * q[i]; } }
+    return out;
+  };
+  return { solve, synth };
+}
+/** Cubic (4 × 4 point) interpolation of a grid function on the half-box, even about the axis x = 0, at (fx, fy) in grid spacings. */
+function boxInterp(s, nh, ny, fx, fy) {
+  const cub = t => [-t * (t - 1) * (t - 2) / 6, (t + 1) * (t - 1) * (t - 2) / 2, -(t + 1) * t * (t - 2) / 2, (t + 1) * t * (t - 1) / 6];
+  const i = Math.min(nh - 3, Math.floor(fx)), j = N.clamp(Math.floor(fy), 1, ny - 3), wx = cub(fx - i), wy = cub(fy - j); let q = 0;
+  for (let b = 0; b < 4; b++) { const r = s[j + b - 1]; q += wy[b] * (wx[0] * r[Math.abs(i - 1)] + wx[1] * r[i] + wx[2] * r[i + 1] + wx[3] * r[i + 2]); }
+  return q;
 }
 
-/** Potential (normalised by the electrode voltage) between an electrode and a grounded plane. `plate` spans the electrode across the whole box. */
+/**
+ * Potential (normalised by the electrode voltage) between an electrode and a grounded plane. `plate` spans the electrode across the whole box.
+ * The potential near a conductor varies as the logarithm of distance, which no grid resolves when the conductor is small. It is therefore written as
+ * phi = (space-charge part) + sum c_k [S_k + s_k]: the S_k are the harmonic functions Re ln(tau), Re tau^-k that are singular inside the electrode, tau being the
+ * conformal coordinate in which the electrode (a circle, or an ellipse for the strip) is the unit circle; the s_k are smooth corrections, solved on the grid,
+ * that make each term satisfy the conditions on the box and at the barrier; and the c_k follow from phi = 1 on the electrode surface (least squares).
+ * The grid then carries smooth functions only, and the surface field is the analytic gradient of the S_k plus the interpolated gradient of the smooth part.
+ */
 function gapField(v, a, plate = false) {
   const ng = Math.max(8, Math.round(v.n_gap)), dx = v.d_gap / ng;
   let nx = Math.max(21, Math.round(v.a_box * ng) + 1); if (nx % 2 === 0) nx++;
-  const round = a.round_electrode && !plate, ic = (nx - 1) / 2;
-  const nrWant = plate ? 0 : Math.round(v.r_e / dx), nr = plate ? 0 : Math.min(nrWant, 2 * ng, ic - 3);
-  const jc = ng + (round ? nr : 0), ny = jc + (round ? nr : 0) + ng + 1;
-  const jb = a.no_barrier ? 0 : N.clamp(Math.round(v.f_b * ng), 1, ng - 2), epsB = a.no_barrier ? 1 : v.eps_b;
-  const open = a.open_box || plate;
-  const inside = (i, j) => (plate ? j === jc : round ? (i - ic) ** 2 + (j - jc) ** 2 <= nr * nr + 0.25 : j === jc && Math.abs(i - ic) <= nr);
-  const fixed = (i, j) => (j === 0 ? 0 : inside(i, j) ? 1 : !open && (i === 0 || i === nx - 1 || j === ny - 1) ? 0 : undefined);
-  const rhoN = a.laplace ? 0 : v.rho_q / (EPS0 * v.V_0); // normalised charge density, 1/m^2
-  const sol = a.no_barrier
-    ? N.poisson2D({ nx, ny, dx, fixed, tol: 1e-6, maxIt: 4000, f: rhoN ? () => rhoN : undefined })
-    : sorLayered(nx, ny, fixed, epsB, jb, rhoN * dx * dx);
-  const phi = sol.phi;
-  // peak field in the air: cell-centred magnitude, and the normal difference at the electrode surface
-  let epk = 0;
-  for (let j = jb; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
-    const ex = (phi[j][i + 1] + phi[j + 1][i + 1] - phi[j][i] - phi[j + 1][i]) / (2 * dx), ey = (phi[j + 1][i] + phi[j + 1][i + 1] - phi[j][i] - phi[j][i + 1]) / (2 * dx);
-    const e = Math.hypot(ex, ey); if (e > epk) epk = e;
-    if (inside(i, j) !== inside(i + 1, j)) epk = Math.max(epk, Math.abs(phi[j][i + 1] - phi[j][i]) / dx);
-    if (inside(i, j) !== inside(i, j + 1)) epk = Math.max(epk, Math.abs(phi[j + 1][i] - phi[j][i]) / dx);
+  const ic = (nx - 1) / 2, nh = ic + 1, open = a.open_box || plate;
+  // electrode semi-axes: a circle, or for the strip an ellipse one-tenth as thick as it is wide; its lowest point is the gap above the plane
+  const W = ic * dx, ah = plate ? 0 : Math.min(v.r_e, 2 * v.d_gap, 0.8 * W), bv = a.round_electrode ? ah : ah / 10, yc = v.d_gap + bv;
+  const ny = plate ? ng + 1 : ng + Math.max(ng, Math.round((2 * bv + v.d_gap) / dx)) + 1, H = plate ? v.d_gap : 2 * yc;
+  const jb = a.no_barrier ? 0 : N.clamp(Math.round(v.f_b * ng), 1, ng - 2), epsB = a.no_barrier ? 1 : v.eps_b, tb = a.no_barrier ? 0 : v.f_b * v.d_gap;
+  const rhoN = a.laplace ? 0 : v.rho_q / (EPS0 * v.V_0), q2 = rhoN * dx * dx; // normalised charge density, 1/m^2
+  // rows are dx apart, except that the row nearest the barrier surface is moved onto it and the top row onto the top of the box (a gap above the electrode)
+  const yr = Float64Array.from({ length: ny }, (_, j) => (j === ny - 1 ? H : j === jb && jb > 0 ? tb : j * dx)), hy = Float64Array.from({ length: ny - 1 }, (_, j) => (yr[j + 1] - yr[j]) / dx), eI = j => (j < jb ? epsB : 1);
+  const lo = new Float64Array(ny), up = new Float64Array(ny), cx = new Float64Array(ny), air = new Float64Array(ny);
+  for (let j = 1; j < ny; j++) { const t = j < ny - 1; lo[j] = eI(j - 1) / hy[j - 1]; up[j] = t ? eI(j) / hy[j] : 0; cx[j] = 0.5 * (eI(j - 1) * hy[j - 1] + (t ? eI(j) * hy[j] : 0)); air[j] = 0.5 * ((j - 1 >= jb ? hy[j - 1] : 0) + (t && j >= jb ? hy[j] : 0)); }
+  const topD = plate || !open, sideD = !open, box = boxSolver(nh, ny, lo, up, cx, topD, sideD), zero = () => Array.from({ length: ny }, () => new Float64Array(nh));
+  // space charge alone, between the plane and the box (or the plate, when the electrode spans the box)
+  const r0 = zero(); for (let j = 1; j < ny; j++) if (q2 * air[j]) r0[j].fill(-q2 * air[j]); if (plate) for (let i = 0; i < nh; i++) r0[ny - 2][i] -= up[ny - 2];
+  const baseHat = rhoN || plate ? box.solve(r0) : null, base = baseHat ? box.synth(baseHat) : zero(); if (plate) base[ny - 1].fill(1);
+  let phiH = base, coef = [], bcRes = 0, eSurf = 0, inside = null, eax = null;
+  if (!plate) {
+    const al = (ah + bv) / 2, c2 = ah * ah - bv * bv, K = N.clamp(Math.ceil(-18 / Math.log(al / (al + 2 * Math.min(v.d_gap, W - ah)))), 4, 20); // terms fall off as the ratio of the electrode size to the distance of its nearest image
+    const S = new Float64Array(K + 1), GX = new Float64Array(K + 1), GY = new Float64Array(K + 1);
+    // S_k and its gradient at (x, y); returns |zeta|², which is below one inside the electrode. With w = z − z_c: zeta = (w + sqrt(w² − c²))/(2 al), tau = −i zeta.
+    const sing = (x, y) => {
+      const wr = x, wi = y - yc, re = wr * wr - wi * wi - c2, im = 2 * wr * wi, md = Math.hypot(re, im); let sr = Math.sqrt(Math.max(0, (md + re) / 2)), si = Math.sqrt(Math.max(0, (md - re) / 2)); if (im < 0) si = -si;
+      if ((wr + sr) ** 2 + (wi + si) ** 2 < (wr - sr) ** 2 + (wi - si) ** 2) { sr = -sr; si = -si; }
+      const zr = (wr + sr) / (2 * al), zi = (wi + si) / (2 * al), m2 = zr * zr + zi * zi, s2 = sr * sr + si * si, tr = zi / m2, ti = zr / m2; // 1/tau = i/zeta
+      S[0] = 0.5 * Math.log(m2); GX[0] = sr / s2; GY[0] = si / s2; // d(ln tau)/dz = 1/sqrt(w² − c²); grad Re f = (Re f', −Im f')
+      let pr = 1, pi = 0; for (let k = 1; k <= K; k++) { const t = pr * tr - pi * ti; pi = pr * ti + pi * tr; pr = t; S[k] = pr; GX[k] = -k * (pr * sr + pi * si) / s2; GY[k] = k * (pi * sr - pr * si) / s2; }
+      return m2;
+    };
+    // boundary data for the smooth parts: s = −S where the potential is fixed, ds/dn = −dS/dn where the normal field vanishes, and at the barrier surface the residual that S leaves in the difference equation there
+    const R = Array.from({ length: K + 1 }, zero), sm0 = Array.from({ length: K + 1 }, () => new Float64Array(nh)), smT = Array.from({ length: K + 1 }, () => new Float64Array(nh)), smS = Array.from({ length: K + 1 }, () => new Float64Array(ny));
+    for (let i = 0; i < nh; i++) {
+      sing(i * dx, 0); for (let k = 0; k <= K; k++) { R[k][1][i] += lo[1] * S[k]; sm0[k][i] = -S[k]; }
+      sing(i * dx, H); for (let k = 0; k <= K; k++) { if (topD) { R[k][ny - 2][i] += up[ny - 2] * S[k]; smT[k][i] = -S[k]; } else R[k][ny - 1][i] += dx * GY[k]; }
+    }
+    if (jb > 0) { const T = [0, 1, 2].map(() => Array.from({ length: K + 1 }, () => new Float64Array(nh))); for (let q = 0; q < 3; q++) for (let i = 0; i < nh; i++) { sing(i * dx, yr[jb + q - 1]); for (let k = 0; k <= K; k++) T[q][k][i] = S[k]; }
+      for (let k = 0; k <= K; k++) { const below = T[0][k], md = T[1][k], above = T[2][k]; for (let i = 0; i < nh; i++) R[k][jb][i] -= cx[jb] * (md[Math.abs(i - 1)] + md[i === nh - 1 ? nh - 2 : i + 1] - 2 * md[i]) + lo[jb] * (below[i] - md[i]) + up[jb] * (above[i] - md[i]); } }
+    // (the flux of S through an open side is taken at mid-height of the row's control volume, which is off the row where the spacing changes)
+    for (let j = 1; j < ny; j++) { sing(W, sideD ? yr[j] : yr[j] + 0.25 * dx * ((j < ny - 1 ? hy[j] : 0) - hy[j - 1])); for (let k = 0; k <= K; k++) { if (sideD) { R[k][j][nh - 2] += cx[j] * S[k]; smS[k][j] = -S[k]; } else if (j !== jb) R[k][j][nh - 1] += cx[j] * 2 * dx * GX[k]; } }
+    // the smooth parts are needed on the grid only round the electrode until their coefficients are known
+    const hats = R.map(box.solve), j0 = Math.max(0, Math.floor((yc - bv) / dx) - 2), j1 = Math.min(ny - 1, Math.ceil((yc + bv) / dx) + 2), i1 = Math.min(nh - 1, Math.ceil(ah / dx) + 3);
+    const edge = (q, k, c) => { if (j0 === 0) for (let i = 0; i < nh; i++) q[0][i] += c * sm0[k][i]; if (topD) for (let i = 0; i < nh; i++) q[ny - 1][i] += c * smT[k][i]; if (sideD) for (let j = 1; j < ny - 1; j++) q[j][nh - 1] += c * smS[k][j]; }; // a grounded box: the top row covers its corner
+    const sm = hats.map((q, k) => { const o = box.synth(q, j0, j1, i1); edge(o, k, 1); return o; });
+    // phi = 1 at points round the right half of the surface, in the least-squares sense
+    const Mc = 96, A = Array.from({ length: K + 1 }, () => new Array(K + 1).fill(0)), rh = new Array(K + 1).fill(0), g = new Float64Array(K + 1);
+    const surf = t => { const th = -Math.PI / 2 + Math.PI * t / Mc; return [ah * Math.cos(th), yc + bv * Math.sin(th)]; };
+    for (let m = 0; m <= Mc; m++) { const [x, y] = surf(m); sing(x, y); for (let k = 0; k <= K; k++) g[k] = S[k] + boxInterp(sm[k], nh, ny, x / dx, y / dx); const t = 1 - boxInterp(base, nh, ny, x / dx, y / dx); for (let p = 0; p <= K; p++) { rh[p] += g[p] * t; for (let q = 0; q <= K; q++) A[p][q] += g[p] * g[q]; } }
+    coef = N.solveLinear(A, rh);
+    const hat = hats[0]; for (let j = 1; j < ny; j++) { const o = hat[j]; for (let q = 0; q < o.length; q++) { let t = baseHat ? baseHat[j][q] : 0; for (let k = 0; k <= K; k++) t += coef[k] * hats[k][j][q]; o[q] = t; } }
+    const tot = box.synth(hat); for (let i = 0; i < nh; i++) tot[0][i] = 0; for (let k = 0; k <= K; k++) { if (j0 > 0) for (let i = 0; i < nh; i++) tot[0][i] += coef[k] * sm0[k][i]; edge(tot, k, coef[k]); }
+    // total potential, and its gradient with the smooth part differenced on the interpolant
+    const pot = (x, y) => { sing(x, y); let q = boxInterp(tot, nh, ny, x / dx, y / dx); for (let k = 0; k <= K; k++) q += coef[k] * S[k]; return q; };
+    const grad = (x, y) => { const e = 1e-3; sing(x, y); let gx = (boxInterp(tot, nh, ny, x / dx + e, y / dx) - boxInterp(tot, nh, ny, Math.abs(x / dx - e), y / dx)) / (2 * e * dx) * (x / dx < e ? 0 : 1), gy = (boxInterp(tot, nh, ny, x / dx, y / dx + e) - boxInterp(tot, nh, ny, x / dx, y / dx - e)) / (2 * e * dx); for (let k = 0; k <= K; k++) { gx += coef[k] * GX[k]; gy += coef[k] * GY[k]; } return [gx, gy]; };
+    // surface field: largest sample, refined by the parabola through its neighbours (the samples are even about both ends of the half-surface)
+    const es = []; for (let m = 0; m <= Mc; m++) { const [x, y] = surf(m), [gx, gy] = grad(x, y); es.push(Math.hypot(gx, gy)); bcRes = Math.max(bcRes, Math.abs(pot(...surf(Math.min(m + 0.5, Mc))) - 1)); }
+    let mk = 0; for (let m = 1; m <= Mc; m++) if (es[m] > es[mk]) mk = m;
+    const e0 = es[mk], em = es[mk === 0 ? 1 : mk - 1], ep = es[mk === Mc ? Mc - 1 : mk + 1], cv = em - 2 * e0 + ep; eSurf = cv < 0 ? e0 - (ep - em) ** 2 / (8 * cv) : e0;
+    phiH = zero(); inside = zero();
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nh; i++) { if (sing(i * dx, yr[j]) <= 1 + 1e-9) { phiH[j][i] = 1; inside[j][i] = 1; continue; } let q = tot[j][i]; for (let k = 0; k <= K; k++) q += coef[k] * S[k]; phiH[j][i] = q; }
+    eax = Array.from({ length: ng }, (_, j) => (j <= jb ? (phiH[j + 1][0] - phiH[j][0]) / (dx * hy[j]) : grad(0, (j + 0.5) * dx)[1])); // differenced across the barrier, where the field is discontinuous
   }
-  const ecol = Array.from({ length: nx }, (_, i) => (phi[1][i] - phi[0][i]) / dx);
+  const phi = phiH.map(r => { const o = new Float64Array(nx); for (let i = 0; i < nh; i++) { o[ic + i] = r[i]; o[ic - i] = r[i]; } return o; });
+  // peak field in the air: the electrode surface, and the cell-centred magnitude over the cells clear of the electrode
+  let epk = eSurf;
+  for (let j = jb; j < ny - 1; j++) for (let i = 0; i < nh - 1; i++) {
+    if (inside && (inside[j][i] || inside[j][i + 1] || inside[j + 1][i] || inside[j + 1][i + 1])) continue;
+    const p = phiH[j], q = phiH[j + 1], e = Math.hypot(p[i + 1] + q[i + 1] - p[i] - q[i], (q[i] + q[i + 1] - p[i] - p[i + 1]) / hy[j]) / (2 * dx); if (e > epk) epk = e;
+  }
+  // field at the plane: one-sided difference plus the half-cell correction that Poisson's equation gives where charged air meets the plane
+  const ecol = Array.from({ length: nx }, (_, i) => (phi[1][i] - phi[0][i]) / (dx * hy[0]) + (jb === 0 && (open || (i > 0 && i < nx - 1)) ? 0.5 * q2 / dx : 0));
   let etan = 0; if (jb > 0) for (let i = 0; i < nx - 1; i++) etan = Math.max(etan, Math.abs(phi[jb][i + 1] - phi[jb][i]) / dx);
-  // flux through horizontal faces: conserved between the collector and the row below the electrode
-  const flux = j => { let s = 0; const ef = j < jb ? epsB : 1; for (let i = 1; i < nx - 1; i++) s += ef * (phi[j + 1][i] - phi[j][i]); return s; };
-  const m = ng - 1, G0 = flux(0), Gm = flux(m);
-  const fluxRes = open ? (Gm - G0 + rhoN * dx * dx * (nx - 2) * (m - jb + (jb > 0 ? 0.5 : 0))) / Math.max(Math.abs(G0), 1e-300) : 0;
-  return { phi, nx, ny, dx, ng, nr, nrWant, jc, jb, ic, epsB, epk, ecol, etan, G0, fluxRes, open, iterations: sol.iterations, converged: sol.converged };
+  // flux through horizontal faces (trapezoidal across the box): conserved between the collector and a row below the electrode
+  const flux = j => { let s = 0; for (let i = 0; i < nx; i++) s += (i === 0 || i === nx - 1 ? 0.5 : 1) * (phi[j + 1][i] - phi[j][i]); return s * eI(j) / hy[j]; };
+  const m = plate ? ng - 1 : Math.max(jb, ng - 3), G0 = flux(0), Gm = flux(m);
+  const fluxRes = open ? (Gm - G0 + q2 * (nx - 1) * (m + 0.5 - (jb > 0 ? tb / dx : 0.5))) / Math.max(Math.abs(G0), 1e-300) : 0;
+  const Gc = ecol.reduce((q, e, i) => q + (i === 0 || i === nx - 1 ? 0.5 : 1) * e, 0) * dx * eI(0); // flux into the plane itself
+  return { phi, nx, ny, dx, ng, jb, ic, epsB, epk, eSurf, Gc, eax, yax: Array.from({ length: ng }, (_, j) => 0.5 * (yr[j] + yr[j + 1])), ecol, etan, G0, fluxRes, bcRes, open, ah, bv, coef, cut: !plate && ah < v.r_e };
 }
 const acosh = x => Math.log(x + Math.sqrt(x * x - 1));
 
@@ -89,7 +160,7 @@ const electrostatic = {
   ],
   phenomena: ['Field concentration at small conductors', 'Dielectric interface refraction of the field', 'Space-charge distortion of the potential', 'Partial discharge inception', 'Surface tracking along insulation'],
   laws: ['maxwell', 'charge'],
-  refs: ['Jackson, J. D. (1999). Classical Electrodynamics, 3rd ed., Wiley.', 'Kuffel, E., Zaengl, W. S. & Kuffel, J. (2000). High Voltage Engineering: Fundamentals, 2nd ed., Newnes.', 'Peek, F. W. (1929). Dielectric Phenomena in High Voltage Engineering, 3rd ed., McGraw-Hill.', 'Press, W. H., Teukolsky, S. A., Vetterling, W. T. & Flannery, B. P. (2007). Numerical Recipes, 3rd ed., Cambridge University Press (successive over-relaxation).'],
+  refs: ['Jackson, J. D. (1999). Classical Electrodynamics, 3rd ed., Wiley.', 'Kuffel, E., Zaengl, W. S. & Kuffel, J. (2000). High Voltage Engineering: Fundamentals, 2nd ed., Newnes.', 'Peek, F. W. (1929). Dielectric Phenomena in High Voltage Engineering, 3rd ed., McGraw-Hill.', 'Press, W. H., Teukolsky, S. A., Vetterling, W. T. & Flannery, B. P. (2007). Numerical Recipes, 3rd ed., Cambridge University Press (Fourier methods for boundary-value problems).', 'Singer, H., Steinbigler, H. & Weiss, P. (1974). A charge simulation method for the calculation of high voltage fields. IEEE Transactions on Power Apparatus and Systems PAS-93, 1660–1668.'],
   inputs: [
     inp('V_0', 'Electrode voltage', 'kV', 20, { min: 0.1, max: 300, aliases: ['voltage', 'kv', 'potential', 'high voltage'] }),
     inp('d_gap', 'Gap from electrode surface to grounded plane', 'mm', 30, { min: 1, max: 500, kind: 'geometry', aliases: ['gap', 'spacing', 'clearance', 'separation'] }),
@@ -107,7 +178,7 @@ const electrostatic = {
     asm('laplace', 'The gap carries no space charge, so the potential satisfies Laplace\'s equation.', { why: 'Valid below discharge inception', alt: 'A uniform space-charge density fills the air gap and the potential satisfies Poisson\'s equation.' }),
     asm('no_barrier', 'The gap is air only, with uniform permittivity.', { why: 'Bare electrode arrangement', alt: 'A solid dielectric barrier covers the grounded plane; the normal flux density is continuous at its surface.' }),
     asm('open_box', 'The side and top boundaries are open: the normal field vanishes there.', { why: 'Models one electrode of a row, or distant surroundings', alt: 'The box is a grounded metal enclosure.' }),
-    asm('round_electrode', 'The electrode has a circular cross-section (a rod or wire seen end-on).', { why: 'Avoids singular edges', alt: 'The electrode is a thin flat strip of the same half-width, whose edges are field singularities.' }),
+    asm('round_electrode', 'The electrode has a circular cross-section (a rod or wire seen end-on).', { why: 'Avoids singular edges', alt: 'The electrode is a flat strip of the same half-width with rounded edges: an elliptical section one-tenth as thick as it is wide. A strip of zero thickness would have an unbounded field at its edges.' }),
   ],
   symbols: { phi: ['Electrostatic potential', 'V'], x: ['Horizontal coordinate', 'm'], y: ['Height above the plane', 'm'], E: ['Electric field magnitude', 'V/m'], E_0: ['Uniform-field reference', 'V/m'], E_peak: ['Peak field in the air', 'V/m'], beta: ['Field-enhancement factor', '1'], M_bd: ['Breakdown margin', '1'], h_c: ['Height of the electrode axis', 'm'], E_w: ['Closed-form peak field, cylinder above a plane', 'V/m'], t_b: ['Barrier thickness', 'm'], E_nb: ['Normal field inside the barrier', 'V/m'], E_na: ['Normal field in the air at the barrier', 'V/m'], E_0b: ['Uniform field in the air with a barrier', 'V/m'], phi_w: ['Potential of the enclosure walls', 'V'], L_req: ['Required creepage distance', 'm'], M_cr: ['Creepage margin', '1'], w_e: ['Strip width', 'm'] },
   equations: a => [
@@ -135,7 +206,8 @@ const electrostatic = {
   derivation: a => [
     { text: 'In electrostatics the field is irrotational, so it derives from a scalar potential.', tex: '\\mathbf{E} = -\\nabla\\varphi' },
     { text: 'Gauss\'s law relates the divergence of the flux density to the free charge.' + (a.laplace ? ' With no charge in the gap and uniform permittivity this is Laplace\'s equation.' : ' With a space-charge density ρ_q this is Poisson\'s equation.'), tex: a.laplace ? '\\nabla^2\\varphi = 0' : '\\nabla^2\\varphi = -\\frac{\\rho_q}{\\varepsilon_0}' },
-    { text: 'Replacing the second derivatives by central differences on a square grid makes each interior potential the average of its four neighbours (plus a source term). Successive over-relaxation iterates this relation to convergence.', tex: '\\varphi_{i,j} = \\tfrac14\\left(\\varphi_{i+1,j}+\\varphi_{i-1,j}+\\varphi_{i,j+1}+\\varphi_{i,j-1} + h^2\\rho_q/\\varepsilon_0\\right)' },
+    { text: 'Replacing the second derivatives by central differences on a square grid makes each interior potential the average of its four neighbours (plus a source term). The box is rectangular, so these equations are solved directly: cosine modes across it and one tridiagonal system per mode up it.', tex: '\\varphi_{i,j} = \\tfrac14\\left(\\varphi_{i+1,j}+\\varphi_{i-1,j}+\\varphi_{i,j+1}+\\varphi_{i,j-1} + h^2\\rho_q/\\varepsilon_0\\right)' },
+    { text: 'Close to the electrode the potential varies as the logarithm of distance, too steeply for any grid when the electrode is small. That part is carried analytically: with τ the conformal coordinate in which the electrode surface is the unit circle, the functions ln τ and τ⁻ᵏ are harmonic outside the electrode, and each is completed by a smooth grid solution s_k that restores the conditions on the plane, the box and the barrier. The coefficients follow from the condition that the surface is at the electrode potential, and the surface field from the analytic gradient.', tex: '\\varphi = \\varphi_\\rho + \\sum_{k\\ge 0} c_k\\,\\big[\\mathrm{Re}\\,f_k(\\tau) + s_k\\big],\\qquad f_0 = \\ln\\tau,\\quad f_k = \\tau^{-k}' },
     ...(a.no_barrier ? [] : [{ text: 'At the surface of the barrier the normal flux density is continuous, so the field in the air is larger than the field in the solid by the permittivity ratio.', tex: '\\varepsilon_b E_{n,b} = E_{n,a}' }]),
     { text: 'For a cylinder of radius r with its axis at height h above a plane, two image line charges at ±√(h²−r²) reproduce both equipotentials. The largest field is at the point of the cylinder nearest the plane.', tex: 'E_w = \\frac{V_0}{r\\,\\cosh^{-1}(h/r)}\\sqrt{\\frac{h+r}{h-r}}' },
     { text: 'The enhancement factor compares the peak field with the uniform value; the breakdown margin compares the gas strength with the peak field.', tex: '\\beta = \\frac{E_{peak}}{V_0/d},\\qquad M_{bd} = \\frac{E_{bd}}{E_{peak}}' },
@@ -143,10 +215,8 @@ const electrostatic = {
   solve(v, a) {
     const s = gapField(v, a), V = v.V_0, dx = s.dx, E0 = V / v.d_gap, Epk = s.epk * V, beta = Epk / E0;
     const warnings = [];
-    if (!s.converged) warnings.push('The relaxation did not reach its tolerance within the iteration limit; treat the field as approximate.');
-    if (s.nr < s.nrWant) warnings.push('The electrode is too large for the box and has been truncated on the grid; widen the box or reduce the radius.');
-    if (s.nr < 3) warnings.push('The electrode radius spans fewer than three grid cells, so the grid peak field under-estimates the true surface field. Use the closed-form cylinder value or refine the grid.');
-    if (!a.round_electrode) warnings.push('A thin strip has singular edges: the grid peak field is an average over one cell and grows as the grid is refined.');
+    if (s.cut) warnings.push(`The electrode is too large for the box and has been reduced to a half-width of ${lab(s.ah * 1000, 'mm')}; widen the box or reduce the radius.`);
+    if (!a.round_electrode) warnings.push('The field at the edge of a strip of zero thickness is unbounded. The strip is therefore given a rounded section, an ellipse one-tenth as thick as it is wide; the peak field at its edge scales roughly as the inverse of that thickness ratio.');
     const hc = v.d_gap + v.r_e, closed = a.round_electrode && a.laplace && a.no_barrier;
     const Ew = V * Math.sqrt((hc + v.r_e) / (hc - v.r_e)) / (v.r_e * acosh(hc / v.r_e));
     const Mbd = v.E_bd / Epk, Lreq = v.s_cr * V, Mcr = v.L_cr / Lreq;
@@ -156,22 +226,21 @@ const electrostatic = {
     const data = s.phi.map(r => Array.from(r, q => q * V));
     const U = data.map((r, j) => r.map((_, i) => -(r[Math.min(i + 1, s.nx - 1)] - r[Math.max(i - 1, 0)]) / ((Math.min(i + 1, s.nx - 1) - Math.max(i - 1, 0)) * dx)));
     const W = data.map((r, j) => r.map((_, i) => { const jp = Math.min(j + 1, s.ny - 1), jm = Math.max(j - 1, 0); return -(data[jp][i] - data[jm][i]) / ((jp - jm) * dx); }));
-    const jLow = s.jc - (a.round_electrode ? s.nr : 0);
     const yc = [], Ec = [], Ea = [], sImg = Math.sqrt(hc * hc - v.r_e * v.r_e);
-    for (let j = 0; j < jLow; j++) { const ym = (j + 0.5) * dx; yc.push(ym * 1000); Ec.push((data[j + 1][s.ic] - data[j][s.ic]) / dx / 1e6); Ea.push(closed ? V / acosh(hc / v.r_e) * 2 * sImg / (sImg * sImg - ym * ym) / 1e6 : E0 / 1e6); }
+    for (let j = 0; j < s.ng; j++) { const ym = s.yax[j]; yc.push(ym * 1000); Ec.push(s.eax[j] * V / 1e6); Ea.push(closed ? V / acosh(hc / v.r_e) * 2 * sImg / (sImg * sImg - ym * ym) / 1e6 : E0 / 1e6); }
     const Ecoll = N.maxOf(s.ecol.map(Math.abs)) * V;
     const scalars = [
       scalar('E_0', 'Uniform-field reference V/d', E0, 'V/m', { show: 'MV/m' }),
-      scalar('E_peak', 'Peak field in the air (grid)', Epk, 'V/m', { show: 'MV/m' }),
+      scalar('E_peak', 'Peak field in the air', Epk, 'V/m', { show: 'MV/m', note: Epk > s.eSurf * V * (1 + 1e-9) ? 'away from the electrode' : a.round_electrode ? 'on the electrode surface' : 'at the rounded edge of the strip' }),
       scalar('beta', 'Field-enhancement factor', beta, '1'),
       ...(closed ? [scalar('E_w', 'Closed-form peak field, isolated cylinder above a plane', Ew, 'V/m', { show: 'MV/m', note: 'Method of images; no box walls' })] : []),
       scalar('M_bd', 'Margin against gas breakdown', Mbd, '1', { text: Mbd >= 1 ? `${lab(Mbd)} — peak field below the breakdown field` : `${lab(Mbd)} — partial discharge expected` }),
       scalar('E_coll', 'Largest field at the grounded plane', Ecoll, 'V/m', { show: 'MV/m' }),
       ...(a.no_barrier ? [] : [scalar('E_0b', 'Uniform-field value in the air with the barrier', V / (v.d_gap * (1 - v.f_b) + v.f_b * v.d_gap / v.eps_b), 'V/m', { show: 'MV/m' }), scalar('E_tan', 'Largest tangential field along the barrier surface', s.etan * V, 'V/m', { show: 'MV/m' })]),
-      scalar('C_l', 'Capacitance per unit length (from collector flux)', EPS0 * Math.abs(s.G0), 'F/m', { show: 'pF/m' }),
+      scalar('C_l', 'Capacitance per unit length (from collector flux)', EPS0 * Math.abs(s.Gc), 'F/m', { show: 'pF/m' }),
       scalar('L_req', 'Required creepage distance', Lreq, 'm', { show: 'mm' }),
       scalar('M_cr', 'Creepage margin', Mcr, '1', { text: Mcr >= 1 ? `${lab(Mcr)} — adequate` : `${lab(Mcr)} — too short` }),
-      scalar('n_it', 'Relaxation sweeps used', s.iterations, '1'),
+      scalar('n_mp', 'Number of terms in the multipole expansion about the electrode', s.coef.length, '1'),
     ];
     return {
       scalars,
@@ -183,16 +252,17 @@ const electrostatic = {
       checks: [
         check('Flux conservation between collector and electrode', s.fluxRes, 1e-3, s.open ? 'Gauss\'s law on the grid: flux through the plane against flux below the electrode, less enclosed charge' : 'Not evaluated for a grounded enclosure, where flux also ends on the walls'),
         check('Potential within the electrode values', a.laplace ? Math.max(0, N.maxOf(data.map(r => N.maxOf(r))) / V - 1, -N.minOf(data.map(r => N.minOf(r))) / V) : 0, 1e-6, 'Maximum principle for Laplace\'s equation'),
+        check('Electrode surface at the electrode potential', s.bcRes, 1e-4, 'Largest departure of the computed potential from V₀ at points on the surface between those used to fit the expansion'),
       ],
       warnings,
     };
   },
   benchmarks(v, a) {
     const out = [], ap = { ...a, laplace: true };
-    const p = gapField(v, ap, true), tb = v.f_b * v.d_gap, jbT = p.jb * p.dx;
-    out.push(bench('Parallel-plate limit: field in the air', p.epk * v.V_0, a.no_barrier ? v.V_0 / v.d_gap : v.V_0 / (v.d_gap - jbT + jbT / v.eps_b), a.no_barrier ? 'E = V/d' : 'Series capacitors, E = V/(d_air + t_b/ε_b), barrier on grid lines', 1e-3));
+    const p = gapField(v, ap, true), tb = v.f_b * v.d_gap;
+    out.push(bench('Parallel-plate limit: field in the air', p.epk * v.V_0, a.no_barrier ? v.V_0 / v.d_gap : v.V_0 / (v.d_gap - tb + tb / v.eps_b), a.no_barrier ? 'E = V/d' : 'Series capacitors, E = V/(d_air + t_b/ε_b)', 1e-3));
     const q = gapField(v, { ...a, laplace: false, no_barrier: true }, true);
-    out.push(bench('Plane gap with uniform space charge: field at the collector', q.ecol[q.ic] * v.V_0, v.V_0 / v.d_gap + v.rho_q * (v.d_gap - q.dx) / (2 * EPS0), 'Exact solution of the 1-D Poisson equation, evaluated at the first cell centre', 1e-3));
+    out.push(bench('Plane gap with uniform space charge: field at the collector', q.ecol[q.ic] * v.V_0, v.V_0 / v.d_gap + v.rho_q * v.d_gap / (2 * EPS0), 'Exact solution of the 1-D Poisson equation', 1e-3));
     return out;
   },
   validation: [],
@@ -220,11 +290,11 @@ const electrostatic = {
     safety: ['Interlocked enclosure and earthing stick; discharge all capacitances before access', 'Current-limited supply', 'Ventilation for ozone and nitrogen oxides during sustained corona'],
   },
   falsify: ['A field measured at the plane, below discharge inception, that is not proportional to the applied voltage.', 'A measured field profile on the plane that differs from the computed one by more than the combined probe and positioning uncertainty.', 'Discharge inception at a computed surface field well below the Peek value for that radius and air density.'],
-  alternatives: [{ name: 'Closed-form image solutions', text: 'Cylinder–plane and sphere–plane gaps have exact image-charge solutions; they are preferred when the electrode is too small to resolve on the grid.' }, { name: 'Charge-simulation or boundary-element methods', text: 'Represent curved electrodes exactly and give smooth surface fields without a volume grid.' }, { name: 'Coupled corona model', text: 'Above inception the space charge is not prescribed but follows from ion drift and current continuity; the field at the emitter is then pinned near its onset value (Kaptzov\'s hypothesis).' }],
+  alternatives: [{ name: 'Closed-form image solutions', text: 'Cylinder–plane and sphere–plane gaps have exact image-charge solutions; the computation here tends to the cylinder–plane one as the box is made large.' }, { name: 'Charge-simulation or boundary-element methods', text: 'Represent curved electrodes exactly and give smooth surface fields without a volume grid. The multipole expansion about the electrode used here is a charge-simulation method, coupled to a grid that carries the box, the barrier and the space charge.' }, { name: 'Coupled corona model', text: 'Above inception the space charge is not prescribed but follows from ion drift and current continuity; the field at the emitter is then pinned near its onset value (Kaptzov\'s hypothesis).' }],
   hazards: [{ hazard: 'Electric shock and stored charge', cause: 'Contact with energised or undischarged parts', mitigation: 'Interlocks, earthing stick, current-limited supply, two-person working' }, { hazard: 'Flashover', cause: 'Insufficient clearance or creepage, contamination, humidity', mitigation: 'Design margins from the applicable standard; clean, dry insulation' }, { hazard: 'Ozone and nitrogen oxides', cause: 'Sustained corona', mitigation: 'Ventilation and exposure monitoring' }],
   standards: ['IEC 60664-1 (insulation coordination for equipment within low-voltage supply systems)', 'IEC 60071 series (insulation coordination)', 'IEC 60060-1 (high-voltage test techniques)', 'IEC 60815 series (selection and dimensioning of high-voltage insulators for polluted conditions)'],
-  limits: 'Two-dimensional planar geometry (an electrode that is long out of the plane), electrostatic conditions, linear isotropic dielectrics and a prescribed uniform space charge. The grid cannot resolve conductors smaller than about three cells, nor the singular field at sharp edges. The breakdown comparison uses a single uniform-field strength; inception at small radii follows Peek\'s law and occurs at a higher surface field.',
-  numerics: { method: 'Five-point finite differences solved by successive over-relaxation; flux-weighted stencil at the dielectric interface', order: 2, stability: 'Convergent for relaxation factors between 0 and 2', resolution: 'n_gap' },
+  limits: 'Two-dimensional planar geometry (an electrode that is long out of the plane), electrostatic conditions, linear isotropic dielectrics and a prescribed uniform space charge. The electrode is a circle, or for the strip an ellipse one-tenth as thick as it is wide; a sharper edge has a higher field. The breakdown comparison uses a single uniform-field strength; inception at small radii follows Peek\'s law and occurs at a higher surface field.',
+  numerics: { method: 'Logarithmic and multipole parts of the potential about the electrode carried analytically in a conformal coordinate, with coefficients from the surface condition by least squares; the smooth remainder by five-point finite differences solved directly (cosine modes across the box, tridiagonal systems up it), with a flux-weighted stencil at the dielectric interface', order: 2, stability: 'Direct solution: no iteration', resolution: 'n_gap' },
   optimise: { objective: 'beta', sense: 'min', vars: ['r_e'], note: 'A larger electrode radius lowers the enhancement factor until the electrode is comparable with the gap.' },
   inverse: { series: 'collector-field', fit: ['r_e', 'd_gap'] },
   extensions: ['Axisymmetric (r–z) formulation for needle and sphere electrodes', 'Self-consistent ion-drift space charge above corona onset', 'Peek inception criterion with air-density and roughness factors', 'Time-harmonic fields with lossy dielectrics'],
@@ -986,7 +1056,9 @@ function stringCore(v, a) {
   const Te = a.small_amp ? T : T + v.E_y * Aw * E0 / (2 * T * L);
   const c = Math.sqrt(Te / mu), f1 = c / (2 * L), B = a.flexible ? 0 : Math.PI ** 2 * v.E_y * Ia / (Te * L * L), gam = a.undamped ? 0 : v.gamma_d;
   const fn = (n, b = B) => n * f1 * Math.sqrt(1 + b * n * n);
-  const nm = 60, An = [], Vn = [];
+  // the plucked amplitudes fall only as 1/n²: both the displacement at the pluck point and the energy lack the fraction 1/(π²p(1−p)N) after N modes,
+  // so N grows as the pluck nears an end and that fraction stays at about 1 % (60 modes for a pluck between 0.2 and 0.8 of the length)
+  const nm = a.plucked ? Math.max(60, Math.ceil(9.6 / (v.x_p * (1 - v.x_p)))) : 60, An = [], Vn = [];
   for (let n = 1; n <= nm; n++) {
     An.push(a.plucked ? 2 * v.a_p * L * L / (n * n * Math.PI ** 2 * xp * (L - xp)) * Math.sin(n * Math.PI * xp / L) : 0);
     Vn.push(a.plucked ? 0 : 2 / L * N.trapz(xq, xq.map(x => w0(x) * Math.sin(n * Math.PI * x / L))));
@@ -998,7 +1070,12 @@ function stringCore(v, a) {
     const s = Math.sqrt(-d2); return s * t < 1e-9 ? e * (A + Vv * t) : e * (A * Math.cosh(s * t) + Vv / s * Math.sinh(s * t));
   };
   const modal = (x, t, b = B) => { let s = 0; for (let n = 1; n <= nm; n++) s += qn(n, t, b) * Math.sin(n * Math.PI * x / L); return s; };
-  return { L, T, mu, Aw, Ia, xp, u0, w0, E0, Te, c, f1, B, gam, fn, nm, An, Vn, qn, modal };
+  /** The modal sum at every position of xa at time t: the modal amplitudes are evaluated once, and sin(nθ) follows from the three-term recurrence. */
+  const modalAt = (xa, t, b = B) => {
+    const q = An.map((_, i) => qn(i + 1, t, b));
+    return xa.map(x => { const th = Math.PI * x / L, c2 = 2 * Math.cos(th); let s0 = 0, s1 = Math.sin(th), s = 0; for (let n = 0; n < nm; n++) { s += q[n] * s1; const s2 = c2 * s1 - s0; s0 = s1; s1 = s2; } return s; });
+  };
+  return { L, T, mu, Aw, Ia, xp, u0, w0, E0, Te, c, f1, B, gam, fn, nm, An, Vn, qn, modal, modalAt };
 }
 
 const vibratingString = {
@@ -1073,7 +1150,7 @@ const vibratingString = {
       rms = Math.sqrt(N.mean(pick.map((p, k) => (p - ref[k]) ** 2))) / amp;
     } else {
       times = N.linspace(0, tEnd, 361); const xm = N.linspace(0, L, 121);
-      frames = times.filter((_, k) => k % 4 === 0).map(t => xm.map(x => s.modal(x, t)));
+      frames = times.filter((_, k) => k % 4 === 0).map(t => s.modalAt(xm, t));
       pick = times.map(t => s.modal(xo, t)); ref = times.map(t => s.modal(xo, t, 0)); method = 'modal';
     }
     const af = a.flexible ? frames.filter((_, k) => k % 4 === 0) : frames, at = times.filter((_, k) => k % 4 === 0);
@@ -1102,13 +1179,13 @@ const vibratingString = {
         scalar('f_num', 'Fundamental measured from the simulation', a.flexible && Number.isFinite(fNum) ? fNum : s.fn(1), 'Hz', { note: a.flexible ? 'Zero crossings of the first-mode projection' : 'Modal solution' }),
       ],
       series: [
-        line('pickup', 'Displacement at the pickup position', 'Time', 'ms', times.map(t => t * 1e3), [{ label: a.flexible ? 'Finite-difference solution' : 'Stiff string (modal)', data: pick.map(q => q * 1e3) }, { label: a.flexible ? 'Modal series (60 modes)' : 'Flexible string (modal)', data: ref.map(q => q * 1e3), dash: true }], 'Displacement', 'mm'),
+        line('pickup', 'Displacement at the pickup position', 'Time', 'ms', times.map(t => t * 1e3), [{ label: a.flexible ? 'Finite-difference solution' : 'Stiff string (modal)', data: pick.map(q => q * 1e3) }, { label: a.flexible ? `Modal series (${s.nm} modes)` : 'Flexible string (modal)', data: ref.map(q => q * 1e3), dash: true }], 'Displacement', 'mm'),
         line('harmonics', 'Initial amplitude of each partial', 'Frequency', 'Hz', ns.map(n => s.fn(n)), [{ label: 'Modal amplitude', data: amp.map(q => q * 1e3) }], 'Amplitude', 'mm', { kind: 'bar' }),
       ],
       anims: [anim('string', 'Shape of the string', 'Position', 'm', ax, af.map(f => Array.from(f, q => q * 1e3)), at, 'Displacement', 'mm', { yRange: [-pk, pk] })],
       checks: [
         check('Grid solution against the modal series at the pickup', rms, 0.02, method === 'grid' ? 'Root-mean-square difference relative to the peak displacement' : 'Not evaluated: modal solution used'),
-        check('Modal energy sum against the energy supplied', (eModal - s.E0) / s.E0, 0.03, 'Parseval\'s relation with 60 modes'),
+        check('Modal energy sum against the energy supplied', (eModal - s.E0) / s.E0, 0.03, `Parseval's relation with ${s.nm} modes`),
       ],
       warnings,
     };
@@ -1119,7 +1196,7 @@ const vibratingString = {
     if (Number.isFinite(fd)) out.push(bench('Fundamental frequency from the simulation', val(r, 'f_num'), fd, s.gam > 0 ? 'f₁ = (1/2L)√(T/μ), lowered by damping' : 'f₁ = (1/2L)√(T/μ)', 1e-3));
     if (a.plucked) { const xq = N.linspace(0, s.L, 4001); out.push(bench('Amplitude of the first harmonic by numerical projection of the plucked shape', 2 / s.L * N.trapz(xq, xq.map(x => s.u0(x) * Math.sin(Math.PI * x / s.L))), s.An[0], 'A₁ = 2a sin(πp)/(π²p(1 − p))', 1e-5)); }
     out.push(bench('Stiff-string partial against the pinned-beam dispersion relation', stringCore(v, { ...a, flexible: false }).fn(3), (() => { const q = stringCore(v, { ...a, flexible: false }), k = 3 * Math.PI / q.L; return Math.sqrt((q.Te * k * k + v.E_y * q.Ia * k ** 4) / q.mu) / TAU; })(), 'ω² = (T k² + E I k⁴)/μ with k = nπ/L', 1e-9));
-    if (a.plucked) out.push(bench('Plucked-string series reproduces the pluck amplitude', s.modal(s.xp, 0), v.a_p, 'Fourier sine series of a triangle, 60 modes', 0.02));
+    if (a.plucked) out.push(bench('Plucked-string series reproduces the pluck amplitude', s.modal(s.xp, 0), v.a_p, `Fourier sine series of a triangle, ${s.nm} modes: the truncated part is 1/(π²p(1−p)N) of the amplitude`, 0.02));
     return out;
   },
   validation: [],
@@ -1149,7 +1226,7 @@ const vibratingString = {
   hazards: [{ hazard: 'Wire whip', cause: 'Tensile failure of the string', mitigation: 'Stay below about 70 % of the breaking stress; eye protection; shield' }],
   standards: ['ISO 16:1975 (acoustics — standard tuning frequency)', 'ASTM A228/A228M (steel wire, music spring quality)'],
   limits: 'Transverse motion in one plane, uniform string, rigid end supports, slopes small compared with one. The large-amplitude correction is a time-averaged first-order estimate. Longitudinal and torsional waves, and coupling to the instrument body, are not included.',
-  numerics: { method: 'Explicit leapfrog finite differences at unit Courant number, where the scheme reproduces d\'Alembert\'s solution on the grid; modal superposition with 60 modes for the stiff string and for cross-checking', order: 2, stability: 'Stable for Courant number up to one', resolution: 'n_x' },
+  numerics: { method: 'Explicit leapfrog finite differences at unit Courant number, where the scheme reproduces d\'Alembert\'s solution on the grid; modal superposition for the stiff string and for cross-checking, with 60 modes or as many more as a pluck near an end needs to hold the truncated part of the series at 1 %', order: 2, stability: 'Stable for Courant number up to one', resolution: 'n_x' },
   optimise: { objective: 'f_1', sense: 'max', vars: ['T_s'], note: 'Pitch rises as the square root of tension until the breaking stress is reached.' },
   inverse: { series: 'pickup', fit: ['T_s'] },
   extensions: ['Compliant bridge and body coupling', 'Hammer–string contact dynamics', 'Two transverse polarisations and whirling at large amplitude', 'Frequency-dependent loss model'],
@@ -1266,10 +1343,16 @@ const coupledOsc = {
     const out = [], id = { ...a, identical: true }, w = coCore({ ...v, k_c: 1e-4 * v.k }, id), w0 = Math.sqrt(v.k / v.m);
     out.push(bench('Weak-coupling mode splitting', (w.w2 - w.w1) / w0, 1e-4, 'ω_b − ω_a → ω₀ k_c/k', 1e-3));
     if (a.identical && a.undamped && a.linear) {
-      const c = coCore(v, a), r = c.run(), n = r.t.length - 1, te = r.t[n];
-      out.push(bench('Displacement of mass 1 against the two-mode solution', r.y[0][n] + v.x_0, v.x_0 / 2 * (Math.cos(c.w1 * te) + Math.cos(c.w2 * te)) + v.x_0, 'x₁ = (x₀/2)(cos ω_a t + cos ω_b t), offset by x₀', 1e-6));
+      const c = coCore(v, a), r = c.run(6000), n = r.t.length - 1, te = r.t[n];   // 100 samples to the fast period, so that the sampled energy peak is within 10⁻³ of the true one
+      // x₁ swings between −x₀ and x₀: offset by 2x₀ so that the comparison is relative to the amplitude and not to a value that passes through zero
+      out.push(bench('Displacement of mass 1 against the two-mode solution', r.y[0][n] + 2 * v.x_0, v.x_0 / 2 * (Math.cos(c.w1 * te) + Math.cos(c.w2 * te)) + 2 * v.x_0, 'x₁ = (x₀/2)(cos ω_a t + cos ω_b t), offset by 2x₀', 1e-6));
       const e2 = r.t.map((_, i) => 0.5 * c.m * r.y[3][i] ** 2 + 0.5 * c.k2 * r.y[2][i] ** 2);
-      if (c.tEnd >= TAU / c.dw && c.kc / c.k1 < 0.3) out.push(bench('Complete energy transfer between identical oscillators', N.maxOf(e2) / c.energy(v.x_0, 0, 0, 0), 1, 'All the energy passes to oscillator 2', 0.02));
+      // With x₂ = x₀ sin φ sin ψ, φ = (ω_a + ω_b)t/2 and ψ = (ω_b − ω_a)t/2, the energy of oscillator 2 is greatest at ψ = π/2 with φ a multiple of π:
+      // it then holds (ω_a + ω_b)²/(2(ω_a² + ω_b²)) of the total, the rest being the coupling energy and the motion of mass 1, so the transfer is complete only as k_c/k → 0.
+      // The energy needs half a beat period π/(ω_b − ω_a) to cross, and φ next reaches a multiple of π within π/(ω_a + ω_b) of that instant, where the share is cos²ε
+      // of the greatest with ε ≤ (π/2)(ω_b − ω_a)/(ω_a + ω_b): the comparison is made when the record covers that time, to within ε².
+      const eps = 0.5 * Math.PI * c.dw / (c.w1 + c.w2);
+      if (c.tEnd >= Math.PI / c.dw + Math.PI / (c.w1 + c.w2)) out.push(bench('Complete energy transfer between identical oscillators', N.maxOf(e2) / c.energy(v.x_0, 0, 0, 0), (c.w1 + c.w2) ** 2 / (2 * (c.w1 ** 2 + c.w2 ** 2)), 'Greatest share of the energy held by oscillator 2, (ω_a + ω_b)²/(2(ω_a² + ω_b²)): complete in the weak-coupling limit. A finite record comes within ε² = (π(ω_b − ω_a)/(2(ω_a + ω_b)))² of it', eps * eps + 1e-3));
     }
     if (!a.passive && TAU * v.df < 2 * v.K_s) { const r = this.solve(v, a); out.push(bench('Locked phase difference', val(r, 'psi_end') + 1, Math.asin(TAU * v.df / (2 * v.K_s)) + 1, 'ψ* = arcsin(Δω/2K), offset by 1', 1e-3)); }
     return out;
@@ -1360,6 +1443,22 @@ function trSim(v, a) {
   const xr = ir === ip ? xs[ir] : xs[ir] - dx * (half - Math.abs(wF[ir])) / Math.max(Math.abs(wF[ir - 1]) - Math.abs(wF[ir]), 1e-300);
   return { nx, xs, dx, dt, Nf, g, wF, is, ip, sig, gam, recL: Array.from(recL), recR: Array.from(recR), src, frames, times, resid, e0, eOut,
     q: wF[is], corr: swg / Math.sqrt(Math.max(sw * sg, 1e-300)), fwhm: xr - xl, bgRms: nb ? Math.sqrt(bg / nb) : 0, eFrac: eIn / sg, peakL: N.maxOf(Array.from(recL)) };
+}
+/**
+ * Refocused amplitude returned by one sensor at distance d from the source in a damped medium, for a complete record (lengths in L, times in L/c, ζ = γL/c).
+ * At angular frequency ω the wavenumber is κ = √(ω² + iζω); the Gaussian pulse sends out the spectrum κ ĝ(κ)/(2ω), and replaying the reversed record
+ * cancels the phase of the outward path while the attenuation acts twice: q_d = (1/π)∫₀^∞ Re[κ ĝ(κ)/(2ω)] exp(−2d Im κ) dω, ĝ(κ) = √(2π) w_p exp(−κ²w_p²/2).
+ * Im κ → ζ/2 for ω ≫ ζ, which gives the ray estimate ½exp(−ζd); frequencies below ζ diffuse instead of propagating and are attenuated less.
+ * Simpson's rule in s = √ω, which removes the integrable ω^(−1/2) end point.
+ */
+function trDampedFocus(zeta, wp, d) {
+  const n = 4000, hs = Math.sqrt(9 / wp) / n; let sum = 0;
+  for (let k = 0; k <= n; k++) {
+    const s = k * hs, w = s * s; let f = Math.sqrt(zeta / 2);
+    if (k > 0) { const kr = Math.sqrt(0.5 * (w * Math.hypot(w, zeta) + w * w)), ki = zeta * w / (2 * kr), ph = -0.5 * zeta * w * wp * wp; f = (kr * Math.cos(ph) - ki * Math.sin(ph)) * Math.exp(-0.5 * w * w * wp * wp - 2 * d * ki) / s; }
+    sum += (k === 0 || k === n ? 1 : k % 2 ? 4 : 2) * f;
+  }
+  return sum * hs / 3 * Math.sqrt(2 * Math.PI) * wp / Math.PI;
 }
 
 const timeReversal = {
@@ -1453,7 +1552,12 @@ const timeReversal = {
     const o = trSim(v, { ...id, two_sided: false });
     out.push(bench('One-sided mirror refocuses half the amplitude', o.q, 0.5, 'Only one of the two outgoing pulses is recorded', 1e-9));
     const d = trSim(v, { ...id, lossless: false });
-    out.push(bench('Damped refocused amplitude against the round-trip loss estimate', d.q, (Math.exp(-v.zeta_L * v.x_s) + Math.exp(-v.zeta_L * (1 - v.x_s))) / 2, 'A_f/A₀ ≈ ½[exp(−γx_s/c) + exp(−γ(L−x_s)/c)]', 0.03));
+    // The round-trip estimate ½[exp(−γx_s/c) + exp(−γ(L−x_s)/c)] is the ray limit: it attenuates every frequency as exp(−γt/2), whereas the part of the pulse below
+    // ω ≈ γ diffuses and is attenuated less (6 % of the amplitude at γL/c = 2, a third at 5). The reference is the frequency-domain result for a complete record.
+    // Time reversal can return only what was recorded: the comparison is made when the field still in the medium at the end of the record is below the tolerance
+    // times the expected amplitude (a heavily damped medium holds the diffusing remainder long after the pulses have left).
+    const qd = trDampedFocus(v.zeta_L, v.w_p, v.x_s) + trDampedFocus(v.zeta_L, v.w_p, 1 - v.x_s);
+    if (d.resid <= 0.03 * qd) out.push(bench('Damped refocused amplitude against the round-trip loss estimate', d.q, qd, 'A_f/A₀ = Σ (1/π)∫ Re[κ ĝ(κ)/(2ω)] exp(−2d Im κ) dω over both paths, κ = √(ω² + iγω)/c: the round-trip loss ½[exp(−γx_s/c) + exp(−γ(L−x_s)/c)] with the low-frequency part of the pulse included. Applies when the field left unrecorded is below 3 % of this', 0.03));
     return out;
   },
   validation: [],

@@ -1638,15 +1638,18 @@ const reactors = {
   benchmarks(v, a) {
     const b = { isothermal: true, first_order: true, liquid: true, single_tank: true }, k = v.A_f * Math.exp(-v.E_a / (C.R_u * v.T_0)), Da = k * v.tau;
     const r1 = this.solve(v, b), r2 = this.solve(v, { ...b, first_order: false }), r3 = this.solve(v, { ...b, single_tank: false }), r4 = this.solve(v, { ...b, liquid: false });
-    // first-order gas with ε = 1: kτ = −2 ln(1 − X) − X
-    const Xg = val(r4, 'X_pfr');
+    // The closed forms are written so that they keep their precision at both ends of the Damköhler range: expm1 and log1p where kτ is minute
+    // (1 − e^{−kτ} and 1 + 2Da − √(1 + 4Da) otherwise cancel to rounding error), and conversion compared with conversion where kτ is large.
+    // First-order gas with ε = 1: kτ = −2 ln(1 − X) − X. Read backwards from X it magnifies any error in X by 2/(1 − X), without limit as X → 1,
+    // so it is solved for X instead: with y = −ln(1 − X), 2y − (1 − e^{−y}) = kτ has slope between 1 and 2 and Newton's method converges from y = kτ/2.
+    let yg = Da / 2; for (let i = 0; i < 60; i++) { const dy = (2 * yg + Math.expm1(-yg) - Da) / (2 - Math.exp(-yg)); yg -= dy; if (Math.abs(dy) <= 1e-16 * yg) break; }
     return [
-      bench('First-order PFR', val(r1, 'X_pfr'), 1 - Math.exp(-Da), 'X = 1 − e^{−kτ}', 1e-5),
+      bench('First-order PFR', val(r1, 'X_pfr'), -Math.expm1(-Da), 'X = 1 − e^{−kτ}', 1e-5),
       bench('First-order CSTR', val(r1, 'X_cstr'), Da / (1 + Da), 'X = kτ/(1 + kτ)', 1e-9),
       bench('Second-order PFR', val(r2, 'X_pfr'), Da / (1 + Da), 'X = Da/(1 + Da)', 1e-4),
-      bench('Second-order CSTR', val(r2, 'X_cstr'), (1 + 2 * Da - Math.sqrt(1 + 4 * Da)) / (2 * Da), 'X = [1 + 2Da − √(1 + 4Da)]/(2Da)', 1e-9),
-      bench('Three first-order tanks in series', val(r3, 'X_cstr'), 1 - 1 / Math.pow(1 + Da / 3, 3), 'X = 1 − (1 + kτ/N)^{−N}', 1e-9),
-      bench('First-order gas-phase PFR with ε = 1', -2 * Math.log(1 - Xg) - Xg, Da, 'kτ = (1 + ε) ln[1/(1 − X)] − εX', 1e-4),
+      bench('Second-order CSTR', val(r2, 'X_cstr'), 2 * Da / (1 + 2 * Da + Math.sqrt(1 + 4 * Da)), 'X = [1 + 2Da − √(1 + 4Da)]/(2Da) = 2Da/[1 + 2Da + √(1 + 4Da)]', 1e-9),
+      bench('Three first-order tanks in series', val(r3, 'X_cstr'), -Math.expm1(-3 * Math.log1p(Da / 3)), 'X = 1 − (1 + kτ/N)^{−N}', 1e-9),
+      bench('First-order gas-phase PFR with ε = 1', val(r4, 'X_pfr'), -Math.expm1(-yg), 'kτ = (1 + ε) ln[1/(1 − X)] − εX, solved for X', 1e-4),
     ];
   },
   validation: [],
@@ -2180,23 +2183,74 @@ const waterHammer = {
 // Ghia, Ghia & Shin (1982), Table I, Re = 100: u/U on the vertical centre-line.
 const GHIA_Y = [1, 0.9766, 0.9688, 0.9609, 0.9531, 0.8516, 0.7344, 0.6172, 0.5, 0.4531, 0.2813, 0.1719, 0.1016, 0.0703, 0.0625, 0.0547, 0];
 const GHIA_U100 = [1, 0.84123, 0.78871, 0.73722, 0.68717, 0.23151, 0.00332, -0.13641, -0.20581, -0.21090, -0.15662, -0.10150, -0.06434, -0.04775, -0.04192, -0.03717, 0];
-/** Streamfunction–vorticity solution in units of the cavity size and lid speed. */
-function cavitySolve(Re, n, o) {
-  const h = 1 / (n - 1), h2 = h * h, psi = new Float64Array(n * n), om = new Float64Array(n * n), on = new Float64Array(n * n);
-  const lid = new Float64Array(n); for (let i = 0; i < n; i++) { const x = i * h; lid[i] = o.uniform ? 1 : 16 * x * x * (1 - x) * (1 - x); }
+/** Weights of the quartic through five equally spaced values, at offset s (in spacings) from the middle one. */
+const lag5 = s => [(s + 1) * s * (s - 1) * (s - 2) / 24, -(s + 2) * s * (s - 1) * (s - 2) / 6, (s + 2) * (s + 1) * (s - 1) * (s - 2) / 4, -(s + 2) * (s + 1) * s * (s - 2) / 6, (s + 2) * (s + 1) * s * (s - 1) / 24];
+/** Stationary point of that quartic nearest the middle value: [offset, value]. */
+function quarticExtremum(f) {
+  const P = s => { const w = lag5(s); return w[0] * f[0] + w[1] * f[1] + w[2] * f[2] + w[3] * f[3] + w[4] * f[4]; }, e = 1e-3; let s = 0;
+  for (let it = 0; it < 8; it++) { const p0 = P(s), pp = P(s + e), pm = P(s - e), d2 = pp - 2 * p0 + pm; if (!d2) break; s = N.clamp(s - 0.5 * e * (pp - pm) / d2, -1, 1); }
+  return [s, P(s)];
+}
+/** Quartic (5 × 5 point) interpolation of an n × n nodal field at the position (fx, fy) measured in grid spacings. */
+function cavInterp(a, n, fx, fy) {
+  const i = N.clamp(Math.round(fx), 2, n - 3), j = N.clamp(Math.round(fy), 2, n - 3), wx = lag5(fx - i), wy = lag5(fy - j); let s = 0;
+  for (let q = 0; q < 5; q++) { const r = (j + q - 2) * n + i - 2; s += wy[q] * (wx[0] * a[r] + wx[1] * a[r + 1] + wx[2] * a[r + 2] + wx[3] * a[r + 3] + wx[4] * a[r + 4]); }
+  return s;
+}
+/**
+ * LU factors, in place and without pivoting, of a band matrix of order M and half-width b stored by rows (entry (r, c) at r(2b + 1) + b + c − r).
+ * Four pivot rows are eliminated together so that each remaining row is swept once instead of four times.
+ */
+function bandLU(A, M, b) {
+  const bw = 2 * b + 1, o = [0, 0, 0, 0], pv = [0, 0, 0, 0];
+  for (let p = 0; p < M; p += 4) {
+    const nb = Math.min(4, M - p);
+    for (let k = 0; k < nb; k++) { // the pivot rows among themselves
+      const q = p + k, qo = q * bw + b - q; o[k] = qo;
+      for (let l = 0; l < k; l++) { const f = A[qo + p + l] / pv[l], lo = o[l], hi = Math.min(M - 1, p + l + b); A[qo + p + l] = f; for (let c = p + l + 1; c <= hi; c++) A[qo + c] -= f * A[lo + c]; }
+      pv[k] = A[qo + q];
+    }
+    const o0 = o[0], o1 = o[1], o2 = o[2], o3 = o[3], c0 = p + nb, last = Math.min(M - 1, p + b), rEnd = Math.min(M - 1, p + nb - 1 + b);
+    for (let r = c0; r <= rEnd; r++) {
+      const ro = r * bw + b - r; let f0 = 0, f1 = 0, f2 = 0, f3 = 0;
+      if (r - p <= b) { f0 = A[ro + p] / pv[0]; A[ro + p] = f0; }
+      if (nb > 1 && r - p - 1 <= b) { f1 = (A[ro + p + 1] - f0 * A[o0 + p + 1]) / pv[1]; A[ro + p + 1] = f1; }
+      if (nb > 2 && r - p - 2 <= b) { f2 = (A[ro + p + 2] - f0 * A[o0 + p + 2] - f1 * A[o1 + p + 2]) / pv[2]; A[ro + p + 2] = f2; }
+      if (nb > 3 && r - p - 3 <= b) { f3 = (A[ro + p + 3] - f0 * A[o0 + p + 3] - f1 * A[o1 + p + 3] - f2 * A[o2 + p + 3]) / pv[3]; A[ro + p + 3] = f3; }
+      if (nb === 4) {
+        for (let c = c0; c <= last; c++) A[ro + c] -= f0 * A[o0 + c] + f1 * A[o1 + c] + f2 * A[o2 + c] + f3 * A[o3 + c];
+        for (let c = last + 1; c <= Math.min(M - 1, p + 3 + b); c++) A[ro + c] -= (c <= p + 1 + b ? f1 * A[o1 + c] : 0) + (c <= p + 2 + b ? f2 * A[o2 + c] : 0) + f3 * A[o3 + c];
+      } else for (let k = 0; k < nb; k++) { const f = k === 0 ? f0 : k === 1 ? f1 : f2, lo = o[k], hi = Math.min(M - 1, p + k + b); for (let c = c0; c <= hi; c++) A[ro + c] -= f * A[lo + c]; }
+    }
+  }
+}
+/** Solves in place with the factors from bandLU. */
+function bandSolve(A, M, b, x) {
+  const bw = 2 * b + 1;
+  for (let p = 0; p < M; p++) { const ro = p * bw + b - p; let c = Math.max(0, p - b), s0 = 0, s1 = 0; for (; c + 1 < p; c += 2) { s0 += A[ro + c] * x[c]; s1 += A[ro + c + 1] * x[c + 1]; } if (c < p) s0 += A[ro + c] * x[c]; x[p] -= s0 + s1; }
+  for (let p = M - 1; p >= 0; p--) { const ro = p * bw + b - p, hi = Math.min(M - 1, p + b); let c = p + 1, s0 = 0, s1 = 0; for (; c < hi; c += 2) { s0 += A[ro + c] * x[c]; s1 += A[ro + c + 1] * x[c + 1]; } if (c === hi) s0 += A[ro + c] * x[c]; x[p] = (x[p] - s0 - s1) / A[ro + p]; }
+}
+const cavLid = (n, o) => Float64Array.from({ length: n }, (_, i) => { const x = i / (n - 1); return o.uniform ? 1 : 16 * x * x * (1 - x) * (1 - x); });
+/** Wall vorticity from the streamfunction (Thom or Jensen), in place. */
+function cavWalls(psi, om, n, lid, thom) {
+  const h = 1 / (n - 1), h2 = h * h;
+  for (let i = 1; i < n - 1; i++) {
+    if (thom) { om[i] = -2 * psi[n + i] / h2; om[(n - 1) * n + i] = -2 * psi[(n - 2) * n + i] / h2 - 2 * lid[i] / h; }
+    else { om[i] = (-8 * psi[n + i] + psi[2 * n + i]) / (2 * h2); om[(n - 1) * n + i] = (-8 * psi[(n - 2) * n + i] + psi[(n - 3) * n + i]) / (2 * h2) - 3 * lid[i] / h; }
+  }
+  for (let j = 1; j < n - 1; j++) {
+    if (thom) { om[j * n] = -2 * psi[j * n + 1] / h2; om[j * n + n - 1] = -2 * psi[j * n + n - 2] / h2; }
+    else { om[j * n] = (-8 * psi[j * n + 1] + psi[j * n + 2]) / (2 * h2); om[j * n + n - 1] = (-8 * psi[j * n + n - 2] + psi[j * n + n - 3]) / (2 * h2); }
+  }
+}
+/** Impulsive start: explicit march of the vorticity equation with over-relaxation of the streamfunction equation. */
+function cavityMarch(Re, n, o) {
+  const h = 1 / (n - 1), h2 = h * h, psi = new Float64Array(n * n), om = new Float64Array(n * n), on = new Float64Array(n * n), lid = cavLid(n, o);
   const dt = o.central ? 0.8 * Math.min(Re * h2 / 4, 2 / Re) : 0.8 / (4 / (Re * h2) + 2 / h);
-  const maxSteps = Math.min(o.steady ? 6000 : Math.ceil(o.tStop / dt), 6000), w = 2 / (1 + Math.sin(Math.PI * h));
+  const maxSteps = Math.min(Math.ceil(o.tStop / dt), 6000), w = 2 / (1 + Math.sin(Math.PI * h));
   let steps = 0, change = Infinity;
   for (; steps < maxSteps; steps++) {
-    for (let i = 1; i < n - 1; i++) {
-      if (o.thom) { om[i] = -2 * psi[n + i] / h2; om[(n - 1) * n + i] = -2 * psi[(n - 2) * n + i] / h2 - 2 * lid[i] / h; }
-      else { om[i] = (-8 * psi[n + i] + psi[2 * n + i]) / (2 * h2); om[(n - 1) * n + i] = (-8 * psi[(n - 2) * n + i] + psi[(n - 3) * n + i]) / (2 * h2) - 3 * lid[i] / h; }
-    }
-    for (let j = 1; j < n - 1; j++) {
-      if (o.thom) { om[j * n] = -2 * psi[j * n + 1] / h2; om[j * n + n - 1] = -2 * psi[j * n + n - 2] / h2; }
-      else { om[j * n] = (-8 * psi[j * n + 1] + psi[j * n + 2]) / (2 * h2); om[j * n + n - 1] = (-8 * psi[j * n + n - 2] + psi[j * n + n - 3]) / (2 * h2); }
-    }
-    change = 0;
+    cavWalls(psi, om, n, lid, o.thom); change = 0;
     for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) {
       const k = j * n + i, u = (psi[k + n] - psi[k - n]) / (2 * h), v = -(psi[k + 1] - psi[k - 1]) / (2 * h);
       const conv = o.central ? u * (om[k + 1] - om[k - 1]) / (2 * h) + v * (om[k + n] - om[k - n]) / (2 * h)
@@ -2207,18 +2261,114 @@ function cavitySolve(Re, n, o) {
     for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) om[j * n + i] = on[j * n + i];
     for (let s = 0; s < 4; s++) for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) { const k = j * n + i; psi[k] += w * (0.25 * (psi[k + 1] + psi[k - 1] + psi[k + n] + psi[k - n] + h2 * om[k]) - psi[k]); }
     if (!Number.isFinite(change)) break;
-    if (o.steady && steps > 50 && change / dt < 1e-5) { steps++; break; }
   }
-  const U = [], V = [], P = [], Sp = [];
-  let pmin = 0, kmin = 0, res = 0, omax = 1e-30;
+  return { psi, om, steps, converged: true, change: change / dt, finite: Number.isFinite(change) };
+}
+/**
+ * Steady state by Newton's method. The interior vorticity −∇²ψ and the wall vorticity are linear in the interior streamfunction, so the vorticity
+ * equation is a system in ψ alone with a band of half-width 2(n − 2), factorised directly. A Jacobian is kept while the corrections still contract quickly.
+ */
+function cavitySteady(Re, n, o, guess) {
+  const m = n - 2, h = 1 / (n - 1), h2 = h * h, M = m * m, b = 2 * m, bw = 2 * b + 1, d = 1 / (Re * h2), lid = cavLid(n, o);
+  const psi = guess || new Float64Array(n * n), om = new Float64Array(n * n), R = new Float64Array(M), A = new Float64Array(M * bw), x = new Float64Array(M);
+  const inner = (i, j) => i > 0 && i < n - 1 && j > 0 && j < n - 1, id = (i, j) => (j - 1) * m + i - 1;
+  // dependence of the vorticity at node (i, j) on the interior streamfunction: f(i', j', coefficient)
+  const dOm = (i, j, f) => {
+    if (inner(i, j)) { f(i, j, 4 / h2); f(i + 1, j, -1 / h2); f(i - 1, j, -1 / h2); f(i, j + 1, -1 / h2); f(i, j - 1, -1 / h2); return; }
+    const di = i === 0 ? 1 : i === n - 1 ? -1 : 0, dj = j === 0 ? 1 : j === n - 1 ? -1 : 0;
+    if (o.thom) f(i + di, j + dj, -2 / h2); else { f(i + di, j + dj, -4 / h2); f(i + 2 * di, j + 2 * dj, 0.5 / h2); }
+  };
+  const residual = () => {
+    cavWalls(psi, om, n, lid, o.thom); let r = 0;
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) { const k = j * n + i; om[k] = -(psi[k + 1] + psi[k - 1] + psi[k + n] + psi[k - n] - 4 * psi[k]) / h2; }
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) {
+      const k = j * n + i, u = (psi[k + n] - psi[k - n]) / (2 * h), v = -(psi[k + 1] - psi[k - 1]) / (2 * h);
+      const conv = o.central ? u * (om[k + 1] - om[k - 1]) / (2 * h) + v * (om[k + n] - om[k - n]) / (2 * h)
+        : (u > 0 ? u * (om[k] - om[k - 1]) : u * (om[k + 1] - om[k])) / h + (v > 0 ? v * (om[k] - om[k - n]) : v * (om[k + n] - om[k])) / h;
+      const q = d * (om[k + 1] + om[k - 1] + om[k + n] + om[k - n] - 4 * om[k]) - conv; R[id(i, j)] = q; if (Math.abs(q) > r) r = Math.abs(q);
+    }
+    return r;
+  };
+  const jacobian = () => {
+    A.fill(0);
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) {
+      const k = j * n + i, p = id(i, j), row = p * bw + b - p, u = (psi[k + n] - psi[k - n]) / (2 * h), v = -(psi[k + 1] - psi[k - 1]) / (2 * h);
+      const addPsi = (a, c, w) => { if (inner(a, c)) A[row + id(a, c)] += w; }, addOm = (a, c, w) => dOm(a, c, (a2, c2, w2) => addPsi(a2, c2, w * w2));
+      let cE, cW, cN, cS, cP = 0, gx, gy;
+      if (o.central) { cE = -u / (2 * h); cW = -cE; cN = -v / (2 * h); cS = -cN; gx = (om[k + 1] - om[k - 1]) / (2 * h); gy = (om[k + n] - om[k - n]) / (2 * h); }
+      else { cE = u > 0 ? 0 : -u / h; cW = u > 0 ? u / h : 0; cN = v > 0 ? 0 : -v / h; cS = v > 0 ? v / h : 0; cP = -(Math.abs(u) + Math.abs(v)) / h; gx = (u > 0 ? om[k] - om[k - 1] : om[k + 1] - om[k]) / h; gy = (v > 0 ? om[k] - om[k - n] : om[k + n] - om[k]) / h; }
+      addPsi(i, j + 1, -gx / (2 * h)); addPsi(i, j - 1, gx / (2 * h)); addPsi(i + 1, j, gy / (2 * h)); addPsi(i - 1, j, -gy / (2 * h));
+      addOm(i + 1, j, d + cE); addOm(i - 1, j, d + cW); addOm(i, j + 1, d + cN); addOm(i, j - 1, d + cS); addOm(i, j, cP - 4 * d);
+    }
+    bandLU(A, M, b);
+  };
+  let its = 0, dmax = Infinity, prev = Infinity, fresh = false, res = residual();
+  for (; its < 40 && dmax > 1e-11; its++) {
+    if (!fresh) { jacobian(); fresh = true; }
+    for (let p = 0; p < M; p++) x[p] = -R[p];
+    bandSolve(A, M, b, x);
+    prev = dmax; dmax = 0;
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) { const q = x[id(i, j)]; psi[j * n + i] += q; if (Math.abs(q) > dmax) dmax = Math.abs(q); }
+    if (!(dmax < 1e3)) break;
+    res = residual(); if (!(dmax < 2e-2 && dmax < 0.25 * prev)) fresh = false;
+  }
+  let omax = 1e-30; for (let k = 0; k < n * n; k++) omax = Math.max(omax, Math.abs(om[k]));
+  return { psi, om, steps: its, converged: dmax <= 1e-11, change: dmax, resN: res / (d * omax), finite: dmax < 1e3 };
+}
+/** Velocities u = ∂ψ/∂y and v = −∂ψ/∂x by fourth-order differences: central, one-sided next to a wall. */
+function cavVelocity(psi, n, lid) {
+  const h = 1 / (n - 1), u = new Float64Array(n * n), v = new Float64Array(n * n);
+  const dif = (k, st, q) => (q === 1 ? -3 * psi[k - st] - 10 * psi[k] + 18 * psi[k + st] - 6 * psi[k + 2 * st] + psi[k + 3 * st] : q === n - 2 ? 3 * psi[k + st] + 10 * psi[k] - 18 * psi[k - st] + 6 * psi[k - 2 * st] - psi[k - 3 * st] : 8 * (psi[k + st] - psi[k - st]) - (psi[k + 2 * st] - psi[k - 2 * st])) / (12 * h);
+  for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) { const k = j * n + i; u[k] = dif(k, n, j); v[k] = -dif(k, 1, i); }
+  for (let i = 0; i < n; i++) u[(n - 1) * n + i] = lid[i];
+  return [u, v];
+}
+/** Vortex centre and centre-line results of one grid solution, each located on the quartic through the nearest nodal values. */
+function cavityResults(psi, u, v, n) {
+  const h = 1 / (n - 1), mid = (n - 1) >> 1, e = 1e-3, F = (p, q) => cavInterp(psi, n, p, q);
+  let kmin = 0; for (let k = 1; k < n * n; k++) if (psi[k] < psi[kmin]) kmin = k;
+  // stationary point of the interpolant by Newton's method with differenced derivatives
+  let xv = N.clamp(kmin % n, 2, n - 3), yv = N.clamp(Math.floor(kmin / n), 2, n - 3); const x0 = xv, y0 = yv;
+  for (let it = 0; it < 8; it++) {
+    const f0 = F(xv, yv), fe = F(xv + e, yv), fw = F(xv - e, yv), fn = F(xv, yv + e), fs = F(xv, yv - e), gx = (fe - fw) / (2 * e), gy = (fn - fs) / (2 * e), hxx = (fe - 2 * f0 + fw) / (e * e), hyy = (fn - 2 * f0 + fs) / (e * e);
+    const hxy = (F(xv + e, yv + e) - F(xv + e, yv - e) - F(xv - e, yv + e) + F(xv - e, yv - e)) / (4 * e * e), det = hxx * hyy - hxy * hxy; if (!(Math.abs(det) > 0)) break;
+    xv = N.clamp(xv - (hyy * gx - hxy * gy) / det, x0 - 1, x0 + 1); yv = N.clamp(yv - (hxx * gy - hxy * gx) / det, y0 - 1, y0 + 1);
+  }
+  const uc = Array.from({ length: n }, (_, j) => u[j * n + mid]), vc = Array.from({ length: n }, (_, i) => v[mid * n + i]);
+  const ext = (f, sg) => { let k = 2; for (let q = 2; q < n - 2; q++) if (sg * f[q] > sg * f[k]) k = q; const [sq, fq] = quarticExtremum(f.slice(k - 2, k + 3)); return [fq, (k + sq) * h]; };
+  const [umin, ymin] = ext(uc, -1), [vmax] = ext(vc, 1), [vmin] = ext(vc, -1);
+  let flux = 0; for (let j = 0; j < n; j++) flux += (j === 0 || j === n - 1 ? 1 : j % 2 ? 4 : 2) * uc[j] * h / 3; // Simpson's rule
+  return { uc, vc, q: { pmin: F(xv, yv), xv: xv * h, yv: yv * h, umin, ymin, vmax, vmin, flux } };
+}
+/**
+ * Streamfunction–vorticity solution in units of the cavity size and lid speed. The steady state is solved on two grids and Richardson-extrapolated to zero
+ * grid spacing: the fields node by node, each reported result from its own two values (an extremum is then unaffected by the grid-dependent shift of its position).
+ */
+function cavitySolve(Re, n, o) {
+  const h = 1 / (n - 1), h2 = h * h, lid = cavLid(n, o);
+  let s, nc = 0, order = 0, out;
+  if (o.steady) {
+    // nested grids: each solution starts the next; the last two have spacings in the ratio 3:4
+    nc = 2 * Math.round(0.375 * (n - 1)) + 1; order = o.central ? 2 : 1;
+    const sizes = [nc, n]; if (nc >= 29) sizes.unshift(2 * Math.round(0.25 * (nc - 1)) + 1);
+    const lift = (a, from, to, base, f) => { const g = new Float64Array(to * to), r = (from - 1) / (to - 1); for (let j = 1; j < to - 1; j++) for (let i = 1; i < to - 1; i++) { const k = j * to + i, q = cavInterp(a, from, i * r, j * r); g[k] = base ? base[k] + f * (base[k] - q) : q; } return g; };
+    let c = null, steps = 0, ok = true, fin = true, prev = null;
+    for (const q of sizes) { prev = c; c = cavitySteady(Re, q, o, c && c.finite ? lift(c.psi, c.n, q) : null); c.n = q; steps += c.steps; ok = ok && c.converged; fin = fin && c.finite; }
+    const [u, v] = cavVelocity(c.psi, n, lid), [uc, vc] = cavVelocity(prev.psi, nc, cavLid(nc, o)), f = 1 / (((n - 1) / (nc - 1)) ** order - 1);
+    s = { ...c, u, v, steps, converged: ok, finite: fin, raw: c.psi, resN: Math.max(c.resN, prev.resN) }; out = cavityResults(c.psi, u, v, n);
+    if (fin) {
+      const qc = cavityResults(prev.psi, uc, vc, nc).q; for (const k of Object.keys(qc)) out.q[k] += f * (out.q[k] - qc[k]);
+      s.psi = lift(prev.psi, nc, n, c.psi, f); s.u = lift(uc, nc, n, u, f); s.v = lift(vc, nc, n, v, f); for (let i = 0; i < n; i++) s.u[(n - 1) * n + i] = lid[i];
+      const mid = (n - 1) >> 1; out.uc = out.uc.map((_, j) => s.u[j * n + mid]); out.vc = out.vc.map((_, i) => s.v[mid * n + i]);
+    }
+  } else { s = cavityMarch(Re, n, o); s.raw = s.psi; s.resN = 0; [s.u, s.v] = cavVelocity(s.psi, n, lid); out = cavityResults(s.psi, s.u, s.v, n); }
+  const psi = s.psi, om = s.om, raw = s.raw, U = [], V = [], P = [], Sp = [];
+  let res = 0, omax = 1e-30;
   for (let j = 0; j < n; j++) {
     const ru = new Array(n), rv = new Array(n), rp = new Array(n), rs = new Array(n);
     for (let i = 0; i < n; i++) {
-      const k = j * n + i, inner = i > 0 && i < n - 1 && j > 0 && j < n - 1;
-      ru[i] = inner ? (psi[k + n] - psi[k - n]) / (2 * h) : (j === n - 1 ? lid[i] : 0); rv[i] = inner ? -(psi[k + 1] - psi[k - 1]) / (2 * h) : 0;
-      rp[i] = psi[k]; rs[i] = Math.hypot(ru[i], rv[i]);
-      if (psi[k] < pmin) { pmin = psi[k]; kmin = k; }
-      if (inner) { res = Math.max(res, Math.abs((psi[k + 1] + psi[k - 1] + psi[k + n] + psi[k - n] - 4 * psi[k]) / h2 + om[k])); omax = Math.max(omax, Math.abs(om[k])); }
+      const k = j * n + i; ru[i] = s.u[k]; rv[i] = s.v[k]; rp[i] = psi[k]; rs[i] = Math.hypot(ru[i], rv[i]);
+      if (i > 0 && i < n - 1 && j > 0 && j < n - 1) { res = Math.max(res, Math.abs((raw[k + 1] + raw[k - 1] + raw[k + n] + raw[k - n] - 4 * raw[k]) / h2 + om[k])); omax = Math.max(omax, Math.abs(om[k])); }
     }
     U.push(ru); V.push(rv); P.push(rp); Sp.push(rs);
   }
@@ -2226,12 +2376,7 @@ function cavitySolve(Re, n, o) {
   let circ = 0, lidInt = 0;
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) circ += om[j * n + i] * (i === 0 || i === n - 1 ? 0.5 : 1) * (j === 0 || j === n - 1 ? 0.5 : 1) * h2;
   for (let i = 0; i < n; i++) lidInt += lid[i] * (i === 0 || i === n - 1 ? 0.5 : 1) * h;
-  const mid = (n - 1) >> 1, y = N.linspace(0, 1, n), uc = U.map(r => r[mid]), vc = V[mid].slice();
-  let jm = 0; for (let j = 0; j < n; j++) if (uc[j] < uc[jm]) jm = j;
-  // parabolic refinement of the centre-line minimum
-  let umin = uc[jm], ymin = y[jm];
-  if (jm > 0 && jm < n - 1) { const a2 = 0.5 * (uc[jm + 1] - 2 * uc[jm] + uc[jm - 1]), b1 = 0.5 * (uc[jm + 1] - uc[jm - 1]); if (a2 > 0) { const s = -b1 / (2 * a2); umin = uc[jm] + b1 * s + a2 * s * s; ymin = y[jm] + s * h; } }
-  return { n, h, dt, steps, converged: change / dt < 1e-5, change: change / dt, U, V, P, Sp, pmin, xv: (kmin % n) * h, yv: Math.floor(kmin / n) * h, res: res / omax, circ, lidInt, y, uc, vc, umin, ymin, flux: N.trapz(y, uc), finite: Number.isFinite(change) };
+  return { n, nc, order, h, steps: s.steps, converged: s.converged, change: s.change, U, V, P, Sp, ...out.q, res: res / omax, resN: s.resN, circ, lidInt, y: N.linspace(0, 1, n), uc: out.uc, vc: out.vc, finite: s.finite };
 }
 
 const cavity = {
@@ -2251,11 +2396,11 @@ const cavity = {
     inp('Re', 'Reynolds number U L/ν', '1', 100, { min: 10, max: 400, aliases: ['reynolds number', 'reynolds', 're'] }),
     inp('L', 'Cavity side length', 'm', 0.1, { min: 0.001, max: 10, kind: 'geometry', aliases: ['cavity size', 'side length', 'side', 'size'] }),
     inp('U_l', 'Lid speed', 'm/s', 0.01, { min: 1e-4, max: 10, aliases: ['lid speed', 'lid velocity', 'wall speed'] }),
-    inp('n_g', 'Grid points per side', '1', 41, { min: 21, max: 81, kind: 'numerical' }),
+    inp('n_g', 'Grid points per side', '1', 51, { min: 21, max: 81, kind: 'numerical' }),
   ],
   assumptions: [
-    asm('steady', 'The flow is marched to its steady state.', { why: 'The steady solution is unique and stable at these Reynolds numbers', alt: 'The impulsively started flow is shown after two lid-transit times L/U.' }),
-    asm('central', 'Advection of vorticity uses second-order central differences.', { why: 'Accurate while the cell Reynolds number is moderate', alt: 'First-order upwind differences are used: unconditionally bounded but numerically diffusive.' }),
+    asm('steady', 'The flow is steady: the steady equations are solved directly.', { why: 'The steady solution is unique and stable at these Reynolds numbers', alt: 'The impulsively started flow is shown after two lid-transit times L/U, on the single grid chosen and without extrapolation.' }),
+    asm('central', 'Advection of vorticity uses second-order central differences.', { why: 'Accurate while the cell Reynolds number is moderate', alt: 'First-order upwind differences are used: unconditionally bounded but numerically diffusive, so the extrapolation to zero grid spacing is first-order and less accurate.' }),
     asm('thom', 'Wall vorticity is given by Thom’s first-order formula.', { why: 'Robust and widely used', alt: 'Jensen’s second-order formula, using two interior points, is used.' }),
     asm('uniform', 'The lid moves at uniform speed right into the corners.', { why: 'The classical problem, with singular corners', alt: 'The lid speed is regularised to 16 x²(1 − x)² so that it vanishes smoothly at the corners.' }),
   ],
@@ -2274,17 +2419,18 @@ const cavity = {
     { text: 'Taking the curl of the momentum equation eliminates pressure and leaves an advection–diffusion equation for vorticity.', tex: '\\frac{\\partial\\omega}{\\partial t} + u\\frac{\\partial\\omega}{\\partial x} + v\\frac{\\partial\\omega}{\\partial y} = \\nu\\,\\nabla^2\\omega' },
     { text: 'On a wall ψ is constant and its normal derivative equals the wall speed. Expanding ψ to second order one grid spacing into the fluid gives the wall vorticity.', tex: '\\omega_w = -\\frac{2\\,\\psi_1}{h^2} - \\frac{2\\,U_w}{h}' },
     { text: 'Scaling lengths by L and velocities by U leaves the Reynolds number as the only parameter.', tex: '\\mathrm{Re} = \\frac{U L}{\\nu}' },
+    ...(a.steady ? [{ text: `The difference equations are ${a.central ? 'second' : 'first'}-order accurate, so the steady solutions on two grids of spacing h and H > h differ from the exact one by terms proportional to ${a.central ? 'h² and H²' : 'h and H'}. Eliminating that term between the two (Richardson extrapolation) removes the leading discretisation error from the reported field.`, tex: a.central ? '\\psi \\approx \\psi_h + \\frac{\\psi_h - \\psi_H}{(H/h)^2 - 1}' : '\\psi \\approx \\psi_h + \\frac{\\psi_h - \\psi_H}{H/h - 1}' }] : []),
   ],
   solve(v, a) {
     const n = Math.max(11, Math.round(v.n_g)) | 1, c = cavitySolve(v.Re, n, { ...a, tStop: 2 });
     const nu = v.U_l * v.L / v.Re, cellRe = v.Re * c.h;
     const near100 = Math.abs(v.Re - 100) < 0.5 && a.steady && a.uniform;
-    const vmax = N.maxOf(c.vc), vmin = N.minOf(c.vc), xs = N.linspace(0, 1, n);
+    const vmax = c.vmax, vmin = c.vmin, xs = N.linspace(0, 1, n);
     const warnings = [];
     if (!c.finite) warnings.push('The iteration diverged. Use upwind differencing or a finer grid at this Reynolds number.');
-    if (a.steady && !c.converged) warnings.push(`The solution had not reached a steady state after ${c.steps} time steps (residual rate ${lab(c.change)}); treat it as approximate or refine the grid.`);
+    if (a.steady && c.finite && !c.converged) warnings.push(`Newton's method had not converged on the steady state after ${c.steps} iterations (last correction ${lab(c.change)}); treat the result as approximate.`);
     if (a.central && cellRe > 4) warnings.push(`The cell Reynolds number is ${lab(cellRe)}; central differencing can produce grid-scale oscillations above about 2–4. Refine the grid or switch to upwind differencing.`);
-    if (!a.central) warnings.push('First-order upwind differencing adds numerical viscosity of order U h/2; the vortex is weaker than in the central-difference solution.');
+    if (!a.central) warnings.push(a.steady ? 'First-order upwind differencing adds numerical viscosity of order U h/2. The extrapolation removes its leading term only, so the result is less accurate than the central-difference one.' : 'First-order upwind differencing adds numerical viscosity of order U h/2; the vortex is weaker than in the central-difference solution.');
     const safe = q => (Number.isFinite(q) ? q : 0);
     return {
       scalars: [
@@ -2294,7 +2440,7 @@ const cavity = {
         scalar('u_min', 'Minimum u/U on the vertical centre-line', safe(c.umin), '1'), scalar('y_umin', 'Height y/L of that minimum', safe(c.ymin), '1'),
         scalar('v_max', 'Maximum v/U on the horizontal centre-line', safe(vmax), '1'), scalar('v_min', 'Minimum v/U on the horizontal centre-line', safe(vmin), '1'),
         scalar('u_ret', 'Peak return-flow speed', safe(-c.umin) * v.U_l, 'm/s'), scalar('t_visc', 'Viscous time L²/ν', v.L ** 2 / nu, 's'),
-        scalar('Re_cell', 'Cell Reynolds number', cellRe, '1'), scalar('steps', 'Time steps taken', c.steps, '1'), scalar('res', 'Residual of the streamfunction equation over peak vorticity', safe(c.res), '1'),
+        scalar('Re_cell', 'Cell Reynolds number', cellRe, '1'), scalar('steps', a.steady ? 'Newton iterations, all grids' : 'Time steps taken', c.steps, '1'), scalar('res', a.steady ? 'Residual of the steady vorticity equation over its largest viscous term' : 'Residual of the streamfunction equation over peak vorticity', safe(a.steady ? c.resN : c.res), '1'),
       ],
       series: [
         line('u-centre', 'Horizontal velocity on the vertical centre-line', 'u/U', '–', c.uc.map(safe), [{ label: 'This solution', data: c.y }], 'y/L', '–', { overlay: near100 ? [{ label: 'Ghia, Ghia & Shin (1982), Re = 100', x: GHIA_U100, y: GHIA_Y, kind: 'scatter' }] : [] }),
@@ -2305,21 +2451,25 @@ const cavity = {
         field('speed', 'Speed |u|/U', c.Sp, [0, 1, 0, 1], 'x/L', 'y/L', '–', { vectors: { u: c.U, v: c.V } }),
       ],
       checks: [
-        check('Mass conservation across the vertical centre-line', safe(c.flux), 2e-3, '∫u dy = 0: no net flow across any section of a closed cavity'),
-        check('Circulation theorem', a.steady ? safe(c.circ + c.lidInt) / c.lidInt : 0, 0.08, '∬ω dA = −∫U dx along the lid; first-order wall vorticity limits the accuracy'),
-        check('Streamfunction equation residual', a.steady ? safe(c.res) : 0, 1e-2, '∇²ψ + ω = 0 at the reported state'),
+        check('Mass conservation across the vertical centre-line', safe(c.flux), 2e-3, '∫u dy = 0: no net flow across any section of a closed cavity (Simpson\'s rule on the centre-line profile)'),
+        check('Circulation theorem', a.steady ? safe(c.circ + c.lidInt) / c.lidInt : 0, 0.08, '∬ω dA = −∫U dx along the lid, on the finer grid; first-order wall vorticity limits the accuracy'),
+        check('Residual of the steady equations', a.steady ? safe(c.resN) : 0, 1e-6, 'Vorticity-transport residual of both grid solutions, relative to the largest viscous term'),
       ],
       warnings,
+      notes: a.steady && c.finite ? [`The fields and results are Richardson-extrapolated (order ${c.order}) from the steady solutions on ${c.nc} × ${c.nc} and ${n} × ${n} grids.`] : [],
     };
   },
   benchmarks(v, a) {
     const base = { steady: true, central: true, thom: true, uniform: true };
-    const c = cavitySolve(100, 41, base), st = cavitySolve(0.01, 21, base);
+    const c = cavitySolve(100, 41, base), c4 = cavitySolve(400, 41, base), st = cavitySolve(1e-6, 21, base);
+    const rms = Math.sqrt(N.mean(GHIA_Y.map((y, k) => (N.interp1(c.y, c.uc, y) - GHIA_U100[k]) ** 2)));
     return [
-      bench('Minimum centre-line velocity at Re = 100 vs published benchmark', c.umin, -0.2109, 'Ghia, Ghia & Shin (1982), 129 × 129 multigrid solution', 0.03),
-      bench('Primary-vortex streamfunction at Re = 100 vs published benchmark', c.pmin, -0.1034, 'Ghia, Ghia & Shin (1982)', 0.03),
-      bench('Left–right symmetry of creeping flow', st.xv, 0.5, 'Stokes flow is reversible, so the vortex lies on the vertical centre-line', 1e-9),
-      bench('Net flow across the centre-line', c.flux + 1, 1, 'Continuity in a closed cavity', 2e-3),
+      bench('Minimum centre-line velocity at Re = 100 vs published benchmark', c.umin, -0.2109, 'Ghia, Ghia & Shin (1982), 129 × 129 multigrid solution; their tabulated point nearest the minimum', 0.03),
+      bench('Centre-line velocity profile at Re = 100 vs published benchmark', 1 + rms, 1, 'Root-mean-square difference in u/U over the 17 points tabulated by Ghia, Ghia & Shin (1982)', 5e-3),
+      bench('Primary-vortex streamfunction at Re = 100 vs published benchmark', c.pmin, -0.103423, 'Ghia, Ghia & Shin (1982)', 0.01),
+      bench('Primary-vortex streamfunction at Re = 400 vs published benchmark', c4.pmin, -0.113909, 'Ghia, Ghia & Shin (1982)', 0.01),
+      bench('Left–right symmetry of creeping flow', st.xv, 0.5, 'Stokes flow is reversible, so the vortex lies on the vertical centre-line', 1e-7),
+      bench('Net flow across the centre-line', c.flux + 1, 1, 'Continuity in a closed cavity', 1e-3),
     ];
   },
   validation: [],
@@ -2346,37 +2496,76 @@ const cavity = {
   alternatives: [{ name: 'Primitive-variable (pressure–velocity) solvers', text: 'Projection or SIMPLE-type methods extend to three dimensions, where the streamfunction formulation does not.' }, { name: 'Lattice-Boltzmann methods', text: 'Recover the same solution from a kinetic model and parallelise readily.' }, { name: 'Three-dimensional cavity', text: 'End walls generate spanwise flow and Taylor–Görtler-like vortices; the two-dimensional solution becomes unstable near Re ≈ 800–1000 in practice.' }],
   hazards: [{ hazard: 'Misuse of an under-resolved solution', cause: 'Coarse grid or high cell Reynolds number', mitigation: 'Grid-refinement study; compare with benchmark data' }],
   standards: ['ASME V&V 20 (verification and validation in computational fluid dynamics and heat transfer)', 'AIAA G-077 (guide for the verification and validation of computational fluid dynamics simulations)', 'ERCOFTAC Best Practice Guidelines for industrial CFD'],
-  limits: 'Two-dimensional, laminar, incompressible, Newtonian flow in a square cavity at Reynolds numbers from 10 to 400 on grids up to 81 × 81. Higher Reynolds numbers need finer grids and longer integration than is practical here.',
-  numerics: { method: 'Explicit pseudo-time marching of the vorticity equation with successive over-relaxation of the streamfunction equation', order: 2, stability: 'Time step limited by the diffusive and advective limits of the forward-time central-space scheme', resolution: 'n_g' },
+  limits: 'Two-dimensional, laminar, incompressible, Newtonian flow in a square cavity at Reynolds numbers from 10 to 400 on grids up to 81 × 81. Higher Reynolds numbers need finer grids than is practical here. The extrapolation to zero grid spacing assumes that both grids resolve the flow; the lid corners of a uniform lid remain singular.',
+  numerics: { method: 'Steady state: Newton iteration on the streamfunction–vorticity difference equations with a direct banded solve, on nested grids whose last two (spacings 3:4) are Richardson-extrapolated to zero grid spacing. Impulsive start: explicit marching of the vorticity equation with successive over-relaxation of the streamfunction equation', order: 2, stability: 'Newton iteration converges quadratically from the coarser-grid solution; the explicit march is limited by the diffusive and advective limits of the forward-time central-space scheme', resolution: 'n_g' },
   inverse: { series: 'u-centre', curve: 0, fit: ['Re'] },
-  extensions: ['Higher Reynolds numbers with a multigrid Poisson solver', 'Rectangular and deep cavities with a sequence of counter-rotating eddies', 'Heat transfer with a heated lid (mixed convection)', 'Grid-convergence study with Richardson extrapolation'],
+  extensions: ['Higher Reynolds numbers with a multigrid Poisson solver', 'Rectangular and deep cavities with a sequence of counter-rotating eddies', 'Heat transfer with a heated lid (mixed convection)', 'Fourth-order compact differencing and subtraction of the corner singularities'],
 };
 
 // ------------------------------------------------------------------ viscous Burgers equation
-function burgersRun({ n, L, nu, tEnd, u0, periodic, uL, uR, flux, conservative, frames = 60, maxSteps = 20000 }) {
-  const m = periodic ? n - 1 : n, dx = L / (n - 1), x = N.linspace(0, L, n);
-  let u = new Float64Array(m); for (let i = 0; i < m; i++) u[i] = u0(x[i]);
-  const snaps = [], times = [], out = () => { const r = Array.from(u); if (periodic) r.push(u[0]); return r; };
-  let t = 0, steps = 0, umax = 0; for (let i = 0; i < m; i++) umax = Math.max(umax, Math.abs(u[i]));
-  const dt0 = 0.4 * Math.min(dx / Math.max(umax, 1e-30), nu > 0 ? dx * dx / (2 * nu) : Infinity), nt = Math.min(Math.max(1, Math.ceil(tEnd / dt0)), maxSteps), dt = Math.min(tEnd / nt, dt0);
-  const every = Math.max(1, Math.floor(nt / frames)), gmax = [], tg = [];
-  // Godunov: exact Riemann flux. Otherwise Lax–Friedrichs with half the classical dissipation (α = Δx/(2Δt) ≥ 1.25 max|u|):
-  // the full coefficient Δx/Δt already sits at the explicit stability limit and leaves no room for the physical viscous term.
-  const F = (a, b) => (flux === 'godunov' ? Math.max(0.5 * Math.max(a, 0) ** 2, 0.5 * Math.min(b, 0) ** 2) : 0.25 * (a * a + b * b) - 0.5 * dx / dt * (b - a) * 0.5);
-  const grad = () => { let gm = 0; for (let i = 0; i < m - 1; i++) gm = Math.max(gm, Math.abs(u[i + 1] - u[i]) / dx); return gm; };
-  for (let k = 0; k <= nt; k++) {
-    if (k % every === 0 || k === nt) { snaps.push(out()); times.push(t); gmax.push(grad()); tg.push(t); }
-    if (k === nt) break;
-    const un = new Float64Array(m);
-    for (let i = 0; i < m; i++) {
-      if (!periodic && (i === 0 || i === m - 1)) { un[i] = i === 0 ? uL : uR; continue; }
-      const im = periodic ? (i - 1 + m) % m : i - 1, ip = periodic ? (i + 1) % m : i + 1;
-      const adv = conservative ? (F(u[i], u[ip]) - F(u[im], u[i])) / dx : (u[i] > 0 ? u[i] * (u[i] - u[im]) : u[i] * (u[ip] - u[i])) / dx;
-      un[i] = u[i] - dt * adv + dt * nu * (u[ip] - 2 * u[i] + u[im]) / (dx * dx);
+/**
+ * Cell faces on [0, L] for a shock layer of thickness δ centred on xc: n/200 cells per δ within 5δ of xc, growing geometrically beyond (doubling
+ * every 2.5δ) up to a uniform outer size chosen so that there are exactly n cells. Uniform when a uniform grid is already that fine.
+ */
+function burgersGrid(n, L, xc, delta) {
+  const hm = 200 * delta / n, uni = N.linspace(0, L, n + 1); if (!(hm > 0 && hm < L / n)) return uni;
+  const W = 5 * delta, lam = 2.5 * delta, cW = W / hm, k = lam / hm;
+  const cnt = (d, H) => { const d1 = W + lam * (H / hm - 1); return d <= W ? d / hm : d <= d1 ? cW + k * Math.log(1 + (d - W) / lam) : cW + k * Math.log(H / hm) + (d - d1) / H; };
+  const H = N.bisect(q => cnt(xc, q) + cnt(L - xc, q) - n, hm, L, 1e-14 * L), cL = cnt(xc, H), c1 = cW + k * Math.log(H / hm), d1 = W + lam * (H / hm - 1), tot = cL + cnt(L - xc, H);
+  return uni.map((_, i) => { const t = -cL + i * tot / n, q = Math.abs(t); return i === 0 ? 0 : i === n ? L : xc + Math.sign(t) * (q <= cW ? q * hm : q <= c1 ? W + lam * (Math.exp((q - cW) / k) - 1) : d1 + (q - c1) * H); });
+}
+/**
+ * Finite-volume solution of u_t + (u²/2)_x = ν u_xx on the cells between the faces xf (uniform over [0, L] with n − 1 cells by default), seen from a frame moving at speed w.
+ * Conservative form: MUSCL–Hancock scheme (piecewise-linear reconstruction with the monotonised-central limiter, face states advanced half a step, Godunov or
+ * Lax–Friedrichs flux) with the central viscous flux at the old time level. Otherwise first-order upwinding of u ∂u/∂x.
+ */
+function burgersRun({ n, L, xf = N.linspace(0, L, n), nu, tEnd, u0, periodic, uL, uR, flux, conservative, w = 0, frames = 60, maxSteps = 20000 }) {
+  const m = xf.length - 1, x = new Float64Array(m), dx = new Float64Array(m + 2), dc = new Float64Array(m + 1), rx = new Float64Array(m + 2), rc = new Float64Array(m + 1), r2 = new Float64Array(m + 2);
+  for (let i = 0; i < m; i++) { x[i] = 0.5 * (xf[i] + xf[i + 1]); dx[i + 1] = xf[i + 1] - xf[i]; }
+  dx[0] = periodic ? dx[m] : dx[1]; dx[m + 1] = periodic ? dx[1] : dx[m];
+  for (let f = 0; f <= m; f++) { dc[f] = 0.5 * (dx[f] + dx[f + 1]); rc[f] = 1 / dc[f]; } for (let i = 1; i <= m; i++) { rx[i] = 1 / dx[i]; r2[i] = 1 / (dc[i - 1] + dc[i]); }
+  // cells 1..m, with ghost cells 0 and m + 1; pl and pr are the states at the left and right faces of each cell
+  let u = new Float64Array(m + 2), u1 = new Float64Array(m + 2); const pl = new Float64Array(m + 2), pr = new Float64Array(m + 2), F = new Float64Array(m + 1); for (let i = 0; i < m; i++) u[i + 1] = u0(x[i]);
+  let um = periodic ? 0 : Math.max(Math.abs(uL - w), Math.abs(uR - w)), rate = 0, dxMin = Infinity; for (let i = 1; i <= m; i++) { um = Math.max(um, Math.abs(u[i] - w)); dxMin = Math.min(dxMin, dx[i]); }
+  for (let i = 1; i <= m; i++) rate = Math.max(rate, 2 * um / dx[i] + 2 * nu / (dx[i] * Math.min(dc[i - 1], dc[i])));
+  // Lax–Friedrichs dissipation Δx/(4Δt) uses half of the explicit diffusion limit on the smallest cell, so the viscous term may take 0.4 of it at most
+  const god = flux === 'godunov' || !conservative, dt0 = god ? 0.9 / rate : 0.9 * Math.min(0.5 * dxMin / um, nu > 0 ? 0.225 * dxMin * dxMin / nu : Infinity), nt = Math.min(Math.max(1, Math.ceil(tEnd / dt0)), maxSteps), dt = Math.min(tEnd / nt, dt0), alf = 0.25 * dxMin / dt;
+  const step = (a, b) => {
+    a[0] = periodic ? a[m] : uL; a[m + 1] = periodic ? a[1] : uR;
+    if (!conservative) { for (let i = 1; i <= m; i++) { const c = a[i] - w, gm = (a[i] - a[i - 1]) * rc[i - 1], gp = (a[i + 1] - a[i]) * rc[i]; b[i] = a[i] + dt * (nu * (gp - gm) * rx[i] - c * (c > 0 ? gm : gp)); } return; }
+    for (let i = 1; i <= m; i++) {
+      const sm = (a[i] - a[i - 1]) * rc[i - 1], sp = (a[i + 1] - a[i]) * rc[i]; let h = 0;
+      if (sm * sp > 0) { const c = Math.abs(a[i + 1] - a[i - 1]) * r2[i], q = 2 * Math.min(Math.abs(sm), Math.abs(sp)); h = 0.5 * dx[i] * (sm > 0 ? 1 : -1) * (c < q ? c : q); }
+      const lo = a[i] - h, hi = a[i] + h, e = 0.5 * dt * rx[i] * (hi * (0.5 * hi - w) - lo * (0.5 * lo - w)); pl[i] = lo - e; pr[i] = hi - e;
     }
-    u = un; t += dt; steps++;
+    pr[0] = periodic ? pr[m] : uL; pl[m + 1] = periodic ? pl[1] : uR;
+    for (let f = 0; f <= m; f++) {
+      const p = pr[f], q = pl[f + 1]; let adv;
+      if (god) { const us = p > q ? (0.5 * (p + q) > w ? p : q) : p > w ? p : q < w ? q : w; adv = us * (0.5 * us - w); } else adv = 0.25 * (p * p + q * q) - 0.5 * w * (p + q) - alf * (q - p);
+      F[f] = adv - nu * (a[f + 1] - a[f]) * rc[f];
+    }
+    for (let i = 1; i <= m; i++) b[i] = a[i] - dt * rx[i] * (F[i] - F[i - 1]);
+  };
+  // steepest gradient: fourth-order difference where the grid is locally uniform, then the vertex of the parabola through the three values about the largest
+  const g = f => Math.abs(f > 1 && f < m - 1 && Math.abs(dc[f - 1] - dc[f + 1]) < 1e-9 * dc[f] ? (27 * (u[f + 1] - u[f]) - (u[f + 2] - u[f - 1])) / (24 * dc[f]) : (u[f + 1] - u[f]) / dc[f]);
+  const grad = () => { let k = 1, gk = 0; for (let f = 1; f < m; f++) { const q = Math.abs(u[f + 1] - u[f]) / dc[f]; if (q > gk) { gk = q; k = f; } } if (k < 2 || k > m - 2) return gk;
+    const a = g(k - 1), b = g(k), c = g(k + 1), h1 = dx[k], h2 = dx[k + 1], d1 = (b - a) / h1, d2 = (c - b) / h2, cv = 2 * (d2 - d1) / (h1 + h2), s0 = (d1 * h2 + d2 * h1) / (h1 + h2); return cv < 0 ? b - s0 * s0 / (2 * cv) : b; };
+  const snaps = [], times = [], gmax = [], out = () => Array.from(u.subarray(1, m + 1)), every = Math.max(1, Math.floor(nt / frames));
+  let t = 0, steps = 0;
+  for (let k = 0; k <= nt; k++) {
+    if (k % every === 0 || k === nt) { snaps.push(out()); times.push(t); gmax.push(grad()); }
+    if (k === nt) break;
+    step(u, u1); const s = u; u = u1; u1 = s; t += dt; steps++;
   }
-  return { x, snaps, times, final: out(), dx, dt, steps, gmax, tg, truncated: nt * dt < tEnd * (1 - 1e-9) };
+  return { x: Array.from(x), w: Array.from(dx.subarray(1, m + 1)), snaps, times, final: out(), dx: dxMin, dt, steps, gmax, tg: times, truncated: nt * dt < tEnd * (1 - 1e-9) };
+}
+/** Exact Cole–Hopf solution for one period of a sine wave of amplitude U: the velocity gradient at mid-domain, where the shock stands. */
+function burgersSineSlope(U, L, nu, t) {
+  // u = ∫ (x − ξ)/t e^(−G/2ν) dξ / ∫ e^(−G/2ν) dξ with G = ∫₀^ξ u₀ + (x − ξ)²/2t; its x-derivative at x = L/2 is 1/t − var(ξ)/(2νt²)
+  const x = L / 2, R = 7 * Math.sqrt(2 * nu * t) + U * t, nq = 8001, G = q => U * L / (2 * Math.PI) * (1 - Math.cos(2 * Math.PI * q / L)) + (x - q) ** 2 / (2 * t);
+  const xs = N.linspace(x - R, x + R, nq), gs = xs.map(G), gm = N.minOf(gs); let s0 = 0, s2 = 0;
+  for (let i = 0; i < nq; i++) { const wt = Math.exp(-(gs[i] - gm) / (2 * nu)); s0 += wt; s2 += wt * (x - xs[i]) ** 2; }
+  return 1 / t - s2 / s0 / (2 * nu * t * t);
 }
 const burgersWave = (x, t, uL, uR, x0, nu) => 0.5 * (uL + uR) - 0.5 * (uL - uR) * Math.tanh((uL - uR) * (x - x0 - 0.5 * (uL + uR) * t) / (4 * nu));
 
@@ -2403,8 +2592,8 @@ const burgers = {
   assumptions: [
     asm('sine', 'The initial condition is one period of a sine wave on a periodic domain.', { why: 'Shows steepening and shock formation from smooth data', alt: 'The initial condition is the exact travelling-wave shock between U₀ and zero, to test propagation speed and thickness.' }),
     asm('viscous', 'Physical viscosity is present.', { why: 'Sets the shock thickness', alt: 'The inviscid equation is solved; only the numerical dissipation of the scheme smooths the shock.' }),
-    asm('godunov', 'The interface flux is the Godunov (exact Riemann) flux.', { why: 'Least dissipative first-order monotone flux', alt: 'A Lax–Friedrichs flux is used, with half the classical dissipation (coefficient Δx/(2Δt)) so that it stays monotone when the explicit viscous term is added: simpler, but considerably more diffusive.' }),
-    asm('conservative', 'The scheme is written in conservation form.', { why: 'Required for the correct shock speed (Lax–Wendroff theorem)', alt: 'The non-conservative form u ∂u/∂x is differenced directly; shocks then travel at the wrong speed when under-resolved.' }),
+    asm('godunov', 'The interface flux is the Godunov (exact Riemann) flux.', { why: 'Least dissipative monotone flux', alt: 'A Lax–Friedrichs flux is used, with half the classical dissipation (coefficient Δx/(2Δt) for the smallest cell) so that it stays monotone when the explicit viscous term is added: simpler, but more diffusive.' }),
+    asm('conservative', 'The scheme is written in conservation form.', { why: 'Required for the correct shock speed (Lax–Wendroff theorem)', alt: 'The non-conservative form u ∂u/∂x is differenced directly (first-order upwind, and for the travelling wave on a uniform grid at rest); shocks then travel at the wrong speed when under-resolved.' }),
   ],
   symbols: { u: ['Velocity', 'm/s'], x: ['Position', 'm'], t: ['Time', 's'], nu: ['Kinematic viscosity', 'm^2/s'], t_b: ['Breaking time', 's'], delta: ['Shock thickness', 'm'], u_L: ['Velocity of the left state, behind the shock', 'm/s'], u_R: ['Velocity of the right state, ahead of the shock', 'm/s'], s_w: ['Shock speed', 'm/s'], x_s: ['Initial shock position', 'm'] },
   equations: a => [
@@ -2421,46 +2610,52 @@ const burgers = {
     { text: 'Characteristics first cross, and the gradient becomes infinite, at the breaking time set by the steepest negative initial slope.', tex: 't_b = \\frac{-1}{\\min_\\xi u_0\'(\\xi)} = \\frac{L}{2\\pi U_0}\\ \\text{for a sine wave}' },
     { text: 'Seek a steady profile in a frame moving at speed s between states u_L > u_R. Integrating the equation once gives a first-order equation whose solution is a hyperbolic tangent.', tex: 'u = \\frac{u_L+u_R}{2} - \\frac{u_L-u_R}{2}\\tanh\\!\\left[\\frac{(u_L-u_R)(x-st)}{4\\nu}\\right]' },
     { text: 'The integration constant fixes the speed: it is the mean of the two states, as also follows from conservation across a discontinuity.', tex: 's = \\frac{[u^2/2]}{[u]} = \\frac{u_L+u_R}{2}' },
-    { text: 'The finite-volume update changes each cell average by the difference of fluxes through its faces, so the total of u is conserved exactly.', tex: 'u_i^{n+1} = u_i^n - \\frac{\\Delta t}{\\Delta x}\\big(F_{i+1/2}-F_{i-1/2}\\big) + \\frac{\\nu\\,\\Delta t}{\\Delta x^2}\\big(u_{i+1}-2u_i+u_{i-1}\\big)' },
+    { text: 'The finite-volume update changes each cell average by the difference of fluxes through its faces, so the total of u is conserved exactly. The states either side of a face come from a limited linear reconstruction in each cell, and the viscous flux from the difference of the neighbouring cell values.', tex: '\\Delta x_i\\,\\frac{\\mathrm{d}u_i}{\\mathrm{d}t} = -\\big(F_{i+1/2}-F_{i-1/2}\\big) + \\nu\\left(\\frac{u_{i+1}-u_i}{x_{i+1}-x_i} - \\frac{u_i-u_{i-1}}{x_i-x_{i-1}}\\right)' },
+    { text: 'The shock layer has the known thickness 4ν/Δu. Its position is known too — mid-domain for the sine wave, and at rest in a frame moving at the mean of the two states for the travelling wave — so the cells are concentrated there and the layer is resolved at any Reynolds number.', tex: '\\Delta x_{\\min} = \\frac{200}{n_x}\\,\\delta,\\qquad \\delta = \\frac{4\\nu}{u_L-u_R}' },
   ],
   solve(v, a) {
     const n = Math.max(21, Math.round(v.n_x)), nu = a.viscous ? v.U_0 * v.L / v.Re : 0, nuPhys = v.U_0 * v.L / v.Re, tEnd = v.t_s * v.L / v.U_0;
-    const x0 = 0.25 * v.L, nuIC = nuPhys;
-    const run = burgersRun({ n, L: v.L, nu, tEnd, periodic: a.sine, uL: v.U_0, uR: 0, flux: a.godunov ? 'godunov' : 'lf', conservative: a.conservative,
-      u0: a.sine ? x => v.U_0 * Math.sin(2 * Math.PI * x / v.L) : x => burgersWave(x, 0, v.U_0, 0, x0, nuIC) });
-    const tReal = run.times.at(-1), uf = run.final, x = run.x, dx = run.dx;
+    const x0 = 0.25 * v.L, nuIC = nuPhys, m = n - 1;
     const tb = v.L / (2 * Math.PI * v.U_0), delta = a.viscous ? 4 * nuPhys / (a.sine ? 2 * v.U_0 : v.U_0) : 0;
-    const integral = arr => N.trapz(x, arr), I0 = integral(run.snaps[0]), I1 = integral(uf);
-    const en = arr => 0.5 * N.trapz(x, arr.map(q => q * q)), E0 = en(run.snaps[0]), E1 = en(uf);
+    // the grid is refined about the shock layer, whose position is known: mid-domain for the sine wave, and at rest in a frame moving at the mean of the two
+    // states for the travelling wave. The non-conservative and inviscid travelling waves keep the uniform grid at rest: their shocks are the under-resolved ones.
+    const ride = !a.sine && a.viscous && a.conservative, w = ride ? 0.5 * v.U_0 : 0, fine = a.sine || ride ? delta : 0;
+    const run = burgersRun({ xf: burgersGrid(m, v.L, a.sine ? 0.5 * v.L : x0, fine), nu, tEnd, periodic: a.sine, uL: v.U_0, uR: 0, w, flux: a.godunov ? 'godunov' : 'lf', conservative: a.conservative, maxSteps: N.clamp(Math.round(4e7 / n), 20000, 60000),
+      u0: a.sine ? x => v.U_0 * Math.sin(2 * Math.PI * x / v.L) : x => burgersWave(x, 0, v.U_0, 0, x0, nuIC) });
+    const tReal = run.times.at(-1), dx = run.dx, xExact = a.sine ? 0.5 * v.L : x0 + 0.5 * v.U_0 * tReal;
     // front position: where the profile crosses the mean of the two states (travelling wave) or zero in mid-domain (sine)
     const level = a.sine ? 0 : 0.5 * v.U_0;
     let xf = NaN;
-    for (let i = a.sine ? Math.floor(n / 4) : 1; i < (a.sine ? Math.ceil(3 * n / 4) : n); i++) if ((uf[i - 1] - level) * (uf[i] - level) <= 0 && uf[i - 1] > uf[i]) { xf = x[i - 1] + (level - uf[i - 1]) / (uf[i] - uf[i - 1]) * dx; break; }
-    const xExact = a.sine ? 0.5 * v.L : x0 + 0.5 * v.U_0 * tReal;
+    for (let i = 1; i < m; i++) { const p = run.final[i - 1], q = run.final[i]; if ((!a.sine || (run.x[i] > 0.25 * v.L && run.x[i - 1] < 0.75 * v.L)) && (p - level) * (q - level) <= 0 && p > q) { xf = run.x[i - 1] + (level - p) / (q - p) * (run.x[i] - run.x[i - 1]) + w * tReal; break; } }
+    // profiles on a grid at rest: for the moving frame, the same refined grid placed where the shock ends, with the undisturbed states outside the moving cells
+    let x = run.x, wd = run.w, snaps = run.snaps;
+    if (ride) { const fo = burgersGrid(m, v.L, N.clamp(xExact, 0, v.L), fine); x = fo.slice(1).map((q, i) => 0.5 * (q + fo[i])); wd = fo.slice(1).map((q, i) => q - fo[i]); snaps = run.snaps.map((s, k) => { const sh = w * run.times[k]; return x.map(q => (q - sh < run.x[0] ? v.U_0 : q - sh > run.x[m - 1] ? 0 : N.interp1(run.x, s, q - sh))); }); }
+    const uf = snaps.at(-1), integral = arr => arr.reduce((s, q, i) => s + q * wd[i], 0), I0 = integral(snaps[0]), I1 = integral(uf);
+    const en = arr => 0.5 * arr.reduce((s, q, i) => s + q * q * wd[i], 0), E0 = en(snaps[0]), E1 = en(uf);
     const exact = a.sine ? null : x.map(q => burgersWave(q, tReal, v.U_0, 0, x0, Math.max(nu, 1e-12 * v.U_0 * v.L)));
     const gEnd = run.gmax.at(-1), thickNum = (a.sine ? 2 * v.U_0 : v.U_0) / (2 * Math.max(gEnd, 1e-300));
     const warnings = [];
-    if (run.truncated) warnings.push(`The run was truncated at ${lab(tReal, 's')} after ${run.steps} time steps; use fewer grid points or a higher Reynolds number to reach the requested time.`);
-    if (a.viscous && delta < 3 * dx) warnings.push(`The physical shock thickness (${lab(delta, 'm')}) is less than three grid cells (${lab(dx, 'm')}): the computed thickness is set by numerical, not physical, viscosity.`);
+    if (run.truncated) warnings.push(`The run was truncated at ${lab(tReal, 's')} after ${run.steps} time steps; use fewer grid points or a lower Reynolds number to reach the requested time.`);
+    if (a.viscous && delta < 1.5 * dx) warnings.push(`The physical shock thickness (${lab(delta, 'm')}) is less than one and a half grid cells (${lab(dx, 'm')}): the computed thickness is set by numerical, not physical, viscosity.${a.sine || ride ? ' Use more grid points.' : ''}`);
     if (!a.conservative) warnings.push('The non-conservative form does not conserve ∫u dx across an under-resolved shock; compare the reported front position with the exact value.');
     if (!a.sine && xExact > 0.9 * v.L) warnings.push('The shock has reached the outflow boundary; reduce the end time.');
     return {
       scalars: [
         scalar('nu', 'Kinematic viscosity', nuPhys, 'm^2/s', { note: a.viscous ? '' : 'not applied: inviscid run' }), scalar('t_b', 'Breaking time of the sine wave', tb, 's'),
-        scalar('t_end', 'Simulated time', tReal, 's'), scalar('delta', 'Physical shock thickness 4ν/Δu', delta, 'm'), scalar('delta_num', 'Computed shock thickness Δu/(2|∂u/∂x|max)', thickNum, 'm', { note: 'same definition as 4ν/Δu for a hyperbolic-tangent profile' }),
+        scalar('t_end', 'Simulated time', tReal, 's'), scalar('delta', 'Physical shock thickness 4ν/Δu', delta, 'm'), scalar('delta_num', 'Computed shock thickness Δu/(2|∂u/∂x|max)', thickNum, 'm', { note: a.viscous ? (a.sine ? 'same definition as 4ν/Δu for a hyperbolic-tangent profile, with the initial jump 2U₀; the jump decays, so the layer is thicker than 4ν/Δu at late times' : 'same definition as 4ν/Δu for a hyperbolic-tangent profile') : 'set by the grid: an inviscid shock has no thickness' }),
         scalar('g_max', 'Steepest gradient at the end time', gEnd, '1/s'), scalar('x_f', 'Front position', Number.isFinite(xf) ? xf : xExact, 'm', { text: Number.isFinite(xf) ? undefined : 'No front detected' }),
         scalar('x_f_exact', 'Exact front position', xExact, 'm'), scalar('s_w', 'Shock speed (Rankine–Hugoniot)', a.sine ? 0 : 0.5 * v.U_0, 'm/s'),
-        scalar('E_ratio', 'Kinetic energy remaining', E1 / E0, '1', { show: '%' }), scalar('dx', 'Grid spacing', dx, 'm'), scalar('steps', 'Time steps', run.steps, '1'),
+        scalar('E_ratio', 'Kinetic energy remaining', E1 / E0, '1', { show: '%' }), scalar('dx', 'Smallest grid spacing', dx, 'm'), scalar('steps', 'Time steps', run.steps, '1'),
       ],
       series: [
-        line('profiles', 'Velocity profiles', 'Position', 'm', x, [...[0, 0.25, 0.5, 1].map(f => { const k = Math.round(f * (run.snaps.length - 1)); return { label: `t = ${lab(run.times[k], 's')}`, data: run.snaps[k] }; }), ...(exact ? [{ label: 'Exact travelling wave at the end time', data: exact, dash: true }] : [])], 'Velocity', 'm/s'),
+        line('profiles', 'Velocity profiles', 'Position', 'm', x, [...[0, 0.25, 0.5, 1].map(f => { const k = Math.round(f * (snaps.length - 1)); return { label: `t = ${lab(run.times[k], 's')}`, data: snaps[k] }; }), ...(exact ? [{ label: 'Exact travelling wave at the end time', data: exact, dash: true }] : [])], 'Velocity', 'm/s'),
         line('gradient', 'Steepest gradient against time', 'Time', 's', run.tg, [{ label: 'max |∂u/∂x|', data: run.gmax }, ...(a.sine ? [{ label: 'Inviscid theory before breaking', data: run.tg.map(t => (t < 0.98 * tb ? 2 * Math.PI * v.U_0 / v.L / (1 - t / tb) : NaN)), dash: true }] : [])], 'Gradient', '1/s', { logy: true }),
       ],
-      anims: [anim('u-anim', 'Velocity profile', 'Position', 'm', x, run.snaps, run.times, 'Velocity', 'm/s')],
+      anims: [anim('u-anim', 'Velocity profile', 'Position', 'm', x, snaps, run.times, 'Velocity', 'm/s')],
       checks: [
         check('Conservation of ∫u dx', a.conservative && a.sine ? (I1 - I0) / (v.U_0 * v.L) : 0, 1e-10, 'Exact for a conservative scheme on a periodic domain'),
         check('Kinetic energy does not increase', a.sine ? Math.max(E1 / E0 - 1, 0) : 0, 1e-9, 'Viscosity and upwinding only dissipate energy on a periodic domain (not evaluated for the travelling wave, whose inflow boundary adds energy)'),
-        check('Maximum principle', Math.max(N.maxOf(uf) - v.U_0, -v.U_0 - N.minOf(uf), 0) / v.U_0, 1e-9, 'A monotone scheme creates no new extrema'),
+        check('Maximum principle', Math.max(N.maxOf(run.final) - v.U_0, -v.U_0 - N.minOf(run.final), 0) / v.U_0, 1e-9, 'A monotone scheme creates no new extrema'),
       ],
       warnings,
     };
@@ -2469,13 +2664,14 @@ const burgers = {
     const U = v.U_0, L = v.L, nu = U * L / 100, x0 = 0.25 * L, tEnd = 0.6 * L / U;
     const fine = burgersRun({ n: 401, L, nu, tEnd, periodic: false, uL: U, uR: 0, flux: 'godunov', conservative: true, u0: x => burgersWave(x, 0, U, 0, x0, nu), maxSteps: 40000 });
     const i = fine.x.findIndex(q => q >= x0 + 0.5 * U * tEnd + 2 * nu / U), tr = fine.times.at(-1);
-    let xf = NaN; for (let k = 1; k < 401; k++) if ((fine.final[k - 1] - 0.5 * U) * (fine.final[k] - 0.5 * U) <= 0) { xf = fine.x[k - 1] + (0.5 * U - fine.final[k - 1]) / (fine.final[k] - fine.final[k - 1]) * fine.dx; break; }
+    const front = r => { for (let k = 1; k < r.x.length; k++) if ((r.final[k - 1] - 0.5 * U) * (r.final[k] - 0.5 * U) <= 0) return r.x[k - 1] + (0.5 * U - r.final[k - 1]) / (r.final[k] - r.final[k - 1]) * (r.x[k] - r.x[k - 1]); return NaN; };
     const inv = burgersRun({ n: 201, L, nu: 0, tEnd: 0.5 * L / U, periodic: false, uL: U, uR: 0, flux: 'godunov', conservative: true, u0: x => (x < x0 ? U : 0) });
-    let xi = NaN; for (let k = 1; k < 201; k++) if ((inv.final[k - 1] - 0.5 * U) * (inv.final[k] - 0.5 * U) <= 0) { xi = inv.x[k - 1] + (0.5 * U - inv.final[k - 1]) / (inv.final[k] - inv.final[k - 1]) * inv.dx; break; }
+    const sine = burgersRun({ xf: burgersGrid(400, L, 0.5 * L, 2 * nu / (4 * U)), nu: nu / 4, tEnd, periodic: true, flux: 'godunov', conservative: true, u0: x => U * Math.sin(2 * Math.PI * x / L) });
     return [
-      bench('Viscous shock position vs exact travelling wave', xf / L, (x0 + 0.5 * U * tr) / L, 'x_s = x₀ + ½(u_L + u_R) t', 5e-3),
-      bench('Velocity in the shock layer vs exact tanh profile', fine.final[i] / U, burgersWave(fine.x[i], tr, U, 0, x0, nu) / U, 'Exact travelling-wave solution, Re = 100; first-order scheme, so numerical diffusion widens the layer by several per cent', 0.1),
-      bench('Inviscid shock speed vs Rankine–Hugoniot', (xi - x0) / (0.5 * L / U) / U, 0.5, 's = ½(u_L + u_R)', 2e-2),
+      bench('Viscous shock position vs exact travelling wave', front(fine) / L, (x0 + 0.5 * U * tr) / L, 'x_s = x₀ + ½(u_L + u_R) t; grid at rest', 1e-3),
+      bench('Velocity in the shock layer vs exact tanh profile', fine.final[i] / U, burgersWave(fine.x[i], tr, U, 0, x0, nu) / U, 'Exact travelling-wave solution, Re = 100', 0.01),
+      bench('Inviscid shock speed vs Rankine–Hugoniot', (front(inv) - x0) / (0.5 * L / U) / U, 0.5, 's = ½(u_L + u_R); grid at rest', 5e-3),
+      bench('Steepest gradient of the sine-wave shock vs exact solution', sine.gmax.at(-1) * L / U, -burgersSineSlope(U, L, nu / 4, sine.times.at(-1)) * L / U, 'Cole–Hopf transformation (Hopf 1950, Cole 1951), Re = 400, by quadrature', 0.02),
     ];
   },
   validation: [],
@@ -2497,13 +2693,13 @@ const burgers = {
     safety: ['Hearing protection: levels above 140 dB', 'Secure the driver and tube against vibration'],
   },
   falsify: ['A conservative scheme converging, under grid refinement, to a shock speed different from the mean of the two states.', 'Finite-amplitude plane waves in a thermoviscous gas failing to steepen at the predicted rate over distances short compared with the absorption length.'],
-  alternatives: [{ name: 'Cole–Hopf transformation', text: 'Maps the viscous Burgers equation to the linear heat equation, giving the exact solution for any initial condition as a quadrature.' }, { name: 'High-resolution schemes (MUSCL, WENO)', text: 'Second- or higher-order reconstruction with limiters gives thinner numerical shocks than the first-order fluxes used here.' }, { name: 'Full Euler or Navier–Stokes equations', text: 'Burgers’ equation has no pressure or energy equation; real shocks also involve density and temperature jumps.' }],
+  alternatives: [{ name: 'Cole–Hopf transformation', text: 'Maps the viscous Burgers equation to the linear heat equation, giving the exact solution for any initial condition as a quadrature; it is used here as a benchmark.' }, { name: 'Higher-order schemes (WENO, discontinuous Galerkin)', text: 'Third- or higher-order reconstruction resolves the layer with fewer cells than the second-order limited scheme used here.' }, { name: 'Full Euler or Navier–Stokes equations', text: 'Burgers’ equation has no pressure or energy equation; real shocks also involve density and temperature jumps.' }],
   hazards: [{ hazard: 'Misinterpreting numerical viscosity as physical', cause: 'Under-resolved shock layer', mitigation: 'Check that the physical thickness spans several cells or report the numerical thickness' }],
   standards: ['ASME V&V 20 (verification and validation in computational fluid dynamics and heat transfer)', 'AIAA G-077 (guide for the verification and validation of computational fluid dynamics simulations)'],
-  limits: 'One space dimension, constant viscosity, first-order accurate fluxes. The equation is a model: it omits pressure, density variation and energy.',
-  numerics: { method: 'Explicit finite-volume scheme with Godunov or reduced-dissipation Lax–Friedrichs flux and central diffusion', order: 1, stability: 'Time step 0.4 of the smaller of the advective and diffusive limits', resolution: 'n_x' },
+  limits: 'One space dimension, constant viscosity, second-order accurate fluxes (first-order at extrema and in the non-conservative form). The shock layer is resolved only while it spans about one and a half cells or more of the refined grid; the inviscid shock is always one or two cells thick. The equation is a model: it omits pressure, density variation and energy.',
+  numerics: { method: 'Explicit finite-volume scheme on a grid refined about the shock layer: MUSCL–Hancock (limited linear reconstruction, face states advanced half a step), Godunov or reduced-dissipation Lax–Friedrichs flux, central diffusion', order: 2, stability: 'Time step 0.9 of the combined advective (Courant number ½) and diffusive limit of the smallest cell', resolution: 'n_x' },
   inverse: { series: 'profiles', curve: 3, fit: ['Re'] },
-  extensions: ['Exact Cole–Hopf solution for arbitrary initial data', 'Second-order MUSCL reconstruction with a limiter', 'Random initial data and Burgers turbulence', 'Two-dimensional Burgers equation'],
+  extensions: ['Exact Cole–Hopf solution for arbitrary initial data', 'Grid that follows a shock whose path is not known in advance', 'Random initial data and Burgers turbulence', 'Two-dimensional Burgers equation'],
 };
 
 // ------------------------------------------------------------------ plane Poiseuille–Couette flow

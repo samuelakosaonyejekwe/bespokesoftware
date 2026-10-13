@@ -21,17 +21,17 @@ const rk4step = (f, t, y, h) => {
  * When gf is the minimum of several conditions, scale each to order one so that they are comparable.
  */
 function toEvent(f, y0, tMax, gf, gdot, nOut = 300, o = {}) {
-  const opt = { rtol: o.rtol ?? 1e-9, atol: o.atol ?? 1e-9, maxSteps: o.maxSteps ?? 60000 }, event = (t, y) => gf(y) < 0;
+  const opt = { rtol: o.rtol ?? 1e-9, atol: o.atol ?? 1e-9, maxSteps: o.maxSteps ?? 60000, h0: o.h0 }, event = (t, y) => gf(y) < 0;
   const miss = () => { const s = N.rk45(f, y0, 0, tMax, nOut, opt); return { ...s, hit: false, tHit: s.t.length ? s.t[s.t.length - 1] : 0, yHit: s.final || y0 }; };
   // a cheap low-accuracy pass finds roughly when the event happens, so the accurate pass can be sampled finely
-  const rough = N.rk45(f, y0, 0, tMax, 2, { rtol: 1e-5, atol: Math.max(opt.atol, 1e-7), maxSteps: opt.maxSteps, event });
+  const rough = N.rk45(f, y0, 0, tMax, 2, { rtol: 1e-5, atol: Math.max(opt.atol, 1e-7), maxSteps: opt.maxSteps, h0: opt.h0, event });
   if (!rough.stopped) return miss();
   let s = N.rk45(f, y0, 0, Math.min(1.05 * rough.stopT, tMax), nOut, { ...opt, event });
   if (!s.stopped) s = N.rk45(f, y0, 0, tMax, nOut, { ...opt, event });
   if (!s.stopped) return miss();
   // Newton iteration on the event function, confined to the interval between the last sample and the stopping step
   let t = s.stopT, y = s.final, lo = s.t.length - 1;
-  while (lo > 0 && s.t[lo] >= t) lo--;
+  while (lo > 0 && (s.t[lo] >= t || gf(s.y.map(r => r[lo])) < 0)) lo--;   // a step ending on a sample time can differ from it by one rounding unit: the lower bracket must precede the event
   const tLo = s.t[lo] < t ? s.t[lo] : 0, tHi = t;
   for (let i = 0; i < 10; i++) {
     let gd;
@@ -896,7 +896,6 @@ const hohmann = {
 // ------------------------------------------------------------------ 5. ballistic atmospheric entry
 const K_SG = 1.7415e-4;   // Sutton–Graves stagnation-point heating constant for Earth air, kg^0.5/m
 const RHO32 = R.atmosphere(32000).rho;
-const erfApprox = x => { const s = Math.sign(x), z = Math.abs(x), t = 1 / (1 + 0.3275911 * z); return s * (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z)); };
 /** Vertex of the parabola through three equally spaced samples around index i: returns [offset in samples, peak value]. */
 const vertex = (y, i) => { if (i <= 0 || i >= y.length - 1) return [0, y[i]]; const d = y[i - 1] - 2 * y[i] + y[i + 1]; if (!(Math.abs(d) > 0)) return [0, y[i]]; const o = 0.5 * (y[i - 1] - y[i + 1]) / d; return [o, y[i] - 0.25 * (y[i - 1] - y[i + 1]) * o]; };
 function entryRun(v, a) {
@@ -909,8 +908,9 @@ function entryRun(v, a) {
     return [-k * V + g * Math.sin(gam), dg, -V * Math.sin(gam), V * Math.cos(gam) * v.R_p / (v.R_p + h), K_SG * Math.sqrt(rho / v.R_n) * Math.abs(V) ** 3, k * V * V];
   };
   const vStop = a.no_gravity ? 0.01 * v.V_E : -1;
+  // the first trial step is held to the time taken to cross a tenth of a scale height: a longer one lands far below the surface, where the density overflows
   const gf = y => Math.min(y[2] / v.h_E, 1 + 2000 / v.h_E - y[2] / v.h_E, (y[0] - vStop) / v.V_E);
-  const s = toEvent(f, [v.V_E, v.gamma_E, v.h_E, 0, 0, 0], 4000, gf, null, 401, { rtol: 1e-9, atol: 1e-7, maxSteps: 40000 });
+  const s = toEvent(f, [v.V_E, v.gamma_E, v.h_E, 0, 0, 0], 4000, gf, null, 401, { rtol: 1e-9, atol: 1e-7, maxSteps: 40000, h0: 0.1 * v.H / v.V_E });
   const n = s.t.length, V = s.y[0], gam = s.y[1], h = s.y[2];
   const rho = h.map(rhoOf), dec = V.map((x, i) => rho[i] * x * x / (2 * v.beta)), q = V.map((x, i) => K_SG * Math.sqrt(rho[i] / v.R_n) * x ** 3);
   const ia = dec.indexOf(N.maxOf(dec)), iq = q.indexOf(N.maxOf(q)), va = vertex(dec, ia), vq = vertex(q, iq);
@@ -1017,15 +1017,21 @@ const entry = {
     };
   },
   benchmarks(v) {
-    const sg = Math.sin(v.gamma_E), B = v.rho_0 * v.H / (2 * v.beta * sg), out = [];
-    if (2 * B < 3) return [bench('Allen–Eggers peak-deceleration identity', Math.exp(-1) * 2, 2 / Math.E, 'ρ* V*² H/(β sin γ V_E²) = e⁻¹ at the peak', 1e-12)];
-    const r = entryRun(v, AE_ON), b = v.H / (v.beta * sg);
-    out.push(bench('Peak deceleration: numerical integration vs Allen–Eggers', r.aMax, v.V_E ** 2 * sg / (2 * Math.E * v.H), 'a_max = V_E² sin γ / (2 e H)', 2e-3));
-    out.push(bench('Speed at peak deceleration vs V_E/√e', r.VA, v.V_E * Math.exp(-0.5), 'Allen & Eggers (1958)', 1e-2));
-    out.push(bench('Altitude of peak deceleration vs H ln(ρ₀H/(β sin γ))', r.hA, v.H * Math.log(2 * B), 'Allen & Eggers (1958)', 1e-2));
-    out.push(bench('Peak heat flux: numerical vs closed form', r.qMax, K_SG * Math.sqrt(v.beta * sg / (3 * v.H * v.R_n)) * v.V_E ** 3 * Math.exp(-0.5), 'Maximum of √ρ·V³ along the Allen–Eggers path', 2e-3));
-    const rhoEnd = r.rhoOf(r.yf[2]), rhoTop = r.rhoOf(v.h_E);
-    out.push(bench('Heat load: numerical vs closed form', r.yf[4], K_SG * v.H * v.V_E ** 2 * Math.sqrt(Math.PI / b) * (erfApprox(Math.sqrt(b * rhoEnd)) - erfApprox(Math.sqrt(b * rhoTop))) / (sg * Math.sqrt(v.R_n)), 'Error-function integral of the heating rate along the Allen–Eggers path', 2e-3));
+    const sg = Math.sin(v.gamma_E), b = v.H / (v.beta * sg), rhoE = v.rho_0 * Math.exp(-v.h_E / v.H), out = [];
+    // The integration starts at the entry interface, where the density ρ_E is small but not zero: integrating dV/V = −(b/2) dρ from ρ_E
+    // gives V = V_E exp(−b(ρ − ρ_E)/2), b = H/(β sin γ), which is the Allen–Eggers solution for the speed V_E exp(bρ_E/2) at ρ → 0.
+    const r = entryRun(v, AE_ON), V0 = v.V_E * Math.exp(0.5 * b * rhoE), ref = 'Allen & Eggers (1958), with V_E referred to ρ → 0 as V_E exp(ρ_E H/(2β sin γ))';
+    // ρV² is stationary where ρ = β sin γ/H, and √ρ·V³ where ρ = β sin γ/(3H): a peak exists only if that density is met between the entry interface and the surface
+    if (rhoE * b < 1 && v.rho_0 * b > 1) {
+      out.push(bench('Peak deceleration: numerical integration vs Allen–Eggers', r.aMax, V0 ** 2 * sg / (2 * Math.E * v.H), `a_max = V_E² sin γ / (2 e H), valid for ρ_E < β sin γ/H < ρ₀. ${ref}`, 2e-3));
+      out.push(bench('Speed at peak deceleration vs V_E/√e', r.VA, V0 * Math.exp(-0.5), ref, 1e-2));
+      out.push(bench('Altitude of peak deceleration vs H ln(ρ₀H/(β sin γ))', r.hA, v.H * Math.log(v.rho_0 * b), 'Allen & Eggers (1958)', 1e-2));
+    }
+    if (3 * rhoE * b < 1 && 3 * v.rho_0 * b > 1) out.push(bench('Peak heat flux: numerical vs closed form', r.qMax, K_SG * Math.sqrt(v.beta * sg / (3 * v.H * v.R_n)) * V0 ** 3 * Math.exp(-0.5), `Maximum of √ρ·V³ along the Allen–Eggers path, valid for ρ_E < β sin γ/(3H) < ρ₀. ${ref}`, 2e-3));
+    // heat load ∫ q dt = (k_SG H V_E²/(sin γ √R_n)) ∫ ρ^(−1/2) exp(−b(ρ − ρ_E)) dρ: the error-function integral, evaluated by Simpson's rule in √ρ so that it stays well conditioned when bρ_E is large
+    const u0 = Math.sqrt(rhoE), du = (Math.sqrt(r.rhoOf(r.yf[2])) - u0) / 400; let I = 0;
+    for (let k = 0; k <= 400; k++) { const u = u0 + k * du; I += (k === 0 || k === 400 ? 1 : k % 2 ? 4 : 2) * Math.exp(-b * (u * u - rhoE)); }
+    out.push(bench('Heat load: numerical vs closed form', r.yf[4], K_SG * v.H * v.V_E ** 2 * 2 * I * du / 3 / (sg * Math.sqrt(v.R_n)), 'Error-function integral of the heating rate along the Allen–Eggers path between the entry and final densities', 2e-3));
     return out;
   },
   validation: [],
@@ -1063,17 +1069,62 @@ const entry = {
 };
 
 // ------------------------------------------------------------------ 6. two-body orbit
+/**
+ * Fourth-order Yoshida composition of the time-transformed (logarithmic-Hamiltonian) leapfrog of Mikkola & Tanikawa and Preto & Tremaine
+ * for planar motion q'' = ∇U(q), U > 0. With ds = U dt the flow of ln(T + B) − ln U, B = U − T the binding energy, is t' = 1/(T + B), q' = v/(T + B), v' = ∇U/U:
+ * the step in t shrinks as 1/U near the centre, and for U = μ/r each sub-step follows the Kepler conic exactly, leaving only an error in the time.
+ * accU(q, out) writes ∇U and returns U; U0 is its starting value. Steps of size h in s are taken until t reaches tEnd; n is the number expected, and twice that is allowed
+ * (more means a fall to the centre, where the time stops advancing). The velocity is carried as its change dv from v0, so that
+ * T + B = U0 + v0·dv + dv²/2 keeps its accuracy on a fast fly-by where T is many orders above U, and the positions are summed with compensation.
+ */
+function yoshidaLog(accU, q0, v0, U0, h, tEnd, n, stride = 1) {
+  const w1 = 1 / (2 - Math.cbrt(2)), w0 = -Math.cbrt(2) * w1, a = [0, 0], q = [q0[0], q0[1]], [ux, uy] = v0, t = [], Q = [], V = [], nMax = 2 * n;
+  // drift–kick–drift sub-steps of weights w1, w0, w1: neighbouring half-drifts share one velocity and merge, leaving four drifts round three kicks
+  const ds = [0.5 * w1 * h, 0.5 * (w1 + w0) * h, 0.5 * (w1 + w0) * h, 0.5 * w1 * h], ks = [w1 * h, w0 * h, w1 * h];
+  let tt = 0, dx = 0, dy = 0, cx = 0, cy = 0;
+  for (let k = 0; ; k++) {
+    const last = k >= nMax || tt >= tEnd;
+    if (k % stride === 0 || last) { t.push(tt); Q.push([q[0], q[1]]); V.push([ux + dx, uy + dy]); }
+    if (last) break;
+    for (let s = 0; s < 4; s++) {
+      const dt = ds[s] / (U0 + (ux + 0.5 * dx) * dx + (uy + 0.5 * dy) * dy), yx = dt * (ux + dx) - cx, yy = dt * (uy + dy) - cy, xn = q[0] + yx, yn = q[1] + yy;
+      cx = (xn - q[0]) - yx; cy = (yn - q[1]) - yy; q[0] = xn; q[1] = yn; tt += dt;
+      if (s === 3) break;
+      const g = ks[s] / accU(q, a); dx += g * a[0]; dy += g * a[1];
+    }
+  }
+  return { t, q: Q, v: V };
+}
+/**
+ * Universal anomaly χ reached a time t after the state (distance r0, radial speed vr) on a Kepler conic with α = 1/a (zero or negative when unbound):
+ * √μ t = (r0 vr/√μ) χ² C(αχ²) + (1 − α r0) χ³ S(αχ²) + r0 χ, with C and S the Stumpff functions. Because dχ/dt = √μ/r, ∫(μ/r) dt = √μ χ.
+ */
+function universalChi(mu, r0, vr, alpha, t) {
+  const sm = Math.sqrt(mu), f = x => {
+    const z = alpha * x * x, w = Math.sqrt(Math.abs(z)), small = Math.abs(z) < 1e-6;
+    const C = small ? 0.5 - z / 24 : z > 0 ? (1 - Math.cos(w)) / z : (Math.cosh(w) - 1) / -z, S = small ? 1 / 6 - z / 120 : z > 0 ? (w - Math.sin(w)) / w ** 3 : (Math.sinh(w) - w) / w ** 3;
+    return r0 * vr / sm * x * x * C + (1 - alpha * r0) * x ** 3 * S + r0 * x - sm * t;
+  };
+  // the left side increases with χ (its slope is r): bracket by doubling from a value small enough for the hyperbolic functions, then bisect
+  let lo = 0, hi = Math.min(sm * t / r0, alpha < 0 ? 1 / Math.sqrt(-alpha) : Infinity);
+  for (let i = 0; i < 200 && !(f(hi) > 0); i++) { lo = hi; hi *= 2; }
+  for (let i = 0; i < 100 && hi - lo > 1e-14 * hi; i++) { const mid = 0.5 * (lo + hi); if (f(mid) > 0) hi = mid; else lo = mid; }
+  return 0.5 * (lo + hi);
+}
 function keplerRun(v, a) {
   const mu = v.GM * (a.fixed_centre ? 1 : 1 + v.q_m), r0 = v.r_0, vt = v.v_0 * Math.cos(v.phi), vr = v.v_0 * Math.sin(v.phi), hA = r0 * vt;
   const kJ = a.point_mass ? 0 : 1.5 * mu * v.J_2 * v.R_b ** 2, kG = a.newtonian ? 0 : 3 * mu * hA * hA / C.c ** 2, k4 = kJ + kG;
   const eps = v.v_0 ** 2 / 2 - mu / r0, bound = eps < 0, sma = -mu / (2 * eps), ecc = Math.sqrt(Math.max(0, 1 + 2 * eps * hA * hA / (mu * mu)));
   const p = hA * hA / mu, rp = p / (1 + ecc), ra = bound ? sma * (1 + ecc) : Infinity;
   const Tc = 2 * Math.PI * Math.sqrt(r0 ** 3 / mu), T = bound ? 2 * Math.PI * Math.sqrt(sma ** 3 / mu) : NaN, unit = bound ? T : Tc;
-  const boost = N.clamp(unit / (2 * Math.PI * Math.sqrt(Math.max(rp, 1e-4 * r0) ** 3 / mu)), 1, 50);
-  const n = Math.max(20, Math.min(Math.round(v.n_orb * v.n_step * boost), 80000)), tEnd = v.n_orb * unit, stride = every(n, 20000);
+  const boost = N.clamp(unit / (2 * Math.PI * Math.sqrt(Math.max(rp, 1e-4 * r0) ** 3 / mu)), 1, 50), tEnd = v.n_orb * unit;
+  // symplectic scheme: n_step steps per period, uniform in the regularised time s with ds = U dt (they crowd at periapsis as steps in eccentric anomaly do); RK4: fixed steps in t, refined for an eccentric orbit.
+  // On the Kepler conic ∫U dt is 2π√(μa) per period when bound and √μ times the universal anomaly otherwise, which fixes the step in s that covers the simulated time in n steps.
+  const n = a.symplectic ? Math.max(20, Math.round(v.n_orb * v.n_step)) : Math.max(20, Math.min(Math.round(v.n_orb * v.n_step * boost), 80000)), stride = every(n, 20000);
   const floor2 = (1e-5 * r0) ** 2;
   const acc = (q, o) => { const r2 = Math.max(q[0] * q[0] + q[1] * q[1], floor2), r = Math.sqrt(r2), s = -mu / (r2 * r) - k4 / (r2 * r2 * r); o[0] = s * q[0]; o[1] = s * q[1]; };
-  const run = (a.symplectic ? yoshida4 : rk4second)(acc, [r0, 0], [vr, vt], tEnd / n, n, stride);
+  const accU = (q, o) => { const r2 = q[0] * q[0] + q[1] * q[1], r = Math.sqrt(r2), s = -mu / (r2 * r) - k4 / (r2 * r2 * r); o[0] = s * q[0]; o[1] = s * q[1]; return mu / r + k4 / (3 * r2 * r); };
+  const run = a.symplectic ? yoshidaLog(accU, [r0, 0], [vr, vt], mu / r0 + k4 / (3 * r0 ** 3), (bound ? v.n_orb * 2 * Math.PI * Math.sqrt(mu * sma) : Math.sqrt(mu) * universalChi(mu, r0, vr, -2 * eps / mu, tEnd)) / n, tEnd, n, stride) : rk4second(acc, [r0, 0], [vr, vt], tEnd / n, n, stride);
   const m = run.t.length, r = new Array(m), sp = new Array(m), en = new Array(m), hh = new Array(m), th = new Array(m), om = new Array(m);
   for (let i = 0; i < m; i++) {
     const x = run.q[i][0], y = run.q[i][1], ux = run.v[i][0], uy = run.v[i][1];
@@ -1126,7 +1177,7 @@ const twoBody = {
     asm('fixed_centre', 'The central body is fixed: the orbiting body is a test mass.', { why: 'Mass ratio much less than 1', alt: 'Both bodies orbit their common centre of mass; the relative motion feels the combined mass.' }),
     asm('newtonian', 'Gravity is exactly Newtonian inverse-square.', { why: 'Weak field, low speed', alt: 'The leading relativistic (Schwarzschild) correction is added, producing perihelion precession.' }),
     asm('point_mass', 'The central body is spherically symmetric (a point mass).', { why: 'Distant orbit', alt: 'The oblateness term J₂ is added for an orbit in the equatorial plane.' }),
-    asm('symplectic', 'The equations are integrated with a fourth-order symplectic (Yoshida) scheme.', { why: 'No secular energy drift', alt: 'Classical fourth-order Runge–Kutta with the same step, for comparison of the energy error.' }),
+    asm('symplectic', 'The equations are integrated with a fourth-order symplectic (Yoshida) scheme in a regularised time.', { why: 'No secular energy drift, and a step that shortens at periapsis', alt: 'Classical fourth-order Runge–Kutta with a fixed time step, for comparison of the energy error.' }),
   ],
   symbols: { x: ['Position, first Cartesian component', 'm'], y: ['Position, second Cartesian component', 'm'], t: ['Time', 's'], r: ['Separation', 'm'], v: ['Speed', 'm/s'], v_x: ['Velocity, first component', 'm/s'], v_y: ['Velocity, second component', 'm/s'], eps: ['Specific orbital energy', 'J/kg'], h_a: ['Specific angular momentum', 'm^2/s'], a_sm: ['Semi-major axis', 'm'], ecc: ['Eccentricity', '1'], T_K: ['Kepler period', 's'], mu_g: ['Effective gravitational parameter', 'm^3/s^2'], dw: ['Apsidal advance per orbit', 'rad'] },
   equations: a => {
@@ -1151,12 +1202,13 @@ const twoBody = {
     { text: 'Solving the radial equation gives a conic with the centre at one focus. Its size and shape follow from the two constants.', tex: 'r = \\frac{h^2/\\mu}{1 + e\\cos\\theta},\\qquad a = -\\frac{\\mu}{2\\varepsilon},\\qquad e = \\sqrt{1 + \\frac{2\\varepsilon h^2}{\\mu^2}}' },
     { text: 'Dividing the area of the ellipse by the constant areal velocity h/2 gives the period.', tex: 'T = 2\\pi\\sqrt{a^3/\\mu}' },
     ...(a.newtonian && a.point_mass ? [] : [{ text: 'A small additional attraction varying as 1/r⁴ makes the radial and angular periods differ, so the ellipse turns slowly in its plane.', tex: `\\Delta\\varpi = ${[a.newtonian ? null : '\\frac{6\\pi\\mu}{c^2 a(1-e^2)}', a.point_mass ? null : '3\\pi J_2\\left(\\frac{R}{a(1-e^2)}\\right)^2'].filter(Boolean).join(' + ')}\\ \\text{per orbit}` }]),
-    { text: a.symplectic ? 'The motion is advanced with a composition of three velocity-Verlet (kick–drift–kick) steps whose weights cancel the leading error term. Each sub-step is a canonical map, so the scheme conserves angular momentum exactly and the energy error stays bounded.' : 'The motion is advanced with the classical fourth-order Runge–Kutta scheme, which is accurate per step but lets the energy drift slowly.', tex: a.symplectic ? 'w_1 = \\frac{1}{2-2^{1/3}},\\quad w_0 = -\\frac{2^{1/3}}{2-2^{1/3}}' : '\\mathbf y_{n+1} = \\mathbf y_n + \\tfrac{h}{6}(k_1 + 2k_2 + 2k_3 + k_4)' },
+    { text: a.symplectic ? 'The motion is advanced with a composition of three leapfrog (drift–kick–drift) steps whose weights cancel the leading error term, taken in a regularised time s with ds = U dt, where U is the potential function μ/r plus the perturbation. The step in t then shortens in proportion to r near periapsis, and for pure inverse-square gravity each sub-step lies exactly on the Kepler conic. Each sub-step is a canonical map of the time-transformed Hamiltonian ln(v²/2 + B) − ln U, B being the binding energy, so the scheme conserves angular momentum exactly and the energy error stays bounded.' : 'The motion is advanced with the classical fourth-order Runge–Kutta scheme, which is accurate per step but lets the energy drift slowly.', tex: a.symplectic ? '\\mathrm{d}s = U\\,\\mathrm{d}t,\\qquad w_1 = \\frac{1}{2-2^{1/3}},\\quad w_0 = -\\frac{2^{1/3}}{2-2^{1/3}}' : '\\mathbf y_{n+1} = \\mathbf y_n + \\tfrac{h}{6}(k_1 + 2k_2 + 2k_3 + k_4)' },
   ],
   solve(v, a) {
     const k = keplerRun(v, a), q = a.fixed_centre ? 0 : v.q_m, warnings = [];
     const type = !k.bound ? 2 : k.ecc < 1e-3 ? 0 : 1, TYPES = ['Circular orbit', 'Elliptical orbit', 'Unbound (hyperbolic or parabolic) trajectory'];
-    if (k.rp < 0.02 * k.r0) warnings.push('The periapsis is very close to the centre compared with the starting distance. A fixed time step resolves that passage poorly; raise the steps per period and treat conservation errors as the guide to accuracy.');
+    if (!a.symplectic && k.rp < 0.02 * k.r0) warnings.push('The periapsis is very close to the centre compared with the starting distance. A fixed time step resolves that passage poorly; raise the steps per period and treat conservation errors as the guide to accuracy.');
+    if (k.run.t[k.m - 1] < k.tEnd) warnings.push('The simulation stopped before the stated time: the trajectory falls towards the centre, where the perturbing attraction overcomes the angular-momentum barrier and the regularised step shrinks without limit.');
     if (!a.point_mass && k.rp < v.R_b) warnings.push('The periapsis lies inside the stated body radius: the trajectory intersects the central body.');
     if (!k.bound) warnings.push('The specific energy is not negative, so the body escapes; the period is undefined and the simulation covers the stated number of local circular periods.');
     if (!a.newtonian && k.mu / (k.rp * C.c ** 2) > 0.01) warnings.push('The orbit reaches a strong-field region where the first-order relativistic correction is inadequate.');
@@ -1187,8 +1239,8 @@ const twoBody = {
       anims: [motion('orbit', 'Orbital motion', fi.map(i => [[f1 * k.run.q[i][0], f1 * k.run.q[i][1]], [f2 * k.run.q[i][0], f2 * k.run.q[i][1]]]), fi.map(i => k.run.t[i]), { trails: true, labels: ['Central body', 'Orbiting body'], bounds: [-lim, lim, -lim, lim], unit: 'm' })],
       paths: [path3d('trajectory', 'Trajectory', [{ label: 'Orbit', x: X, y: Y, z: X.map(() => 0) }, { label: 'Centre', x: [0], y: [0], z: [0] }], { equal: true, unit: 'm' })],
       checks: [
-        check('Energy conservation', N.maxOf(k.dE.map(Math.abs)), 1e-8, 'Largest relative change of the specific energy, including perturbation potentials'),
-        check('Angular-momentum conservation', N.maxOf(k.dH.map(Math.abs)), 1e-10, 'Largest relative change of x·v_y − y·v_x'),
+        check('Energy conservation', N.maxOf(k.dE.map(Math.abs)), Math.max(1e-8, 1e3 * Number.EPSILON * k.mu / (k.rp * Math.max(Math.abs(k.eps), 0.5 * v.v_0 ** 2))), 'Largest relative change of the specific energy, including perturbation potentials. The energy is the difference of kinetic and potential terms that each reach μ/r_p: the tolerance is 10⁻⁸, or 10³ rounding units of μ/r_p where that is larger'),
+        check('Angular-momentum conservation', N.maxOf(k.dH.map(Math.abs)), Math.max(1e-10, 1e2 * Number.EPSILON * N.maxOf(k.r.map((x, i) => x * k.sp[i])) / (Math.abs(k.hA) || 1)), 'Largest relative change of x·v_y − y·v_x. The two products cancel where the velocity is nearly radial: the tolerance is 10⁻¹⁰, or 10² rounding units of the largest r·v where that is larger'),
       ],
       warnings,
     };
@@ -1234,14 +1286,14 @@ const twoBody = {
     safety: ['Never point optics at or near the Sun without certified solar filtration', 'Observe laser-ranging aircraft-avoidance procedures'],
   },
   falsify: ['A period depending on eccentricity at fixed semi-major axis.', 'Areal velocity varying around an unperturbed orbit.', 'A bound unperturbed orbit that fails to close.'],
-  alternatives: [{ name: 'Analytic Kepler propagation', text: 'Solving Kepler\'s equation for the eccentric anomaly gives the position at any time without stepping.' }, { name: 'Regularised integration', text: 'Kustaanheimo–Stiefel or time-transformed leapfrog schemes handle close approaches that defeat a fixed time step.' }, { name: 'Full post-Newtonian or geodesic equations', text: 'Needed for compact binaries and orbits near black holes, where the first-order correction fails.' }],
+  alternatives: [{ name: 'Analytic Kepler propagation', text: 'Solving Kepler\'s equation for the eccentric anomaly gives the position at any time without stepping.' }, { name: 'Kustaanheimo–Stiefel regularisation', text: 'Transforms the coordinates as well as the time, turning the Kepler problem into a harmonic oscillator that remains regular through a collision.' }, { name: 'Full post-Newtonian or geodesic equations', text: 'Needed for compact binaries and orbits near black holes, where the first-order correction fails.' }],
   hazards: [{ hazard: 'Misleading long-term predictions', cause: 'Step too coarse for an eccentric orbit', mitigation: 'Monitor the conservation errors and refine the step until results converge' }],
   standards: ['IAU 2015 Resolution B3 (nominal solar and planetary conversion constants)', 'IERS Conventions (2010)', 'CCSDS 502.0-B (orbit data messages)'],
-  limits: 'Planar motion about a single centre. Perturbations are limited to an equatorial J₂ term and the first-order relativistic correction. A fixed time step is used, refined automatically for eccentric orbits but unsuitable for near-collision trajectories. Radiation pressure, drag and third bodies are not included.',
-  numerics: { method: 'Fourth-order symplectic Yoshida composition of velocity-Verlet steps (or classical RK4 for comparison)', order: 4, stability: 'Bounded energy error for steps well below the periapsis passage time', resolution: 'n_step' },
+  limits: 'Planar motion about a single centre. Perturbations are limited to an equatorial J₂ term and the first-order relativistic correction. The symplectic scheme steps in a regularised time and follows eccentric and near-radial orbits; the Runge–Kutta comparison uses a fixed time step, refined for eccentric orbits but unsuitable for near-collision trajectories. Where the periapsis is a minute fraction of the starting distance the energy is known only to the rounding error of terms of size μ/r_p. Radiation pressure, drag and third bodies are not included.',
+  numerics: { method: 'Fourth-order symplectic Yoshida composition of time-transformed (logarithmic-Hamiltonian) leapfrog steps, ds = U dt (or classical RK4 with a fixed time step for comparison)', order: 4, stability: 'Bounded energy error; exact conic for pure inverse-square gravity, the step in time shortening as r near periapsis', resolution: 'n_step' },
   optimise: { objective: 'ecc', sense: 'min', vars: ['v_0'], note: 'The eccentricity vanishes at the circular speed.' },
   inverse: { series: 'radius', fit: ['GM', 'v_0'] },
-  extensions: ['Kepler-equation propagation and orbital elements in three dimensions', 'Third-body perturbations and resonances', 'Regularised integration for near-parabolic encounters'],
+  extensions: ['Kepler-equation propagation and orbital elements in three dimensions', 'Third-body perturbations and resonances', 'Kustaanheimo–Stiefel regularisation for collision trajectories'],
 };
 
 // ------------------------------------------------------------------ 7. planar three-body problem
@@ -2278,9 +2330,10 @@ function cannonOrbit(v, a, vLaunch = v.v_0) {
   const eps = vi * vi / 2 - mu / r0, hA = r0 * vh, ecc = Math.sqrt(Math.max(0, 1 + 2 * eps * hA * hA / (mu * mu))), p = hA * hA / mu;
   const bound = eps < 0, rp = p / (1 + ecc), ra = bound ? p / Math.max(1 - ecc, 1e-300) : Infinity, sma = -mu / (2 * eps);
   const outcome = !bound ? 3 : rp < v.R_p ? 0 : ecc < 1e-3 ? 1 : 2;
-  // true anomaly swept from launch to the surface, when the conic meets it
+  // true anomaly swept from launch to the surface, when the conic meets it: e cos ν = p/r − 1 and e sin ν = v_r h/μ, combined through
+  // the arctangent because the arccosine loses half the working precision at an apsis, which is where a horizontal shot starts
   let sweep = NaN;
-  if (rp < v.R_p && ecc > 0) { const c0 = N.clamp((p / r0 - 1) / ecc, -1, 1), ci = N.clamp((p / v.R_p - 1) / ecc, -1, 1), nu0 = vr >= 0 ? Math.acos(c0) : 2 * Math.PI - Math.acos(c0); sweep = 2 * Math.PI - Math.acos(ci) - nu0; }
+  if (rp < v.R_p && ecc > 0) { const ci = p / v.R_p - 1, nu0 = Math.atan2(vr * hA / mu, p / r0 - 1); sweep = 2 * Math.PI - Math.atan2(Math.sqrt(Math.max(ecc * ecc - ci * ci, 0)), ci) - (nu0 < 0 ? nu0 + 2 * Math.PI : nu0); }
   return { r0, mu, om, vh, vr, vi, eps, hA, ecc, p, bound, rp, ra, sma, outcome, sweep, vc: Math.sqrt(mu / r0), T: bound ? 2 * Math.PI * Math.sqrt(sma ** 3 / mu) : NaN };
 }
 /** Integrate one shot. Round Earth: state [x, y, vx, vy, swept angle], launch from (0, r0). Flat Earth: y is height. */
@@ -2433,7 +2486,8 @@ const cannonball = {
     return [
       bench('Shot at circular speed: time for one revolution', circ.tf, 2 * Math.PI * Math.sqrt(o.r0 ** 3 / o.mu), 'Kepler\'s third law for a circular orbit', 1e-8),
       bench('Shot at circular speed: greatest departure from the launch radius (1 = none)', 1 + N.maxOf(circ.x.map((x, i) => Math.abs(Math.hypot(x, circ.y[i]) - o.r0))) / o.r0, 1, 'A circular orbit keeps constant radius', 1e-8),
-      bench('Sub-orbital shot: integrated range angle vs conic-section value', slow.yf[4], sl.sweep, 'True-anomaly difference between apoapsis and the surface crossing', 1e-8),
+      // a shot at 0.7 of circular speed has its periapsis at 0.325 r₀: it is sub-orbital only when that lies below the surface (mountain lower than about 2.08 radii)
+      ...(sl.rp < v.R_p ? [bench('Sub-orbital shot: integrated range angle vs conic-section value', slow.yf[4], sl.sweep, 'True-anomaly difference between apoapsis and the surface crossing; applies where the periapsis 0.325 r₀ of the 0.7 v_c ellipse lies below the surface', 1e-8)] : []),
       bench('Grazing speed places the periapsis on the surface', cannonOrbit(v, CANNON_ON, vmin).rp, v.R_p, 'v_min = √(2GM·R/(r₀(R + r₀)))', 1e-10),
       bench('Flat-ground range vs Galileo\'s parabola', flat.range, 2000 * Math.sqrt(2 * v.h_m / gs), 'x = v√(2h/g)', 1e-9),
       bench('Circular speed at the Earth\'s surface', Math.sqrt(E.GM / E.radius), 7910, 'About 7.91 km/s at the mean radius', 1e-3),

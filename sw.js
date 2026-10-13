@@ -1,6 +1,6 @@
 // Service worker: keeps the whole application available offline, updates it in the background,
 // caches answers from scientific data sources for offline use, and falls back to mirror hosts.
-const VERSION = 'd33b0d91a90f';
+const VERSION = 'f604cbc54883';
 const SHELL = `bespoke-shell-${VERSION}`;
 const DATA = 'bespoke-data-v1';
 const RUNTIME = 'bespoke-runtime-v1';
