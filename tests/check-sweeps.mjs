@@ -12,7 +12,7 @@ import { defaults, runModel, sweep, sensitivity } from '../js/engine/core.js';
 import { symbolTable } from '../js/core/verify.js';
 import * as E from '../js/core/expr.js';
 
-const ids = process.argv.slice(2), TOL = 2e-3, CONV = 5e-2;
+const ids = process.argv.slice(2), TOL = 2e-3, CONV = +process.env.CONV || 5e-2;
 const stat = { sweeps: 0, curves: 0, points: 0, byEq: 0, eqPoints: 0, conv: 0, convCurves: 0, unchecked: 0 }, bad = [], unch = new Map(), weak = {}, limited = {}, laws = {};
 const close = (p, q, tol) => (!Number.isFinite(p) && !Number.isFinite(q)) || Math.abs(p - q) <= tol * Math.max(Math.abs(p), Math.abs(q)) + 1e-12 * (1 + Math.abs(q));
 for (const m of MODELS) { if (ids.length && !ids.includes(m.id)) continue;

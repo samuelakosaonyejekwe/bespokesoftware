@@ -11,7 +11,7 @@ import { MODELS } from '../js/models/index.js';
 import { defaults, runModel } from '../js/engine/core.js';
 import * as N from '../js/core/num.js';
 
-const ids = process.argv.slice(2), CONV = 5e-2, PTS = 9;
+const ids = process.argv.slice(2), CONV = +process.env.CONV || 5e-2, PTS = 9;
 const fail = {}, stat = { models: 0, points: 0, checks: 0, bench: 0, flips: 0, conv: 0 }, add = (k, x) => { (fail[k] = fail[k] || []).push(x); };
 const GRID = /\berror\b|residual|drift|defect|grid|spacing|\bsteps?\b|cell|nodes?\b|iterations?|resolution|mesh|courant|number of (terms|modes|samples)|standard error|simulat|sampled|percentile|median|stages?\b|rooms|plays|games|groups|numerical against/i;
 for (const m of MODELS) { if (ids.length && !ids.includes(m.id)) continue; stat.models++;

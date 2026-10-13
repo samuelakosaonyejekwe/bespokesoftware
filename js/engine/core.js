@@ -404,6 +404,49 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
   const bad = xs.map(x => failed.get(x) || null), names = [...new Set(bad.flatMap(f => f || []))];
   return { input: i, xs, outputs, bad, failedChecks: names, nChecks: (c.result && c.result.checks ? c.result.checks.length : 0), resolution: model.numerics && model.numerics.resolution ? (c.inputs.find(q => q.sym === model.numerics.resolution) || {}).name : null };
 }
+/** What the model's displayed explicit equations give for every quantity they define, at input point v. */
+export function equationValues(model, a, v, inputDefs) {
+  let eqs; try { eqs = model.equations(a, v) || []; } catch { return {}; }
+  const consts = Object.fromEntries(Object.entries(symbolTable(inputDefs, model.symbols || {}, [])).filter(([, t]) => t.constant).map(([k, t]) => [k, t.value]));
+  const env = { ...consts, ...v }, val = {}, inputs = new Set(inputDefs.map(i => i.sym));
+  const pend = eqs.filter(q => q.exportable !== false).map(q => { try { return { L: E.parse(q.lhs), R: E.parse(q.rhs) }; } catch { return null; } }).filter(Boolean);
+  let progress = true;
+  while (progress) { progress = false; for (const p of pend) { if (p.done || p.L.t !== 'sym' || inputs.has(p.L.n) || E.hasDiffOps(p.R)) continue; if (![...E.symbols(p.R)].every(k => k in env)) continue; try { env[p.L.n] = E.evaluate(p.R, env); } catch { env[p.L.n] = NaN; } val[p.L.n] = env[p.L.n]; p.done = true; progress = true; } }
+  return val;
+}
+const GRID_NAME = /\berror\b|residual|drift|defect|grid|spacing|\bsteps?\b|cell|nodes?\b|iterations?|resolution|mesh|courant|number of (terms|modes|samples)|standard error|simulat|sampled|percentile|median|stages?\b|rooms|plays|games|groups|numerical against/i;
+/**
+ * Accuracy check of one swept curve, made for the case in hand (the user's own inputs and assumptions, whatever they are):
+ *   equations — at every point, the value plotted against the value the displayed equation gives;
+ *   grid      — at the two ends, the middle and the present value, the value plotted against a solve at twice the
+ *               numerical resolution;
+ *   reference — at those same points, the model's exact-solution benchmarks.
+ * The model's own conservation checks are already attached to every point by sweep(). Returns what was checked, the
+ * worst disagreement found and the indices of the points that failed, so that nothing unverified is drawn as trusted.
+ */
+export function verifySweep(c, s, sym, opts = {}) {
+  const model = c.model, o = s.outputs.find(q => q.sym === sym), i = s.input, t0 = Date.now(), budget = opts.budgetMs || 6000;
+  const out = { equations: null, grid: null, reference: null, checks: { points: s.xs.length, failed: s.bad.filter(Boolean).length }, bad: new Set(), partial: false };
+  if (!model || !o) return out;
+  const fin = o.data.filter(Number.isFinite), span = fin.length ? Math.max(...fin) - Math.min(...fin) : 0, scale = k => Math.max(Math.abs(o.data[k]), span, 1e-300);
+  // 1. displayed equations, every point
+  if (sym in equationValues(model, c.a, c.v, c.inputs)) { let n = 0, worst = 0;
+    s.xs.forEach((x, k) => { const q = o.data[k]; if (!Number.isFinite(q)) return; const p = equationValues(model, c.a, { ...c.v, [i.sym]: x }, c.inputs)[sym]; if (p === undefined) return; n++; const e = Number.isFinite(p) ? Math.abs(p - q) / Math.max(Math.abs(q), Math.abs(p), 1e-300) : Infinity; if (e > 2e-3 && Math.abs(p - q) > 1e-12) out.bad.add(k); if (Number.isFinite(e)) worst = Math.max(worst, e); });
+    out.equations = { points: n, worst }; }
+  const k0 = s.xs.indexOf(i.si), probes = [...new Set([0, Math.floor((s.xs.length - 1) / 2), k0, s.xs.length - 1].filter(k => k >= 0 && Number.isFinite(o.data[k])))];
+  // 2. twice the numerical resolution
+  const key = model.numerics && model.numerics.resolution, ri = key && c.inputs.find(q => q.sym === key);
+  if (ri && !GRID_NAME.test(o.name) && !['residual', 'scattered', 'level'].includes(o.shape)) { let n = 0, worst = 0; const fine = Math.min(ri.rangeSI[1], ri.integer ? Math.round(ri.si * 2) : ri.si * 2);
+    if (fine > ri.si) { for (const k of probes) { if (Date.now() - t0 > budget) { out.partial = true; break; } const r = runModel(model, { ...c.v, [i.sym]: s.xs[k], [key]: fine }, c.a, true), q = r.status === 'computed' ? r.scalars.find(z => z.sym === sym) : null; if (!q || !Number.isFinite(q.value)) continue; n++; const e = Math.abs(q.value - o.data[k]) / scale(k); worst = Math.max(worst, e); if (e > (opts.gridTol || 0.02)) out.bad.add(k); }
+      out.grid = { points: n, worst, name: ri.name, from: ri.si, to: fine }; } }
+  // 3. exact-solution benchmarks
+  if (model.benchmarks) { let n = 0; const failed = new Set();
+    for (const k of probes) { if (Date.now() - t0 > budget) { out.partial = true; break; } let bs = []; try { bs = model.benchmarks({ ...c.v, [i.sym]: s.xs[k] }, c.a) || []; } catch { bs = []; } bs.forEach(b => { n++; if (!b.pass) { failed.add(b.name); out.bad.add(k); } }); }
+    out.reference = { n, failed: [...failed] }; }
+  out.bad = [...out.bad].sort((p, q) => p - q); out.ms = Date.now() - t0;
+  out.ok = !out.bad.length && !out.checks.failed;
+  return out;
+}
 /**
  * How a swept output behaves, so that it is drawn as what it is and not as a line through unrelated points:
  * level (no dependence), steady (changes by under half a per cent), steps (a count or a category), residual (a numerical

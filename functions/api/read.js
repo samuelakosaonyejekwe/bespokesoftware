@@ -3,6 +3,8 @@
 import { SYSTEM } from '../../js/engine/reading-prompt.js';
 
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+// a second, unrelated model, asked independently when the first one had to write the equations itself
+const MODEL_B = '@cf/openai/gpt-oss-120b';
 // daily allowance: for everyone together, and for one address. Counted in a key-value store; only counts are kept.
 const DAY_TOTAL = 150, DAY_EACH = 20;
 const ALLOW = [/^https:\/\/samuelakosaonyejekwe\.github\.io$/, /^https:\/\/([a-z0-9-]+\.)?bespokesoftware\.pages\.dev$/, /^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:\d+)?$/];
@@ -28,8 +30,10 @@ export async function onRequestPost({ request, env }) {
     await Promise.all([env.LIMITS.put(`${day}:all`, String(all + 1), { expirationTtl: 172800 }), env.LIMITS.put(who, String(mine + 1), { expirationTtl: 172800 })]);
   }
   try {
-    const out = await env.AI.run(MODEL, { messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: `CATALOGUE:\n${catalogue}\n\nQUESTION:\n${prompt}${feedback ? `\n\nYour previous answer was rejected for these reasons; correct them:\n${feedback}` : ''}` }], max_tokens: 1400, temperature: 0.1, response_format: { type: 'json_object' } });
-    const text = typeof out.response === 'string' ? out.response : JSON.stringify(out.response ?? out);
-    return json(request, { text, model: MODEL });
+    const model = body.second ? MODEL_B : MODEL;
+    const out = await env.AI.run(model, { messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: `CATALOGUE:\n${catalogue}\n\nQUESTION:\n${prompt}${feedback ? `\n\nYour previous answer was rejected for these reasons; correct them:\n${feedback}` : ''}` }], max_tokens: 1400, temperature: 0.1, response_format: { type: 'json_object' } });
+    const msg = out.response ?? (out.choices && out.choices[0] && out.choices[0].message && out.choices[0].message.content) ?? out.output_text ?? out;
+    const text = typeof msg === 'string' ? msg : JSON.stringify(msg);
+    return json(request, { text, model });
   } catch (err) { return json(request, { error: String(err && err.message || err).slice(0, 300) }, 502); }
 }

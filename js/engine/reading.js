@@ -8,7 +8,7 @@ import { ATLAS } from '../data/atlas.js';
 import * as P from './prompt.js';
 import * as E from '../core/expr.js';
 import { tryUnit, dimEq, fromSI } from '../core/units.js';
-import { defaults, selectModel, useAtlas, clearCache } from './core.js';
+import { defaults, selectModel, useAtlas, clearCache, compute } from './core.js';
 import { SYSTEM } from './reading-prompt.js';
 
 export const ENDPOINT = 'https://bespokesoftware.pages.dev/api/read';
@@ -28,25 +28,28 @@ export function candidates(prompt, module) {
 /** Ask a language model to read the prompt. opts.key (the user's own key) goes straight to the provider from this device; otherwise the project's server function is used. */
 export async function askModel(prompt, module, opts = {}) {
   const cat = candidates(prompt, module);
-  const once = async feedback => {
+  const once = async (feedback, second) => {
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), opts.timeout || 45000), note = feedback ? `\n\nYour previous answer was rejected for these reasons; correct them:\n${feedback}` : '';
     try {
-      if (opts.key) {
+      if (opts.key && !second) {
         const model = opts.model || 'claude-sonnet-5-5';
         const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json', 'x-api-key': opts.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model, max_tokens: 1400, system: SYSTEM, messages: [{ role: 'user', content: `CATALOGUE:\n${JSON.stringify(cat)}\n\nQUESTION:\n${prompt}${note}` }] }) });
         const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error((j.error && j.error.message) || `The provider answered ${r.status}`);
         return { text: (j.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), provider: `your own key (${model})` };
       }
-      const r = await fetch(opts.endpoint || ENDPOINT, { method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, candidates: cat, feedback }) });
+      const r = await fetch(opts.endpoint || ENDPOINT, { method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, candidates: cat, feedback, second: !!second }) });
       const j = await r.json().catch(() => ({})); if (!r.ok || j.error) throw new Error(j.error || `The reading service answered ${r.status}`);
       return { text: j.text, provider: `the project's reading service (${String(j.model || '').split('/').pop()})` };
     } finally { clearTimeout(timer); }
   };
-  const read = async feedback => { const a = await once(feedback); try { return validate(parseJson(a.text), prompt, cat, a.provider); } catch (e) { return { choice: 'none', values: [], equations: [], symbols: {}, dropped: [e.message], provider: a.provider, unreadable: true }; } };
+  const read = async (feedback, second) => { const a = await once(feedback, second); try { return validate(parseJson(a.text), prompt, cat, a.provider); } catch (e) { return { choice: 'none', values: [], equations: [], symbols: {}, dropped: [e.message], provider: a.provider, unreadable: true }; } };
   let rd = await read('');
   // an answer that was attempted but could not be checked gets one chance to be corrected, with the reasons
   if (rd.choice === 'none' && rd.dropped.length) { const second = await read(rd.dropped.slice(0, 5).join('\n')); if (second.choice !== 'none' || !second.unreadable) rd = second; }
   if (rd.unreadable) throw new Error(rd.dropped[0]);
+  // equations written by a language model are a proposal: a second, unrelated model is asked the same question
+  // independently, and the two answers are compared number for number when the investigation is built
+  if (rd.choice === 'equations' && !opts.noSecond) { try { let b = await read('', true); if (b.choice === 'none' && b.dropped.length && !b.unreadable) b = await read(b.dropped.slice(0, 5).join('\n'), true); rd.second = b.unreadable ? { failed: b.dropped[0], provider: b.provider } : b; } catch (e) { rd.second = { failed: e.message }; } }
   return rd;
 }
 function parseJson(text) {
@@ -91,6 +94,7 @@ export function validate(raw, prompt, cat, provider = '') {
     catch (e) { out.dropped.push(`“${clip(q.name || q.lhs, 50)}”: the expression could not be read (${clip(e.message, 60)}).`); }
   }
   if (!out.equations.length) { out.dropped.push('None of the proposed equations could be read.'); return out; }
+  out.answer = out.equations.some(q => q.lhs.trim() === String(raw.answer || '').trim()) ? String(raw.answer).trim() : out.equations[out.equations.length - 1].lhs.trim();
   const used = new Set(out.equations.flatMap(q => [...E.symbols(E.parse(q.lhs)), ...E.symbols(E.parse(q.rhs))]));
   out.symbols = Object.fromEntries(Object.entries(units).filter(([k]) => used.has(k)));
   // stated values override the typical ones, on the same test as above
@@ -123,8 +127,19 @@ export function applyReading(inv, rd) {
     inv.match = { confidence: 'low', note: 'These equations were proposed by a language model from your prompt. Treat them as a hypothesis: each is checked below for dimensional consistency and by the proof checker, but nothing yet confirms that they describe the system you meant.' };
     did = `${rd.equations.length} equation(s) proposed by the language-model reading`;
   }
+  // two independent derivations of the same answer: solve each and compare the quantity asked for
+  let second = null;
+  if (rd.choice === 'equations' && rd.second) {
+    if (rd.second.failed || rd.second.choice !== 'equations') second = { status: 'none', note: rd.second.failed ? `A second, independent reading could not be obtained (${rd.second.failed}).` : `A second, independent language model did not write equations for this prompt (it answered “${rd.second.choice}”${rd.second.title ? `: ${rd.second.title}` : ''}).`, provider: rd.second.provider };
+    else { const solve = r => { const t = { ...JSON.parse(JSON.stringify(inv)), id: `x${Math.random()}`, modelId: null, custom: { equations: r.equations.map(q => ({ lhs: q.lhs, rhs: q.rhs, name: q.name })), symbols: Object.fromEntries(Object.entries(r.symbols).map(([k, d]) => [k, { name: d.name, unit: d.unit, ...(d.value !== undefined ? { value: d.value } : {}) }])) } }; const c = compute(t), s = c.result.scalars.find(q => q.sym === r.answer); return s && Number.isFinite(s.value) ? { value: s.value, unit: s.unit, name: s.name } : null; };
+      let a = null, b = null; try { a = solve(rd); b = solve(rd.second); } catch { /* compared as unavailable */ }
+      const ua = a && tryUnit(a.unit), ub = b && tryUnit(b.unit);
+      if (!a || !b) second = { status: 'none', note: 'A second, independent language model also proposed equations, but one of the two sets could not be solved for the quantity asked, so they could not be compared.', provider: rd.second.provider };
+      else if (!ua || !ub || !dimEq(ua.dim, ub.dim)) second = { status: 'differ', note: `A second, independent language model gave an answer in different units (${b.unit} against ${a.unit}). The two readings do not describe the same quantity; check the equations before relying on either.`, provider: rd.second.provider };
+      else { const rel = Math.abs(a.value - b.value) / Math.max(Math.abs(a.value), Math.abs(b.value), 1e-300), same = rel <= 0.01; second = { status: same ? 'agree' : 'differ', rel, a: a.value, b: b.value, unit: a.unit, eqs: rd.second.equations.map(q => `${q.lhs} = ${q.rhs}`), note: same ? `A second, independent language model derived its own equations and reached the same value for ${a.name} to within ${rel < 1e-6 ? '0.0001' : (rel * 100).toPrecision(2)} %.` : `A second, independent language model derived different equations (${rd.second.equations.map(q => `${q.lhs} = ${q.rhs}`).slice(0, 2).join('; ')}) and reached ${b.value.toPrecision(4)} ${b.unit === '1' ? '' : b.unit} where this one gives ${a.value.toPrecision(4)} ${a.unit === '1' ? '' : a.unit}. At least one of them is wrong; check the equations against a trusted source before relying on the result.`, provider: rd.second.provider }; } }
+  }
   if (rd.klass && rd.choice !== 'library') inv.klass = P.classifyClass(inv.prompt, { klass: rd.klass, title: rd.title || inv.title });
-  inv.reading = { choice: rd.choice, id: rd.id, title: rd.title, why: rd.why, confidence: rd.confidence, provider: rd.provider, values: rd.values.map(v => ({ name: v.name, value: v.value, unit: v.unit, quote: v.quote })), dropped: rd.dropped, at: Date.now() };
+  inv.reading = { choice: rd.choice, id: rd.id, title: rd.title, why: rd.why, confidence: rd.confidence, provider: rd.provider, values: rd.values.map(v => ({ name: v.name, value: v.value, unit: v.unit, quote: v.quote })), dropped: rd.dropped, second, at: Date.now() };
   inv.audit.push({ ts: Date.now(), action: did }); clearCache();
   return did;
 }
