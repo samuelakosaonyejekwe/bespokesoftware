@@ -105,7 +105,7 @@ const G = {
   'simulation status': ['Whether the calculation ran, how, and how long it took.', 'It names the numerical method and any warnings. “Computed” means the equations were solved with your inputs on this device.', 'Change an input and it runs again.'],
   'computed results': ['Every quantity the model calculated, with its value and unit.', 'Values are shown in the most readable unit. A pink “conditional” mark means the value depends on a hypothetical assumption.', 'Open a chart or animation below to see how the quantities vary.'],
   'conservation and consistency diagnostics': ['Checks that the solution obeys the conservation laws it should.', 'Each line is a balance, such as energy in against energy out, with the size of any mismatch. A small residual means the numbers are internally consistent.', ''],
-  'parameter response': ['How one result changes as one input is varied, everything else held fixed.', 'The horizontal axis is the input, the vertical axis the result. A level line means that result does not depend on that input, which is common: each result depends on only a few of the inputs. The note under the chart names the law the curve follows (proportional, a power, exponential, curved), shades any stretch where the result has no value and says why, and rings any point at which one of the model’s own checks failed.', 'Choose the input; the list of results is then grouped into those that respond to it and those that do not.'],
+  'parameter response': ['How one result changes as one input is varied, with everything else held fixed.', 'The input runs along the bottom and the result up the side. A flat line means that result does not depend on that input, which is common and correct: each result depends on only a few inputs. The note under the chart says in words what the curve does, shades any stretch where the result has no value and says why, and rings any point where one of the model’s own checks failed.', 'Pick the input. The list of results is then sorted into those that change, those that stay the same and those with no value to plot.'],
   'solution verification: refinement study': ['A test that the numerical answer does not depend on the resolution of the calculation.', 'The model is run at three resolutions. If the answers settle, the observed order of accuracy shows how quickly the error shrinks and the grid-convergence index estimates the error that remains.', ''],
   'generated source code': ['The same calculation written as a stand-alone program.', 'The C++, Python and MATLAB versions reproduce the numbers shown here and can be run outside the app.', 'Copy or download the language you need.'],
 
@@ -196,12 +196,26 @@ function attach(h) {
 }
 const scan = root => { if (root.matches && root.matches('h2,h3')) attach(root); root.querySelectorAll && root.querySelectorAll('h2,h3').forEach(attach); };
 
+/**
+ * Keep every value inside its tile: typeset numbers cannot wrap, so one that is wider than its box is set smaller until
+ * it fits, and plain-text values that are still too long are allowed to wrap onto further lines.
+ */
+function fitTile(v) {
+  v.style.fontSize = ''; v.classList.remove('wraps');
+  const box = v.parentElement, room = box.clientWidth - parseFloat(getComputedStyle(box).paddingLeft) - parseFloat(getComputedStyle(box).paddingRight); if (room <= 0) return;
+  const base = parseFloat(getComputedStyle(v).fontSize); let size = base;
+  while (v.scrollWidth > room + 0.5 && size > base * 0.55) { size -= 0.5; v.style.fontSize = `${size}px`; }
+  if (v.scrollWidth > room + 0.5) { v.classList.add('wraps'); v.style.fontSize = `${base * 0.75}px`; }
+}
+const fitAll = root => root.querySelectorAll && root.querySelectorAll('.stat .v').forEach(fitTile);
+
 /** Explain every panel under root now, and every panel added to it later. */
 export function watch(root) {
   let queue = new Set(), pending = false;
-  const flush = () => { pending = false; const q = [...queue]; queue = new Set(); q.forEach(n => { if (n.isConnected) scan(n); }); };
+  const flush = () => { pending = false; const q = [...queue]; queue = new Set(); q.forEach(n => { if (n.isConnected) scan(n); }); clearTimeout(fitT); fitT = setTimeout(() => fitAll(root), 120); };
+  let fitT; window.addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(() => fitAll(root), 150); });
   new MutationObserver(list => { for (const r of list) r.addedNodes.forEach(n => { if (n.nodeType === 1 && !n.classList.contains('guide')) queue.add(n); }); if (queue.size && !pending) { pending = true; requestAnimationFrame(flush); } }).observe(root, { childList: true, subtree: true });
-  scan(root);
+  scan(root); setTimeout(() => fitAll(root), 200);
   // a label is a description, not a control: tapping one says what it means
   document.addEventListener('click', ev => { const c = ev.target.closest('.chip[title],th[title]'); if (c && !ev.target.closest('button,a,summary')) toast(c.title, 5200); });
 }

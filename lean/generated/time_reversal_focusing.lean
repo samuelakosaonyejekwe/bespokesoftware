@@ -97,6 +97,7 @@ def d_u_0 : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Initial displacement [m]
 def d_u_TR : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Displacement imposed at a sensor during replay [m]
 def d_u_a : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Emitted amplitude [m]
 def d_u_rec : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Displacement recorded at that sensor [m]
+def d_w_m : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Fade weight of the mirror: 1, falling smoothly to 0 over the last 0.2 L/c of the record [1]
 def d_w_p : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Pulse width (standard deviation) as a fraction of the length [1]
 def d_x : Dim := ⟨0, 12, 0, 0, 0, 0, 0⟩  -- Position [m]
 def d_x_s : Dim := ⟨0, 0, 0, 0, 0, 0, 0⟩  -- Source position as a fraction of the length [1]
@@ -128,10 +129,10 @@ theorem eq3_ic_reg1 (w_p L : ℝ) (hw_p : 0 < w_p) (hL : 0 < L) : (2 : ℝ) * (w
 
 /-! ## 4. Replay at a sensor
 
-    u_TR = u_rec
+    u_TR = w_m*u_rec
 -/
 /-- Both sides of "Replay at a sensor" carry the same physical dimension. -/
-theorem eq4_tr_dim : d_u_TR = d_u_rec := by decide
+theorem eq4_tr_dim : d_u_TR = (Dim.mul d_w_m d_u_rec) := by decide
 
 /-! ## 5. Expected refocused amplitude
 

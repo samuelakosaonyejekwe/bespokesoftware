@@ -417,7 +417,7 @@ const maxwellsDemon = {
         scalar('P_x', 'Gross power extracted', v.r_b * W, 'W'),
         scalar('P_net', 'Net power after resetting the memory', v.r_b * Wnet, 'W', { status: a.landauer ? undefined : 'hypothetical' }),
         scalar('S_dot', 'Net entropy production rate', v.r_b * dS, 'W/K'),
-        scalar('viol', 'Second law', viol ? 1 : 0, '1', { text: viol ? 'Apparently violated (hypothetical premise)' : 'Respected' }),
+        scalar('viol', 'Second law', viol ? 1 : 0, '1', { text: viol ? 'Apparently violated (hypothetical premise)' : 'Respected', note: viol ? 'expected with free erasure: this is the paradox, resolved by charging k_B T ln 2 for resetting the memory' : undefined }),
       ],
       series: [
         line('work-vs-error', 'Work per cycle against measurement error', 'Error probability', '–', es, [{ label: 'Work extracted', data: es.map(e => eta * (Math.LN2 - H2(e)) / Math.LN2) }, { label: 'Cost of resetting the memory', data: es.map(() => (a.landauer ? 1 : 0)), dash: true }], 'Energy', 'k_B T ln 2'),
@@ -425,7 +425,10 @@ const maxwellsDemon = {
         line('power-vs-T', 'Gross power against bath temperature', 'Temperature', 'K', Ts, [{ label: 'Gross power', data: Ts.map(t => v.r_b * eta * kB * t * I) }], 'Power', 'W'),
       ],
       checks: [
-        check('Second law: net entropy change per cycle is not negative', Math.min(0, dS / kB), 1e-12, 'Bath, engine and memory together'),
+        // with free erasure a negative balance is the paradox itself, the expected outcome of the counterfactual premise; what must
+        // then hold is that the deficit never exceeds the omitted erasure cost, so that Landauer's principle alone restores the law
+        a.landauer ? check('Second law: net entropy change per cycle is not negative', Math.min(0, dS / kB), 1e-12, 'Bath, engine and memory together')
+          : check('Free erasure (hypothetical): the entropy deficit per cycle does not exceed the omitted erasure cost k_B ln 2', Math.min(0, dS / kB + Math.LN2), 1e-12, `${viol ? `The balance is ${(dS / kB).toPrecision(4)} k_B per cycle: the apparent violation of the second law that the thought experiment is about, expected under this premise` : 'The balance is not negative here'}; charging k_B ln 2 for the reset (Landauer's principle) makes it ${(dS / kB + Math.LN2).toPrecision(4)} k_B ≥ 0`),
         check('Extracted work does not exceed k_B T times the information gained', Math.max(0, W / kT - I), 1e-12, 'Sagawa–Ueda bound'),
         check('Information lies between zero and one bit', I < -1e-15 || I > Math.LN2 + 1e-15 ? 1 : 0, 0, '0 ≤ I ≤ ln 2'),
       ],
@@ -496,15 +499,33 @@ const PD_STRATS = [
   { key: 'allc', name: 'Always co-operate', move: () => true },
   { key: 'tft', name: 'Tit for tat', move: (t, oppLast) => (t === 0 ? true : oppLast) },
   { key: 'grim', name: 'Grim trigger', move: (t, oppLast, st) => { if (t > 0 && !oppLast) st.grim = true; return !st.grim; } },
-  { key: 'rand', name: 'Random', move: (t, oppLast, st, rnd, pc) => rnd() < pc },
+  { key: 'rand', name: 'Random', move: (t, oppLast, st, rnd, pc) => rnd() < pc, mixed: true },
 ];
+/** Expected total scores of one iterated match, exactly: every strategy here is a finite-state machine driven by the opponent's last
+ *  move, so the pair (last moves, triggered flags) is a Markov chain of at most sixteen states whose distribution is propagated
+ *  round by round. No sampling is involved, so the ranking cannot be decided by the luck of a seed. */
+function pdExpect(i, j, n, pay, noise, pc) {
+  const intent = (k, t, oppLast, g) => { const st = { grim: g }, c = PD_STRATS[k].mixed ? pc : (PD_STRATS[k].move(t, oppLast, st) ? 1 : 0); return [c, !!st.grim]; };
+  // transition table for one round from each state: [next state, probability, payoff to i, payoff to j] × 4 outcomes (the rule of every strategy is the same for all t ≥ 1)
+  const table = t => { const tb = new Float64Array(16 * 16);
+    for (let s = 0; s < 16; s++) { const li = !!(s & 1), lj = !!(s & 2), [ci, gi] = intent(i, t, lj, !!(s & 4)), [cj, gj] = intent(j, t, li, !!(s & 8));
+      const ai = ci * (1 - noise) + (1 - ci) * noise, aj = cj * (1 - noise) + (1 - cj) * noise, base = (gi ? 4 : 0) + (gj ? 8 : 0);
+      for (let o = 0; o < 4; o++) { const mi = !!(o & 1), mj = !!(o & 2), k = 16 * s + 4 * o; tb[k] = base + o; tb[k + 1] = (mi ? ai : 1 - ai) * (mj ? aj : 1 - aj); tb[k + 2] = pay(mi, mj); tb[k + 3] = pay(mj, mi); } }
+    return tb; };
+  let w = new Float64Array(16), nw = new Float64Array(16), ti = 0, tj = 0, tb = table(0); w[3] = 1;   // state index: li + 2·lj + 4·gi + 8·gj
+  for (let t = 0; t < n; t++) { if (t === 1) tb = table(1); nw.fill(0);
+    for (let s = 0; s < 16; s++) { const q = w[s]; if (q === 0) continue;
+      for (let k = 16 * s; k < 16 * s + 16; k += 4) { const pr = q * tb[k + 1]; if (pr === 0) continue; ti += pr * tb[k + 2]; tj += pr * tb[k + 3]; nw[tb[k]] += pr; } }
+    const sw = w; w = nw; nw = sw; }
+  return { ti, tj };
+}
 /** One iterated match. Returns total scores and the cumulative score histories. */
-function pdMatch(i, j, n, pay, rnd, noise, pc) {
+function pdMatch(i, j, n, pay, rnd, noise, pc, hist = true) {
   const si = {}, sj = {}; let li = true, lj = true, ti = 0, tj = 0; const ci = [], cj = [];
   for (let t = 0; t < n; t++) {
     let mi = PD_STRATS[i].move(t, lj, si, rnd, pc), mj = PD_STRATS[j].move(t, li, sj, rnd, pc);
     if (noise > 0) { if (rnd() < noise) mi = !mi; if (rnd() < noise) mj = !mj; }
-    ti += pay(mi, mj); tj += pay(mj, mi); ci.push(ti); cj.push(tj); li = mi; lj = mj;
+    ti += pay(mi, mj); tj += pay(mj, mi); if (hist) { ci.push(ti); cj.push(tj); } li = mi; lj = mj;
   }
   return { ti, tj, ci, cj };
 }
@@ -575,17 +596,25 @@ const prisonersDilemma = {
     if (!dilemma) warnings.push('The payoffs do not satisfy T > R > P > S, so this is not a prisoner\'s dilemma; the analysis below describes the game actually entered.');
     else if (!iter) warnings.push('2R > T + S fails: in the repeated game, alternating exploitation pays more than steady mutual co-operation.');
     if (!a.selfish && dilemma && !neDD) warnings.push('With the stated regard for the other player, mutual defection is no longer an equilibrium: the dilemma has been dissolved by changing the preferences, not by changing the reasoning.');
-    // round-robin tournament
-    const m = PD_STRATS.length, tot = new Array(m).fill(0), cnt = new Array(m).fill(0), noise = a.no_noise ? 0 : v.eps_n;
-    let showcase = null;
-    for (let i = 0; i < m; i++) for (let j = i; j < m; j++) {
-      if (i === j && !a.self_play) continue;
-      const r = pdMatch(i, j, n, pay, rnd, noise, v.p_c);
-      if (i === j) { tot[i] += (r.ti + r.tj) / 2; cnt[i]++; } else { tot[i] += r.ti; tot[j] += r.tj; cnt[i]++; cnt[j]++; }
-      if (i === 0 && j === 2) showcase = r;
-    }
-    const avg = tot.map((s, i) => s / (cnt[i] * n)), best = avg.indexOf(N.maxOf(avg));
-    const lo = Math.min(T, R, P, S0), hi = Math.max(T, R, P, S0);
+    // round-robin tournament. The scores reported are exact expectations (Markov chain over the joint state of each pair); a set of
+    // seeded sample tournaments is played as well, to show one realisation and to test the expectations against direct simulation
+    const m = PD_STRATS.length, noise = a.no_noise ? 0 : v.eps_n, NREP = 16;
+    const robin = play => { const tot = new Array(m).fill(0), cnt = new Array(m).fill(0); let show = null;
+      for (let i = 0; i < m; i++) for (let j = i; j < m; j++) {
+        if (i === j && !a.self_play) continue;
+        const r = play(i, j);
+        if (i === j) { tot[i] += (r.ti + r.tj) / 2; cnt[i]++; } else { tot[i] += r.ti; tot[j] += r.tj; cnt[i]++; cnt[j]++; }
+        if (i === 0 && j === 2) show = r;
+      }
+      return { avg: tot.map((s, i) => s / (cnt[i] * n)), show }; };
+    const avg = robin((i, j) => pdExpect(i, j, n, pay, noise, v.p_c)).avg;
+    const reps = Array.from({ length: NREP }, (_, k) => robin((i, j) => pdMatch(i, j, n, pay, rnd, noise, v.p_c, k === 0 && i === 0 && j === 2))), showcase = reps[0].show;
+    const sMean = avg.map((_, i) => N.mean(reps.map(q => q.avg[i]))), sErr = avg.map((_, i) => Math.sqrt(reps.reduce((q, r) => q + (r.avg[i] - sMean[i]) ** 2, 0) / (NREP * (NREP - 1))));
+    const lo = Math.min(T, R, P, S0), hi = Math.max(T, R, P, S0), tiny = 1e-9 * (1 + Math.max(Math.abs(lo), Math.abs(hi)));
+    const zs = avg.map((q, i) => (Math.abs(sMean[i] - q) <= tiny ? 0 : Math.abs(sMean[i] - q) / Math.max(sErr[i], 1e-300))), zMax = N.maxOf(zs);
+    // ranking on the exact expectations; strategies whose scores coincide are reported as tied, not ordered by rounding
+    const top = N.maxOf(avg), tied = avg.map((q, i) => i).filter(i => top - avg[i] <= tiny), best = tied[0];
+    const runner = N.maxOf(avg.filter((q, i) => !tied.includes(i)).concat(-Infinity)), lead = top - runner;
     const dc = T - P > 0 ? (T - R) / (T - P) : NaN, Kr = T - S0 !== 0 ? (R - P) / (T - S0) : NaN;
     const ds = N.linspace(0, 0.99, 100), rounds = showcase.ci.map((_, i) => i + 1);
     return {
@@ -599,19 +628,21 @@ const prisonersDilemma = {
         scalar('g_P', 'Gain from defecting against a defector', u(false, false) - u(true, false), '1'),
         scalar('K_r', 'Co-operation index (R − P)/(T − S)', Kr, '1', { text: Number.isFinite(Kr) ? undefined : 'Undefined' }),
         scalar('delta_c', 'Critical continuation probability for grim trigger', dc, '1', { text: !Number.isFinite(dc) ? 'Undefined (T ≤ P)' : dc <= 0 ? 'None needed: co-operation is already a best reply' : undefined }),
-        ...PD_STRATS.map((s, i) => scalar(`S_${s.key}`, `Average payoff per round: ${s.name.toLowerCase()}`, avg[i], '1')),
-        scalar('best', 'Highest-scoring strategy in the tournament', best + 1, '1', { text: PD_STRATS[best].name }),
+        ...PD_STRATS.map((s, i) => scalar(`S_${s.key}`, `Average payoff per round: ${s.name.toLowerCase()}`, avg[i], '1', { note: 'expected value, exact' })),
+        scalar('best', 'Highest-scoring strategy in the tournament', best + 1, '1', { text: tied.length > 1 ? `Tie: ${tied.map(i => PD_STRATS[i].name).join(', ')}` : PD_STRATS[best].name, note: tied.length === m ? 'all strategies score the same' : `leads the next score by ${lead.toPrecision(3)} per round (expected values, not subject to sampling error)` }),
         scalar('S_mean', 'Mean payoff per round over all strategies', N.mean(avg), '1'),
+        scalar('z_sim', `Largest departure of ${NREP} sampled tournaments from the expected scores, in standard errors`, zMax, '1'),
       ],
       series: [
-        line('tournament', 'Average payoff per round in the round-robin tournament', 'Strategy', '–', PD_STRATS.map((_, i) => i + 1), [{ label: 'Average payoff', data: avg }], 'Payoff per round', '–', { kind: 'bar', categories: PD_STRATS.map(s => s.name) }),
-        line('match', 'Cumulative score: always defect against tit for tat', 'Round', '–', rounds, [{ label: 'Always defect', data: showcase.ci }, { label: 'Tit for tat', data: showcase.cj }, { label: 'Mutual co-operation (reference)', data: rounds.map(q => q * R), dash: true }], 'Cumulative payoff', '–'),
+        line('tournament', 'Average payoff per round in the round-robin tournament', 'Strategy', '–', PD_STRATS.map((_, i) => i + 1), [{ label: 'Expected payoff', data: avg }, { label: `Mean of ${NREP} sampled tournaments`, data: sMean }], 'Payoff per round', '–', { kind: 'bar', categories: PD_STRATS.map(s => s.name) }),
+        line('match', 'Cumulative score in one sampled match: always defect against tit for tat', 'Round', '–', rounds, [{ label: 'Always defect', data: showcase.ci }, { label: 'Tit for tat', data: showcase.cj }, { label: 'Mutual co-operation (reference)', data: rounds.map(q => q * R), dash: true }], 'Cumulative payoff', '–'),
         line('folk', 'Co-operating for ever against a single defection, facing grim trigger', 'Continuation probability', '–', ds, [{ label: 'Co-operate for ever', data: ds.map(() => R) }, { label: 'Defect once, then be punished', data: ds.map(d => (1 - d) * T + d * P) }], 'Normalised discounted payoff', '–'),
       ],
       checks: [
         check('Mutual defection is an equilibrium whenever T > R > P > S and players are self-interested', a.selfish && dilemma && !neDD ? 1 : 0, 0, 'Dominance argument against enumeration'),
         check('Tournament averages lie within the range of the payoff matrix', avg.some(q => q < lo - 1e-9 || q > hi + 1e-9) ? 1 : 0, 0, 'Every round pays one of T, R, P, S'),
         check('At least one outcome is Pareto-optimal', pareto.length >= 1 ? 0 : 1, 0, 'Guaranteed for any finite game'),
+        check('Sampled tournaments agree with the expected scores within sampling error', zMax, 6, `Largest difference between the mean of ${NREP} seeded tournaments and the exact expectation, in standard errors of that mean`),
       ],
       warnings,
     };
@@ -622,6 +653,10 @@ const prisonersDilemma = {
     out.push(bench('Tit for tat against always defect over 50 rounds', r.tj, S0 + (n - 1) * P, 'Exploited once, then mutual defection', 1e-12));
     out.push(bench('Always defect against tit for tat over 50 rounds', r.ti, T + (n - 1) * P, 'One temptation payoff, then mutual defection', 1e-12));
     out.push(bench('Grim trigger against tit for tat', pdMatch(3, 2, n, pay, rnd, 0, 0.5).ti, n * R, 'Uninterrupted mutual co-operation', 1e-12));
+    const e = v.eps_n, xc = pdExpect(1, 1, n, pay, e, 0.5).ti / n, xe = (1 - e) * (1 - e) * R + e * (1 - e) * (S0 + T) + e * e * P;
+    out.push(bench('Expected payoff of two unconditional co-operators with noisy moves', xe === 0 ? xc : xc / xe, xe === 0 ? 0 : 1, '(1 − ε)²R + ε(1 − ε)(S + T) + ε²P per round', 1e-12));
+    const xt = pdExpect(2, 4, n, pay, 0, v.p_c), pc = v.p_c, ye = (pc * R + (1 - pc) * S0) + (n - 1) * (pc * pc * R + pc * (1 - pc) * (S0 + T) + (1 - pc) * (1 - pc) * P);
+    out.push(bench('Expected score of tit for tat against the random strategy', ye === 0 ? xt.ti : xt.ti / ye, ye === 0 ? 0 : 1, 'First round co-operates; thereafter it repeats an independent draw of the random strategy', 1e-12));
     const s = this.solve({ ...v, T_p: 5, R_p: 3, P_p: 1, S_p: 0 }, { selfish: true, no_noise: true, self_play: true });
     out.push(bench('Number of pure Nash equilibria for payoffs 5, 3, 1, 0', val(s, 'n_ne'), 1, 'Unique equilibrium of mutual defection', 1e-12));
     out.push(bench('Critical continuation probability for payoffs 5, 3, 1, 0', val(s, 'delta_c'), 0.5, '(T − R)/(T − P)', 1e-12));
@@ -668,8 +703,8 @@ const prisonersDilemma = {
     { name: 'Superrationality and evidential reasoning', text: 'Players who know they reason alike may treat their choices as correlated and co-operate. Causal decision theorists reply that the choices are causally independent, so dominance still applies.' },
     { name: 'Evolutionary dynamics', text: 'In populations with assortment, kin structure or repeated encounters, co-operative strategies can spread without any appeal to individual rationality.' },
   ],
-  limits: 'Symmetric two-player game with two moves and perfect information about the payoffs. The tournament uses five fixed strategies and a fixed number of rounds; its ranking depends on the field of entrants and should not be read as a general result. Mixed-strategy equilibria are not enumerated.',
-  numerics: { method: 'Exhaustive enumeration of pure-strategy profiles; deterministic round-robin simulation with a seeded generator for random moves and noise', resolution: 'n_rounds' },
+  limits: 'Symmetric two-player game with two moves and perfect information about the payoffs. The tournament uses five fixed strategies and a fixed number of rounds; its ranking depends on the field of entrants and should not be read as a general result. With noisy moves an unforgiving strategy is soon triggered and then behaves as always defect, so the two differ only by what happens in the first few rounds and their lead over one another falls as one over the number of rounds. Mixed-strategy equilibria are not enumerated.',
+  numerics: { method: 'Exhaustive enumeration of pure-strategy profiles; exact expected scores of the round-robin tournament from the Markov chain of each pair of strategies, cross-checked by seeded sample tournaments', resolution: 'n_rounds' },
   extensions: ['Win-stay lose-shift, generous tit for tat and zero-determinant strategies', 'Replicator dynamics over the strategy population', 'Spatial games on a lattice', 'n-player public-goods games'],
 };
 

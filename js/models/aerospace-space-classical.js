@@ -97,13 +97,14 @@ function yoshida4(acc, q0, v0, h, n, stride = 1) {
   }
   return { t, q: Q, v: V };
 }
-/** Classical RK4 for q'' = acc(q), same output layout as yoshida4 (used as the non-symplectic comparison). */
-function rk4second(acc, q0, v0, h, n, stride = 1) {
+/**
+ * Classical RK4 for q'' = acc(q), same output layout as yoshida4 (used as the non-symplectic comparison).
+ * With rs2 > 0 the run ends where |q|² falls to rs2 (a surface about the origin): the step that crosses it is retaken as the fraction that ends on it, and hit is set.
+ */
+function rk4second(acc, q0, v0, h, n, stride = 1, rs2 = 0) {
   const m = q0.length, q = Array.from(q0), v = Array.from(v0), z = () => new Array(m).fill(0);
-  const a1 = z(), a2 = z(), a3 = z(), a4 = z(), qq = z(), t = [], Q = [], V = [];
-  for (let k = 0; k <= n; k++) {
-    if (k % stride === 0 || k === n) { t.push(k * h); Q.push(q.slice()); V.push(v.slice()); }
-    if (k === n) break;
+  const a1 = z(), a2 = z(), a3 = z(), a4 = z(), qq = z(), t = [], Q = [], V = [], r2 = () => { let s = 0; for (let j = 0; j < m; j++) s += q[j] * q[j]; return s; };
+  const step = h => {
     acc(q, a1);
     for (let j = 0; j < m; j++) qq[j] = q[j] + 0.5 * h * v[j];
     acc(qq, a2);
@@ -112,9 +113,25 @@ function rk4second(acc, q0, v0, h, n, stride = 1) {
     for (let j = 0; j < m; j++) qq[j] = q[j] + h * v[j] + 0.5 * h * h * a2[j];
     acc(qq, a4);
     for (let j = 0; j < m; j++) { q[j] += h * v[j] + h * h / 6 * (a1[j] + a2[j] + a3[j]); v[j] += h / 6 * (a1[j] + 2 * a2[j] + 2 * a3[j] + a4[j]); }
+  };
+  const qs = z(), vs = z(), back = () => { for (let j = 0; j < m; j++) { q[j] = qs[j]; v[j] = vs[j]; } };
+  let hit = false;
+  for (let k = 0; k <= n; k++) {
+    if (k % stride === 0 || k === n) { t.push(k * h); Q.push(q.slice()); V.push(v.slice()); }
+    if (k === n) break;
+    if (!(rs2 > 0)) { step(h); continue; }
+    for (let j = 0; j < m; j++) { qs[j] = q[j]; vs[j] = v[j]; }
+    step(h); if (!(r2() < rs2)) continue;
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 60 && hi - lo > 1e-15; i++) { const mid = 0.5 * (lo + hi); back(); step(mid * h); if (r2() < rs2) hi = mid; else lo = mid; }
+    back(); step(lo * h); hit = true;
+    if (lo > 0 || k % stride !== 0) { t.push((k + lo) * h); Q.push(q.slice()); V.push(v.slice()); }
+    break;
   }
-  return { t, q: Q, v: V };
+  return { t, q: Q, v: V, hit };
 }
+/** Composite Simpson quadrature of f over [a, b] with n (even) intervals. */
+const simpson = (f, a, b, n = 200) => { const h = (b - a) / n; let s = f(a) + f(b); for (let i = 1; i < n; i++) s += (i % 2 ? 4 : 2) * f(a + i * h); return s * h / 3; };
 /** Least-squares slope of ys against xs. */
 const slope = (xs, ys) => { const n = xs.length; if (n < 2) return 0; const mx = N.mean(xs), my = N.mean(ys); let sxy = 0, sxx = 0; for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; } return sxx > 0 ? sxy / sxx : 0; };
 /**
@@ -785,7 +802,7 @@ const hohmann = {
     const wrap = x => { const y = ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI; return y; };
     const phase = a.impulsive ? wrap(main.sweep - n2 * main.tof) : NaN;
     const syn = Math.abs(n1 - n2) > 1e-12 * n1 ? 2 * Math.PI / Math.abs(n1 - n2) : NaN;
-    const mp = v.m_0 * (1 - Math.exp(-s.dvTot / s.ve));
+    const xr = s.dvTot / s.ve, mp = -v.m_0 * Math.expm1(-xr), mf = v.m_0 * Math.exp(-xr);
     const [tu, tun] = main.tof > 2 * 86400 ? [86400, 'd'] : [3600, 'h'];
     // profile along the transfer
     let tt = [], rr = [], vv = [];
@@ -812,6 +829,7 @@ const hohmann = {
     if (!a.impulsive && v.F_T / v.m_0 > 0.01 * mu / Math.max(r1, r2) ** 2) warnings.push('The thrust acceleration is not small against local gravity, so the quasi-circular spiral approximation is poor.');
     if (!a.impulsive && !a.coplanar && v.di > 2) warnings.push('The plane change exceeds 2 rad (114.6°), the limit of Edelbaum\'s expression; the velocity increment is held at its saturated value, the sum of the two circular speeds.');
     if (!a.impulsive && !a.circular) warnings.push('The low-thrust estimate treats the initial orbit as circular at the stated radius.');
+    if (xr > Math.log(1000)) warnings.push(`The velocity increment is ${lab(xr)} times the exhaust velocity, so the rocket equation requires a mass ratio ${xr > 700 ? 'beyond 10³⁰⁴' : `of ${lab(Math.exp(xr))}`}${xr > 36 ? ': the propellant mass shown is indistinguishable from the initial mass' : ''}. No single vehicle with this specific impulse can fly the transfer.`);
     return {
       scalars: [
         scalar('v_c1', 'Circular speed at the initial radius', s.vc1, 'm/s', { show: 'km/s' }), scalar('v_c2', 'Circular speed at the final radius', s.vc2, 'm/s', { show: 'km/s' }),
@@ -835,8 +853,8 @@ const hohmann = {
       ],
       paths: [path3d('transfer', 'Transfer geometry', paths, { equal: true, unit: 'm' })],
       checks: [
-        check('Angular momentum on the Hohmann ellipse', (hp - ha) / hp, 1e-12, 'r·v at the two apsides, each from the vis-viva equation'),
-        check('Rocket-equation round trip', mp > 0 ? (-s.ve * Math.log(1 - mp / v.m_0) - s.dvTot) / s.dvTot : 0, 1e-9, 'Velocity increment recovered from the propellant mass'),
+        check('Angular momentum on the Hohmann ellipse', (hp - ha) / hp, 1e-12 + Number.EPSILON * Math.max(r1 / r2, r2 / r1), 'r·v at the two apsides, each from the vis-viva equation. At the apsis of larger radius 2/r − 1/a is a small difference when the radii are far apart: the tolerance is 10⁻¹², plus one rounding unit times the radius ratio'),
+        check('Rocket-equation round trip', !(mp > 0) || xr > 700 ? 0 : ((xr < 1 ? -s.ve * Math.log1p(-mp / v.m_0) : s.ve * Math.log(v.m_0 / mf)) - s.dvTot) / s.dvTot, 1e-9, xr > 700 ? 'Not evaluated: the mass ratio exceeds 10³⁰⁴ and the final mass is below the smallest representable number' : 'Velocity increment recovered from the propellant mass (from the final mass m₀ − m_p when most of the vehicle is propellant, so that no small difference is formed)'),
       ],
       warnings,
     };
@@ -1096,6 +1114,42 @@ function yoshidaLog(accU, q0, v0, U0, h, tEnd, n, stride = 1) {
   return { t, q: Q, v: V };
 }
 /**
+ * The same scheme for motion perturbed near a body of finite size about the centre. A perturbing attraction is not followed exactly as the conic is, so the steps are graded:
+ * none turns through more than the angle c about the centre nor covers more than the fraction c of the distance from it (dθ/ds = h_a/(r²U), dr/ds = v_r/U).
+ * The run ends where |q|² falls to rs2, the surface of the body: the step that crosses it is retaken as the fraction (found by bisection) that ends on it, and hit is set.
+ * The state z holds x, y, dv_x, dv_y, the two compensation terms and t.
+ */
+function yoshidaLogTo(accU, q0, v0, U0, h, tEnd, n, stride, rs2, c) {
+  const w1 = 1 / (2 - Math.cbrt(2)), w0 = -Math.cbrt(2) * w1, a = [0, 0], q = [0, 0], [ux, uy] = v0, t = [], Q = [], V = [], nMax = 60 * n;
+  const ds = [0.5 * w1 * h, 0.5 * (w1 + w0) * h, 0.5 * (w1 + w0) * h, 0.5 * w1 * h], ks = [w1 * h, w0 * h, w1 * h], z = Float64Array.of(q0[0], q0[1], 0, 0, 0, 0, 0), sv = new Float64Array(7);
+  const step = f => {
+    let dx = z[2], dy = z[3], cx = z[4], cy = z[5], tt = z[6]; q[0] = z[0]; q[1] = z[1];
+    for (let s = 0; s < 4; s++) {
+      const dt = f * ds[s] / (U0 + (ux + 0.5 * dx) * dx + (uy + 0.5 * dy) * dy), yx = dt * (ux + dx) - cx, yy = dt * (uy + dy) - cy, xn = q[0] + yx, yn = q[1] + yy;
+      cx = (xn - q[0]) - yx; cy = (yn - q[1]) - yy; q[0] = xn; q[1] = yn; tt += dt;
+      if (s === 3) break;
+      const g = f * ks[s] / accU(q, a); dx += g * a[0]; dy += g * a[1];
+    }
+    z[0] = q[0]; z[1] = q[1]; z[2] = dx; z[3] = dy; z[4] = cx; z[5] = cy; z[6] = tt;
+  };
+  const rec = () => { t.push(z[6]); Q.push([z[0], z[1]]); V.push([ux + z[2], uy + z[3]]); }, below = () => z[0] * z[0] + z[1] * z[1] < rs2;
+  let hit = false;
+  for (let k = 0; ; k++) {
+    const last = k >= nMax || z[6] >= tEnd;
+    if (k % stride === 0 || last) rec();
+    if (last) break;
+    const vx = ux + z[2], vy = uy + z[3], r2 = z[0] * z[0] + z[1] * z[1], gU = c * (U0 + (ux + 0.5 * z[2]) * z[2] + (uy + 0.5 * z[3]) * z[3]) * r2 / h;
+    const f = Math.min(1, gU / Math.abs(z[0] * vy - z[1] * vx), gU / Math.abs(z[0] * vx + z[1] * vy));
+    sv.set(z); step(f); if (!below()) continue;
+    let lo = 0, hi = f;
+    for (let i = 0; i < 60 && hi - lo > 1e-15; i++) { const mid = 0.5 * (lo + hi); z.set(sv); step(mid); if (below()) hi = mid; else lo = mid; }
+    z.set(sv); step(lo); hit = true;
+    if (lo > 0 || k % stride !== 0) rec();
+    break;
+  }
+  return { t, q: Q, v: V, hit };
+}
+/**
  * Universal anomaly χ reached a time t after the state (distance r0, radial speed vr) on a Kepler conic with α = 1/a (zero or negative when unbound):
  * √μ t = (r0 vr/√μ) χ² C(αχ²) + (1 − α r0) χ³ S(αχ²) + r0 χ, with C and S the Stumpff functions. Because dχ/dt = √μ/r, ∫(μ/r) dt = √μ χ.
  */
@@ -1111,20 +1165,34 @@ function universalChi(mu, r0, vr, alpha, t) {
   for (let i = 0; i < 100 && hi - lo > 1e-14 * hi; i++) { const mid = 0.5 * (lo + hi); if (f(mid) > 0) hi = mid; else lo = mid; }
   return 0.5 * (lo + hi);
 }
+// Runge–Kutta comparison: limit of h·Ω beyond which the fixed step no longer follows the motion, the largest number of steps, and the constants of the expected drift. A step errs by (h·Ω)⁵ of the
+// local state; in the energy and the angular momentum that order survives only in proportion to the radial part of the motion, |r·v|/(r v), and on a circle the next order is left (as for the harmonic
+// oscillator: measured (h·Ω)⁶/108 of v²/2 + μ/r and (h·Ω)⁶/72 of h_a per step). Constants [radial, circular] are about three times the largest found over random flights (5.9 and 0.018; 1/108 and 1/72).
+const RK_LIMIT = 0.1, RK_STEPS = 200000, RK_CE = [20, 0.03], RK_CH = [0.05, 0.05];
 function keplerRun(v, a) {
   const mu = v.GM * (a.fixed_centre ? 1 : 1 + v.q_m), r0 = v.r_0, vt = v.v_0 * Math.cos(v.phi), vr = v.v_0 * Math.sin(v.phi), hA = r0 * vt;
   const kJ = a.point_mass ? 0 : 1.5 * mu * v.J_2 * v.R_b ** 2, kG = a.newtonian ? 0 : 3 * mu * hA * hA / C.c ** 2, k4 = kJ + kG;
   const eps = v.v_0 ** 2 / 2 - mu / r0, bound = eps < 0, sma = -mu / (2 * eps), ecc = Math.sqrt(Math.max(0, 1 + 2 * eps * hA * hA / (mu * mu)));
   const p = hA * hA / mu, rp = p / (1 + ecc), ra = bound ? sma * (1 + ecc) : Infinity;
   const Tc = 2 * Math.PI * Math.sqrt(r0 ** 3 / mu), T = bound ? 2 * Math.PI * Math.sqrt(sma ** 3 / mu) : NaN, unit = bound ? T : Tc;
-  const boost = N.clamp(unit / (2 * Math.PI * Math.sqrt(Math.max(rp, 1e-4 * r0) ** 3 / mu)), 1, 50), tEnd = v.n_orb * unit;
+  // local rate of the motion, Ω² = ½(|acceleration|/r + v²/r²) with v from the energy: the angular rate on a circle, and the rate at which the attraction changes along any other path
+  const eFull = eps - k4 / (3 * r0 ** 3), rate2 = x => Math.max(eFull / (x * x) + 1.5 * mu / x ** 3 + 5 * k4 / (6 * x ** 5), mu / x ** 3);
+  const rG = a.newtonian ? 0 : 2 * mu / C.c ** 2, rB = a.point_mass ? 0 : v.R_b, Rs = Math.max(rG, rB), horizon = rG > rB, inside = r0 < Rs;
+  const boost = Math.max(1, unit * Math.sqrt(rate2(Math.min(r0, Math.max(rp, Rs)))) / (2 * Math.PI)), tEnd = v.n_orb * unit;
   // symplectic scheme: n_step steps per period, uniform in the regularised time s with ds = U dt (they crowd at periapsis as steps in eccentric anomaly do); RK4: fixed steps in t, refined for an eccentric orbit.
   // On the Kepler conic ∫U dt is 2π√(μa) per period when bound and √μ times the universal anomaly otherwise, which fixes the step in s that covers the simulated time in n steps.
-  const n = a.symplectic ? Math.max(20, Math.round(v.n_orb * v.n_step)) : Math.max(20, Math.min(Math.round(v.n_orb * v.n_step * boost), 80000)), stride = every(n, 20000);
+  const n = a.symplectic ? Math.max(20, Math.round(v.n_orb * v.n_step)) : Math.max(20, Math.round(Math.min(v.n_orb * v.n_step * boost, RK_STEPS))), stride = every(n, 20000);
   const floor2 = (1e-5 * r0) ** 2;
   const acc = (q, o) => { const r2 = Math.max(q[0] * q[0] + q[1] * q[1], floor2), r = Math.sqrt(r2), s = -mu / (r2 * r) - k4 / (r2 * r2 * r); o[0] = s * q[0]; o[1] = s * q[1]; };
   const accU = (q, o) => { const r2 = q[0] * q[0] + q[1] * q[1], r = Math.sqrt(r2), s = -mu / (r2 * r) - k4 / (r2 * r2 * r); o[0] = s * q[0]; o[1] = s * q[1]; return mu / r + k4 / (3 * r2 * r); };
-  const run = a.symplectic ? yoshidaLog(accU, [r0, 0], [vr, vt], mu / r0 + k4 / (3 * r0 ** 3), (bound ? v.n_orb * 2 * Math.PI * Math.sqrt(mu * sma) : Math.sqrt(mu) * universalChi(mu, r0, vr, -2 * eps / mu, tEnd)) / n, tEnd, n, stride) : rk4second(acc, [r0, 0], [vr, vt], tEnd / n, n, stride);
+  // The perturbing attractions belong to a real body, not to a point: an oblate body has the stated radius, and the relativistic term has the horizon 2μ/c², inside which
+  // its 1/r⁴ attraction has already overcome the angular-momentum barrier (the effective potential is Schwarzschild's). The flight ends where it meets the larger of the two.
+  // Runge–Kutta comparison: a fixed step h follows the motion only while h·Ω is small. The step is set to give n_step steps per local revolution at the closest approach, up to RK_STEPS steps in all;
+  // if that is not enough, then inside the radius where h·Ω reaches RK_LIMIT the step no longer resolves the passage, and the comparison ends there instead of returning numbers that mean nothing.
+  const hRK = tEnd / n, want = (RK_LIMIT / hRK) ** 2;
+  let rRes = 0; if (!a.symplectic) { if (rate2(r0) >= want) rRes = Infinity; else { let lo = 0, hi = r0; for (let i = 0; i < 60; i++) { const mid = 0.5 * (lo + hi); if (rate2(mid) > want) lo = mid; else hi = mid; } rRes = hi; } }
+  const lostAt = rRes > Rs ? rRes : 0, rStop = Math.max(Rs, rRes);
+  const run = r0 < rStop ? { t: [0], q: [[r0, 0]], v: [[vr, vt]], hit: true } : a.symplectic ? (Rs > 0 ? yoshidaLogTo : yoshidaLog)(accU, [r0, 0], [vr, vt], mu / r0 + k4 / (3 * r0 ** 3), (bound ? v.n_orb * 2 * Math.PI * Math.sqrt(mu * sma) : Math.sqrt(mu) * universalChi(mu, r0, vr, -2 * eps / mu, tEnd)) / n, tEnd, n, stride, Rs * Rs, 2 * Math.PI / v.n_step) : rk4second(acc, [r0, 0], [vr, vt], hRK, n, stride, rStop * rStop);
   const m = run.t.length, r = new Array(m), sp = new Array(m), en = new Array(m), hh = new Array(m), th = new Array(m), om = new Array(m);
   for (let i = 0; i < m; i++) {
     const x = run.q[i][0], y = run.q[i][1], ux = run.v[i][0], uy = run.v[i][1];
@@ -1132,6 +1200,9 @@ function keplerRun(v, a) {
     en[i] = 0.5 * sp[i] ** 2 - mu / r[i] - k4 / (3 * r[i] ** 3);
     if (i === 0) th[i] = 0; else { let d = Math.atan2(y, x) - Math.atan2(run.q[i - 1][1], run.q[i - 1][0]); if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI; th[i] = th[i - 1] + d; }
   }
+  // drift expected of the fixed-step fourth-order scheme (constants and reasoning at RK_CE): the errors of successive steps add along the flight, each sample standing for the steps up to the next
+  let sE = 0, sH = 0;
+  if (!a.symplectic) for (let i = 0; i < m - 1; i++) { const hO = hRK * Math.sqrt(0.5 * (mu / r[i] ** 3 + k4 / r[i] ** 5 + (sp[i] / r[i]) ** 2)), w = (run.t[i + 1] - run.t[i]) / hRK * hO ** 5, g = Math.abs(run.q[i][0] * run.v[i][0] + run.q[i][1] * run.v[i][1]) / (r[i] * sp[i]); sE += w * (RK_CE[0] * g + RK_CE[1] * hO) * (0.5 * sp[i] ** 2 + mu / r[i] + k4 / (3 * r[i] ** 3)); sH += w * (RK_CH[0] * g + RK_CH[1] * hO) * Math.abs(hh[i]); }
   // sidereal period: time at which the swept angle reaches 2π (angular rate taken as linear across the step)
   let Tnum = NaN; const sgn = Math.sign(hA) || 1;
   for (let i = 1; i < m; i++) if (sgn * th[i] >= 2 * Math.PI) {
@@ -1146,7 +1217,7 @@ function keplerRun(v, a) {
   const pe = bound ? p : NaN;
   const advTh = (a.newtonian ? 0 : 6 * Math.PI * mu / (C.c ** 2 * pe)) + (a.point_mass ? 0 : 3 * Math.PI * v.J_2 * (v.R_b / pe) ** 2);
   const e0 = en[0], escale = Math.max(Math.abs(e0), 0.5 * v.v_0 ** 2);
-  return { mu, r0, hA, k4, eps, bound, sma, ecc, p, rp, ra, T, Tc, tEnd, n, run, m, r, sp, th, Tnum, adv, advTh, dE: en.map(e => (e - e0) / escale), dH: hh.map(x => (x - hA) / (Math.abs(hA) || 1)) };
+  return { mu, r0, hA, k4, eps, bound, sma, ecc, p, rp, ra, T, Tc, tEnd, n, run, m, r, sp, th, Rs, horizon, inside, escale, lostAt, lost: !!run.hit && lostAt > 0 && !inside, driftE: sE / escale, driftH: sH / (Math.abs(hA) || 1), hit: !!run.hit && !(lostAt > 0 && !inside), tStop: run.hit ? run.t[m - 1] : NaN, tHit: run.hit && !(lostAt > 0 && !inside) ? run.t[m - 1] : NaN, Tnum, adv, advTh, dE: en.map(e => (e - e0) / escale), dH: hh.map(x => (x - hA) / (Math.abs(hA) || 1)) };
 }
 const AU = 1.495978707e11;
 const twoBody = {
@@ -1176,7 +1247,7 @@ const twoBody = {
   assumptions: [
     asm('fixed_centre', 'The central body is fixed: the orbiting body is a test mass.', { why: 'Mass ratio much less than 1', alt: 'Both bodies orbit their common centre of mass; the relative motion feels the combined mass.' }),
     asm('newtonian', 'Gravity is exactly Newtonian inverse-square.', { why: 'Weak field, low speed', alt: 'The leading relativistic (Schwarzschild) correction is added, producing perihelion precession.' }),
-    asm('point_mass', 'The central body is spherically symmetric (a point mass).', { why: 'Distant orbit', alt: 'The oblateness term J₂ is added for an orbit in the equatorial plane.' }),
+    asm('point_mass', 'The central body is a point mass: spherically symmetric and without extent, so a trajectory can pass any distance from the centre (down to the horizon 2μ/c² when the relativistic correction is on).', { why: 'Distant orbit', alt: 'The body has the stated equatorial radius: a trajectory that reaches that radius (or the horizon 2μ/c², if larger) strikes the body and ends there. The oblateness term J₂ is added for an orbit in the equatorial plane; set J₂ to zero for a spherical body of that radius.' }),
     asm('symplectic', 'The equations are integrated with a fourth-order symplectic (Yoshida) scheme in a regularised time.', { why: 'No secular energy drift, and a step that shortens at periapsis', alt: 'Classical fourth-order Runge–Kutta with a fixed time step, for comparison of the energy error.' }),
   ],
   symbols: { x: ['Position, first Cartesian component', 'm'], y: ['Position, second Cartesian component', 'm'], t: ['Time', 's'], r: ['Separation', 'm'], v: ['Speed', 'm/s'], v_x: ['Velocity, first component', 'm/s'], v_y: ['Velocity, second component', 'm/s'], eps: ['Specific orbital energy', 'J/kg'], h_a: ['Specific angular momentum', 'm^2/s'], a_sm: ['Semi-major axis', 'm'], ecc: ['Eccentricity', '1'], T_K: ['Kepler period', 's'], mu_g: ['Effective gravitational parameter', 'm^3/s^2'], dw: ['Apsidal advance per orbit', 'rad'] },
@@ -1205,15 +1276,25 @@ const twoBody = {
     { text: a.symplectic ? 'The motion is advanced with a composition of three leapfrog (drift–kick–drift) steps whose weights cancel the leading error term, taken in a regularised time s with ds = U dt, where U is the potential function μ/r plus the perturbation. The step in t then shortens in proportion to r near periapsis, and for pure inverse-square gravity each sub-step lies exactly on the Kepler conic. Each sub-step is a canonical map of the time-transformed Hamiltonian ln(v²/2 + B) − ln U, B being the binding energy, so the scheme conserves angular momentum exactly and the energy error stays bounded.' : 'The motion is advanced with the classical fourth-order Runge–Kutta scheme, which is accurate per step but lets the energy drift slowly.', tex: a.symplectic ? '\\mathrm{d}s = U\\,\\mathrm{d}t,\\qquad w_1 = \\frac{1}{2-2^{1/3}},\\quad w_0 = -\\frac{2^{1/3}}{2-2^{1/3}}' : '\\mathbf y_{n+1} = \\mathbf y_n + \\tfrac{h}{6}(k_1 + 2k_2 + 2k_3 + k_4)' },
   ],
   solve(v, a) {
-    const k = keplerRun(v, a), q = a.fixed_centre ? 0 : v.q_m, warnings = [];
+    const k = keplerRun(v, a), q = a.fixed_centre ? 0 : v.q_m, warnings = [], dEmax = N.maxOf(k.dE.map(Math.abs)), dHmax = N.maxOf(k.dH.map(Math.abs));
     const type = !k.bound ? 2 : k.ecc < 1e-3 ? 0 : 1, TYPES = ['Circular orbit', 'Elliptical orbit', 'Unbound (hyperbolic or parabolic) trajectory'];
-    if (!a.symplectic && k.rp < 0.02 * k.r0) warnings.push('The periapsis is very close to the centre compared with the starting distance. A fixed time step resolves that passage poorly; raise the steps per period and treat conservation errors as the guide to accuracy.');
-    if (k.run.t[k.m - 1] < k.tEnd) warnings.push('The simulation stopped before the stated time: the trajectory falls towards the centre, where the perturbing attraction overcomes the angular-momentum barrier and the regularised step shrinks without limit.');
-    if (!a.point_mass && k.rp < v.R_b) warnings.push('The periapsis lies inside the stated body radius: the trajectory intersects the central body.');
+    if (!a.symplectic && !k.lost && k.rp < 0.02 * k.r0) warnings.push('The periapsis is very close to the centre compared with the starting distance. A fixed time step resolves that passage poorly; raise the steps per period and treat conservation errors as the guide to accuracy.');
+    const [tu, tun] = k.tEnd > 3 * 3.15576e7 ? [3.15576e7, 'yr'] : k.tEnd > 3 * 86400 ? [86400, 'd'] : k.tEnd > 3 * 3600 ? [3600, 'h'] : [1, 's'];
+    const body = k.horizon ? `the horizon of the central mass (2μ/c² = ${lab(k.Rs / 1000, 'km')}${a.point_mass ? '' : `, which lies outside the stated body radius of ${lab(v.R_b / 1000, 'km')}`})` : `the surface of the central body (its stated equatorial radius R_b = ${lab(k.Rs / 1000, 'km')})`, end = k.inside ? `the starting point lies inside the ${k.horizon ? 'horizon' : 'body'}` : `the trajectory ${k.horizon ? 'crosses the horizon' : 'strikes the body'}`;
+    if (k.inside) warnings.push(`The starting point lies inside ${body}, where the exterior field used here has no meaning: there is no flight to simulate. ${k.horizon ? 'Start farther out.' : 'Start outside the body, or set its equatorial radius.'}`);
+    else if (k.hit) warnings.push(`The trajectory ${k.horizon ? 'crosses' : 'strikes'} ${body} at t = ${lab(k.tHit / tu, tun)}, after ${lab(Math.abs(k.th[k.m - 1]) / DEG, '°')} about the centre. The simulation ends there, and the conservation checks cover the flight up to that point.`);
+    const lostWhy = k.lost ? (k.m < 2 ? 'the fixed time step does not resolve the motion even at the starting point' : `the fixed time step stops resolving the motion at t = ${lab(k.tStop / tu, tun)}`) : '';
+    if (k.lost) warnings.push(`${k.m < 2 ? 'The fixed time step of the Runge–Kutta comparison is already too long at the starting point' : `The fixed time step of the Runge–Kutta comparison becomes too long at t = ${lab(k.tStop / tu, tun)}, at a distance of ${lab(k.lostAt / 1000, 'km')}`}: there the step times the local rate of the motion, Ω = √(½|acceleration|/r + ½v²/r²), exceeds ${RK_LIMIT}, fewer than ${Math.round(2 * Math.PI / RK_LIMIT)} steps to a local revolution, and the passage closer in cannot be followed. The comparison ends there${k.m < 2 ? '' : ', and the conservation checks cover the flight up to that point'}. Raise the steps per period, or use the symplectic scheme, whose step shortens near the centre.`);
+    if (!a.symplectic && k.m > 1) warnings.push(`Over the simulated flight the Runge–Kutta scheme changed the energy by ${lab(dEmax)} and the angular momentum by ${lab(dHmax)} of their starting values. Such drift is the expected behaviour of a fixed-step scheme that is not symplectic (about ${lab(k.driftE)} and ${lab(k.driftH)} are expected of a fourth-order scheme on this flight at this step), and it grows with every passage; the symplectic scheme, the default, keeps the angular momentum exactly and the energy error bounded.`);
+    if (!k.hit && !k.lost && k.run.t[k.m - 1] < k.tEnd) warnings.push('The simulation stopped before the stated time: the trajectory falls towards the centre, where the perturbing attraction overcomes the angular-momentum barrier and the regularised step shrinks without limit.');
+    if (!k.hit && !k.lost && k.rp < k.Rs) warnings.push(`The periapsis of the unperturbed conic lies inside ${k.horizon ? 'the horizon 2μ/c²' : 'the stated body radius'}, but ${k.horizon ? 'the horizon' : 'the body'} is not reached during the simulated flight.`);
+    const gone = k.hit && k.rp < k.Rs, rmin = k.hit || k.lost ? N.minOf(k.r) : k.rp, rkNo = { text: 'Not applicable: the symplectic scheme is in use' }, rkRound = a.symplectic ? 1 : Math.max(1, 0.1 * Math.sqrt(k.n));   // rounding errors of the Runge–Kutta steps accumulate as a random walk
+    const roundE = 1e3 * Number.EPSILON * k.mu / (rmin * Math.max(Math.abs(k.eps), 0.5 * v.v_0 ** 2)), roundH = 1e2 * Number.EPSILON * N.maxOf(k.r.map((x, i) => x * k.sp[i])) / (Math.abs(k.hA) || 1);
+    // truncation error of the fourth-order scheme: it follows the Kepler conic exactly, so only the perturbing potential, largest at the closest approach, is in error, by the fourth power of the step in angle
+    const trunc = a.symplectic && k.k4 > 0 ? (2 * Math.PI / v.n_step) ** 4 * k.k4 / (3 * N.minOf(k.r) ** 3 * k.escale) : 0;
     if (!k.bound) warnings.push('The specific energy is not negative, so the body escapes; the period is undefined and the simulation covers the stated number of local circular periods.');
     if (!a.newtonian && k.mu / (k.rp * C.c ** 2) > 0.01) warnings.push('The orbit reaches a strong-field region where the first-order relativistic correction is inadequate.');
     const sub = every(k.m, 600), idx = k.run.t.map((_, i) => i).filter(i => i % sub === 0 || i === k.m - 1);
-    const [tu, tun] = k.tEnd > 3 * 3.15576e7 ? [3.15576e7, 'yr'] : k.tEnd > 3 * 86400 ? [86400, 'd'] : k.tEnd > 3 * 3600 ? [3600, 'h'] : [1, 's'];
     const tt = idx.map(i => k.run.t[i] / tu), X = idx.map(i => k.run.q[i][0]), Y = idx.map(i => k.run.q[i][1]);
     const fs = every(k.m, 240), fi = k.run.t.map((_, i) => i).filter(i => i % fs === 0);
     const f1 = -q / (1 + q), f2 = 1 / (1 + q), lim = 1.1 * N.maxOf(idx.map(i => k.r[i]));
@@ -1222,14 +1303,17 @@ const twoBody = {
         scalar('type', 'Orbit type', type, '1', { text: TYPES[type] }),
         scalar('eps', 'Specific orbital energy', k.eps, 'J/kg'), scalar('h_a', 'Specific angular momentum', k.hA, 'm^2/s'),
         scalar('a_sm', 'Semi-major axis', k.sma, 'm', { show: 'AU' }), scalar('ecc', 'Eccentricity', k.ecc, '1'),
-        scalar('r_p', 'Periapsis distance', k.rp, 'm', { show: 'AU' }), scalar('r_a', 'Apoapsis distance', k.bound ? k.ra : NaN, 'm', { show: 'AU', text: k.bound ? undefined : 'None: the trajectory is unbound' }),
-        scalar('T_K', 'Period from Kepler\'s third law', k.T, 's', { show: 'd', text: k.bound ? undefined : 'Undefined: the trajectory is unbound' }),
-        scalar('T_num', 'Period measured from the simulation', k.Tnum, 's', { show: 'd', text: Number.isFinite(k.Tnum) ? undefined : 'A full revolution was not completed' }),
+        scalar('r_p', 'Periapsis distance', gone ? NaN : k.rp, 'm', { show: 'AU', text: gone ? `Not reached: ${end}` : undefined }), scalar('r_a', 'Apoapsis distance', k.bound ? k.ra : NaN, 'm', { show: 'AU', text: k.bound ? undefined : 'None: the trajectory is unbound' }),
+        scalar('T_K', 'Period from Kepler\'s third law', gone ? NaN : k.T, 's', { show: 'd', text: gone ? `None: ${end}, so no orbit is completed` : k.bound ? undefined : 'Undefined: the trajectory is unbound' }),
+        scalar('T_num', 'Period measured from the simulation', k.Tnum, 's', { show: 'd', text: Number.isFinite(k.Tnum) ? undefined : k.hit ? `None: ${end}` : k.lost ? `None: ${lostWhy}, before a revolution is completed` : 'A full revolution was not completed' }),
+        scalar('r_end', 'Radius at which the flight would end', k.Rs > 0 ? k.Rs : NaN, 'm', { show: 'km', text: k.Rs > 0 ? undefined : 'None: the central body is treated as a point under Newtonian gravity' }),
+        scalar('t_hit', 'Time at which the central body is reached', k.tHit, 's', { show: 'd', text: k.inside ? 'The starting point is already inside it' : k.hit ? undefined : k.lost && k.Rs > 0 ? `None: ${lostWhy}, before the body is reached` : k.Rs > 0 ? 'None: the body is not reached during the simulated flight' : 'Not applicable: a point mass under Newtonian gravity has no surface' }),
         scalar('v_c', 'Circular speed at the starting distance', Math.sqrt(k.mu / k.r0), 'm/s', { show: 'km/s' }), scalar('v_esc', 'Escape speed at the starting distance', Math.sqrt(2 * k.mu / k.r0), 'm/s', { show: 'km/s' }),
-        scalar('v_p', 'Speed at periapsis', k.hA !== 0 ? Math.abs(k.hA) / k.rp : NaN, 'm/s', { show: 'km/s', text: k.hA !== 0 ? undefined : 'Radial trajectory' }),
-        scalar('dE', 'Largest relative energy error', N.maxOf(k.dE.map(Math.abs)), '1'), scalar('dh', 'Largest relative angular-momentum error', N.maxOf(k.dH.map(Math.abs)), '1'),
+        scalar('v_p', 'Speed at periapsis', k.hA !== 0 && !gone ? Math.abs(k.hA) / k.rp : NaN, 'm/s', { show: 'km/s', text: gone ? `Not reached: ${end}` : k.hA !== 0 ? undefined : 'Radial trajectory' }),
+        scalar('dE', 'Largest relative energy error', dEmax, '1'), scalar('dh', 'Largest relative angular-momentum error', dHmax, '1'),
         scalar('dw', 'Apsidal advance per orbit (perturbation theory)', k.bound ? k.advTh : NaN, 'rad', { text: !k.bound ? 'Undefined: the trajectory is unbound' : a.newtonian && a.point_mass ? 'Zero: no perturbation is active' : undefined }),
-        scalar('dw_num', 'Apsidal advance per orbit (measured)', k.adv, 'rad', { text: Number.isFinite(k.adv) ? undefined : 'Needs an eccentric orbit and at least two periapsis passages' }),
+        scalar('dw_num', 'Apsidal advance per orbit (measured)', k.adv, 'rad', { text: Number.isFinite(k.adv) ? undefined : k.hit ? `None: ${end}` : k.lost ? `None: ${lostWhy}, before two periapsis passages` : 'Needs an eccentric orbit and at least two periapsis passages' }),
+        scalar('dE_rk', 'Energy drift expected of the fixed-step Runge–Kutta scheme', a.symplectic ? NaN : k.driftE, '1', a.symplectic ? rkNo : {}), scalar('dh_rk', 'Angular-momentum drift expected of the fixed-step Runge–Kutta scheme', a.symplectic ? NaN : k.driftH, '1', a.symplectic ? rkNo : {}),
       ],
       series: [
         line('radius', 'Separation against time', 'Time', tun, tt, [{ label: 'Separation', data: idx.map(i => k.r[i] / AU) }], 'Separation', 'AU'),
@@ -1239,8 +1323,8 @@ const twoBody = {
       anims: [motion('orbit', 'Orbital motion', fi.map(i => [[f1 * k.run.q[i][0], f1 * k.run.q[i][1]], [f2 * k.run.q[i][0], f2 * k.run.q[i][1]]]), fi.map(i => k.run.t[i]), { trails: true, labels: ['Central body', 'Orbiting body'], bounds: [-lim, lim, -lim, lim], unit: 'm' })],
       paths: [path3d('trajectory', 'Trajectory', [{ label: 'Orbit', x: X, y: Y, z: X.map(() => 0) }, { label: 'Centre', x: [0], y: [0], z: [0] }], { equal: true, unit: 'm' })],
       checks: [
-        check('Energy conservation', N.maxOf(k.dE.map(Math.abs)), Math.max(1e-8, 1e3 * Number.EPSILON * k.mu / (k.rp * Math.max(Math.abs(k.eps), 0.5 * v.v_0 ** 2))), 'Largest relative change of the specific energy, including perturbation potentials. The energy is the difference of kinetic and potential terms that each reach μ/r_p: the tolerance is 10⁻⁸, or 10³ rounding units of μ/r_p where that is larger'),
-        check('Angular-momentum conservation', N.maxOf(k.dH.map(Math.abs)), Math.max(1e-10, 1e2 * Number.EPSILON * N.maxOf(k.r.map((x, i) => x * k.sp[i])) / (Math.abs(k.hA) || 1)), 'Largest relative change of x·v_y − y·v_x. The two products cancel where the velocity is nearly radial: the tolerance is 10⁻¹⁰, or 10² rounding units of the largest r·v where that is larger'),
+        check('Energy conservation', dEmax, a.symplectic ? Math.max(1e-8, trunc, roundE) : k.driftE + rkRound * roundE, `Largest relative change of the specific energy, including perturbation potentials${k.hit ? ', over the flight up to the central body' : ''}. The energy is the difference of kinetic and potential terms that each reach μ/r at the closest approach: the tolerance is ${a.symplectic ? '10⁻⁸' : `the drift expected of a fixed-step fourth-order scheme, Σ(h·Ω)⁵(${RK_CE[0]} |r·v|/(r v) + ${RK_CE[1]} h·Ω)(v²/2 + μ/r) over the steps flown, with h the step and Ω = √(½|acceleration|/r + ½v²/r²) the local rate of the motion (each step errs by (h·Ω)⁵ of the local state, which reaches the energy in proportion to the radial part of the motion and at one order higher on a circle; the errors add, and the constants are about three times the largest measured)`}, ${a.symplectic ? 'or' : 'plus'} 10³ rounding units of that μ/r${a.symplectic ? ' where that is larger' : ', multiplied by a tenth of the square root of the number of steps because the rounding errors of the steps accumulate as a random walk'}${trunc > 1e-8 ? '; here it is set by the fourth-order truncation error, (2π/n_step)⁴ times the perturbing potential at the closest approach, which more steps per period reduce' : ''}`),
+        check('Angular-momentum conservation', dHmax, a.symplectic ? Math.max(1e-10, roundH) : k.driftH + rkRound * roundH, `Largest relative change of x·v_y − y·v_x. The two products cancel where the velocity is nearly radial: the tolerance is ${a.symplectic ? '10⁻¹⁰' : `the drift expected of a fixed-step fourth-order scheme, Σ(h·Ω)⁵(${RK_CH[0]} |r·v|/(r v) + ${RK_CH[1]} h·Ω) h_a over the steps flown`}, ${a.symplectic ? 'or' : 'plus'} 10² rounding units of the largest r·v${a.symplectic ? ' where that is larger' : ', multiplied by a tenth of the square root of the number of steps'}`),
       ],
       warnings,
     };
@@ -1250,7 +1334,7 @@ const twoBody = {
     const circ = keplerRun({ ...v, GM: R.BODIES.sun.GM, r_0: AU, v_0: Math.sqrt(R.BODIES.sun.GM / AU), phi: 0, n_orb: 1.5 }, on);
     const ell = keplerRun({ ...v, GM: R.BODIES.sun.GM, r_0: AU, v_0: 0.8 * Math.sqrt(R.BODIES.sun.GM / AU), phi: 0, n_orb: 1.5, n_step: 4000 }, on);
     return [
-      bench('Measured period of a circular orbit at 1 AU vs Kepler\'s third law', circ.Tnum, 2 * Math.PI * Math.sqrt(AU ** 3 / R.BODIES.sun.GM), 'T = 2π√(a³/GM)', 1e-9),
+      bench('Measured period of a circular orbit at 1 AU vs Kepler\'s third law', circ.Tnum, 2 * Math.PI * Math.sqrt(AU ** 3 / R.BODIES.sun.GM), 'T = 2π√(a³/GM). The scheme follows the conic exactly and errs only in the time, at fourth order (0.066 (2π/n_step)⁴ on a circle): the tolerance is 0.1 (2π/n_step)⁴ + 10⁻¹¹ at the present steps per period', 0.1 * (2 * Math.PI / v.n_step) ** 4 + 1e-11),
       bench('Measured period of an eccentric orbit vs Kepler\'s third law', ell.Tnum, ell.T, 'T = 2π√(a³/GM)', 1e-7),
       bench('Smallest simulated distance vs analytic periapsis', N.minOf(ell.r), ell.rp, 'r_p = a(1 − e)', 1e-6),
       bench('Gaussian year from the solar gravitational parameter', 2 * Math.PI * Math.sqrt(AU ** 3 / R.BODIES.sun.GM) / 86400, 365.2568983, 'Gaussian year, 365.2568983 d (IAU 1976 system of constants)', 1e-8),
@@ -1289,7 +1373,7 @@ const twoBody = {
   alternatives: [{ name: 'Analytic Kepler propagation', text: 'Solving Kepler\'s equation for the eccentric anomaly gives the position at any time without stepping.' }, { name: 'Kustaanheimo–Stiefel regularisation', text: 'Transforms the coordinates as well as the time, turning the Kepler problem into a harmonic oscillator that remains regular through a collision.' }, { name: 'Full post-Newtonian or geodesic equations', text: 'Needed for compact binaries and orbits near black holes, where the first-order correction fails.' }],
   hazards: [{ hazard: 'Misleading long-term predictions', cause: 'Step too coarse for an eccentric orbit', mitigation: 'Monitor the conservation errors and refine the step until results converge' }],
   standards: ['IAU 2015 Resolution B3 (nominal solar and planetary conversion constants)', 'IERS Conventions (2010)', 'CCSDS 502.0-B (orbit data messages)'],
-  limits: 'Planar motion about a single centre. Perturbations are limited to an equatorial J₂ term and the first-order relativistic correction. The symplectic scheme steps in a regularised time and follows eccentric and near-radial orbits; the Runge–Kutta comparison uses a fixed time step, refined for eccentric orbits but unsuitable for near-collision trajectories. Where the periapsis is a minute fraction of the starting distance the energy is known only to the rounding error of terms of size μ/r_p. Radiation pressure, drag and third bodies are not included.',
+  limits: 'Planar motion about a single centre. Perturbations are limited to an equatorial J₂ term and the first-order relativistic correction; with either switched on the flight ends where it meets the body, at the stated radius for an oblate body or at the horizon 2μ/c² for the relativistic term (a point mass under Newtonian gravity has no surface; the radius in use is reported). The symplectic scheme steps in a regularised time and follows eccentric and near-radial orbits; the Runge–Kutta comparison uses a fixed time step, chosen for the closest approach but limited in number; its energy and angular-momentum drift is reported against the drift expected of such a scheme, and where the step can no longer follow a close passage the comparison ends there and says so. Where the periapsis is a minute fraction of the starting distance the energy is known only to the rounding error of terms of size μ/r_p. Radiation pressure, drag and third bodies are not included.',
   numerics: { method: 'Fourth-order symplectic Yoshida composition of time-transformed (logarithmic-Hamiltonian) leapfrog steps, ds = U dt (or classical RK4 with a fixed time step for comparison)', order: 4, stability: 'Bounded energy error; exact conic for pure inverse-square gravity, the step in time shortening as r near periapsis', resolution: 'n_step' },
   optimise: { objective: 'ecc', sense: 'min', vars: ['v_0'], note: 'The eccentricity vanishes at the circular speed.' },
   inverse: { series: 'radius', fit: ['GM', 'v_0'] },
@@ -1499,7 +1583,9 @@ function projRun(v, a, th = v.theta, nOut = 241, rtol = 1e-10) {
     return [s[2], uy, ax, ay - gOf(s[1]), v.m * (ax * s[2] + ay * uy)];    // last entry: power of the aerodynamic force
   };
   const u0 = [0, v.h_0, v.v_0 * Math.cos(th), v.v_0 * Math.sin(th), 0], tv = (u0[3] + Math.sqrt(u0[3] ** 2 + 2 * v.g * v.h_0)) / v.g;
-  const s = toEvent(f, u0, 20 * tv + 100, y => y[1], y => y[3], nOut, { rtol, atol: 1e-9 });
+  // first step no longer than a tenth of the time in which drag changes the launch velocity (a longer trial step overflows when drag is strong); time allowed: the vacuum flight with margin, plus a descent from the vacuum apex at half the sea-level terminal speed
+  const vr0 = Math.hypot(u0[2] - w, u0[3]), h0 = 0.1 * Math.min(tv, 1 / ((kD + Math.abs(kL)) * v.rho * vr0 || Infinity)), slow = kD > 0 ? 2 * (v.h_0 + u0[3] ** 2 / (2 * v.g)) * Math.sqrt(kD * v.rho / v.g) : 0;
+  const s = toEvent(f, u0, 20 * tv + 100 + slow, y => y[1], y => y[3], nOut, { rtol, atol: 1e-9, h0 });
   const pe = y => (a.flat_g ? v.g * y : v.g * R_EARTH * y / (R_EARTH + y));
   return { s, A, w, tv, u0, pe, yf: s.yHit, tf: s.tHit, landed: s.hit };
 }
@@ -2654,7 +2740,7 @@ const galileo = {
       checks: [
         check('Vacuum fall is independent of mass', a.drag || !a.equivalence || !a.no_buoyancy ? 0 : (tmax - tmin) / tvac, 1e-12, a.drag || !a.equivalence || !a.no_buoyancy ? 'Not applicable with the present assumptions' : 'Spread of the three fall times'),
         check('Tied pair lies between its parts', fp.t > Math.max(f1.t, f2.t) * (1 + 1e-9) || fp.t < Math.min(f1.t, f2.t) * (1 - 1e-9) ? 1 : 0, 0, 'The combined body cannot be faster than both or slower than both'),
-        check('Energy balance of the heavy body', a.uniform_g ? (gb.bodies[0].g0 * v.h_d - 0.5 * f1.vf ** 2 - (gb.bodies[0].k > 0 ? N.trapz(ts.filter(t => t <= f1.t), ts.filter(t => t <= f1.t).map(t => gb.bodies[0].k * f1.u(t) ** 3)) : 0)) / (gb.bodies[0].g0 * v.h_d) : 0, 5e-3, 'Potential energy released against kinetic energy and drag work'),
+        check('Energy balance of the heavy body', a.uniform_g ? (gb.bodies[0].g0 * v.h_d - 0.5 * f1.vf ** 2 - (gb.bodies[0].k > 0 ? simpson(t => gb.bodies[0].k * f1.u(t) ** 3, 0, f1.t, 400) : 0)) / (gb.bodies[0].g0 * v.h_d) : 0, 1e-8, 'Potential energy released against kinetic energy and drag work, the latter by Simpson quadrature of k·v³ over the whole fall of the heavy body'),
       ],
       warnings,
       notes: [verdict],

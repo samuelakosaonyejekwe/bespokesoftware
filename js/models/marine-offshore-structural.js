@@ -1357,22 +1357,58 @@ const mudmat = {
 
 // ------------------------------------------------------------------ one-dimensional consolidation
 const YEAR = 3.15576e7;
-/** Average degree of consolidation for a uniform initial excess pore pressure (Terzaghi's Fourier series). */
-function consolSeries(Tv, terms = 400) { let s = 0; for (let m = 0; m < terms; m++) { const M = Math.PI * (2 * m + 1) / 2; s += 2 / (M * M) * Math.exp(-M * M * Tv); } return 1 - s; }
+/** Average degree of consolidation for a uniform initial excess pore pressure. Terzaghi's Fourier series converges quickly once the
+ *  time factor is appreciable but needs of order 1/√T_v terms at early time; there the image (error-function) form of the same
+ *  solution is used, whose first correction to U = 2√(T_v/π) is already below 10⁻⁹. The two agree to rounding where they meet. */
+function consolSeries(Tv, terms = 400) {
+  if (Tv < 0.05) { const x2 = 1 / Tv, ierfc = Tv <= 0 ? 0 : Math.exp(-x2) / (2 * Math.sqrt(Math.PI) * x2) * (1 - 1.5 / x2 + 3.75 / (x2 * x2)); return 2 * Math.sqrt(Math.max(Tv, 0) / Math.PI) * (1 - 2 * Math.sqrt(Math.PI) * ierfc); }
+  let s = 0; for (let m = 0; m < terms; m++) { const M = Math.PI * (2 * m + 1) / 2; s += 2 / (M * M) * Math.exp(-M * M * Tv); } return 1 - s;
+}
+/** Grid through the layer for n cells per drainage path. The pore-pressure boundary layer at a drained face has thickness
+ *  δ = √(c_v t) at the time of interest; three quarters of the cells are spread evenly over 6δ and the rest stride across the
+ *  interior, where the pressure is still linear in depth and any spacing represents it exactly. The map z(ξ) is smooth and does
+ *  not depend on n, so grids of n and n/2 cells are nested and their results can be extrapolated. Uniform once 8δ spans the path. */
+function consolGrid(H, n, double, delta) {
+  const Lh = double ? H / 2 : H, A = Math.min(Lh, 8 * delta), p = A < Lh ? Math.max(2, Math.log((Lh - A) / delta) / Math.log(4 / 3)) : 2;
+  const x = Array.from({ length: n + 1 }, (_, i) => { const xi = i / n; return i === n ? Lh : A * xi + (Lh - A) * xi ** p; });
+  if (double) for (let i = n - 1; i >= 0; i--) x.push(H - x[i]);
+  return x;
+}
 function consolRun(v, a) {
-  const H = v.H_c, dr = a.double ? H / 2 : H, nx = Math.max(11, Math.round(v.n_x)), cv = v.c_v;
+  const H = v.H_c, dr = a.double ? H / 2 : H, cv = v.c_v;
   const shape = z => (a.uniform ? 1 : 1 - z / H), fMean = a.uniform ? 1 : 0.5, tc = a.instant ? 0 : v.t_c;
-  const tSim = Math.min(v.t_end, tc + 3 * dr * dr / cv), tA = 0.02 * tSim;
-  const left = { type: 'dirichlet', value: 0 }, right = a.double ? { type: 'dirichlet', value: 0 } : { type: 'neumann', value: 0 };
-  // loading rate averaged over each time step [t, t + dt]: the step in which the ramp ends receives only the part of the load still to come, so the load applied is exactly Δq
-  const src = (dt, t0) => (a.instant ? undefined : (z, t) => v.dq * shape(z) * (Math.min(t + t0 + dt, tc) - Math.min(t + t0, tc)) / (tc * dt));
-  const A = N.diffusion1D({ D: cv, L: H, nx, tEnd: tA, nt: 120, u0: a.instant ? z => v.dq * shape(z) : () => 0, left, right, source: src(tA / 120, 0), frames: 12 });
-  const B = N.diffusion1D({ D: cv, L: H, nx, tEnd: tSim - tA, nt: 360, u0: (z, i) => A.final[i], left, right, source: src((tSim - tA) / 360, tA), frames: 48 });
-  const times = [...A.times, ...B.times.slice(1).map(t => t + tA)], snaps = [...A.snaps, ...B.snaps.slice(1)];
-  if (tSim < v.t_end) { times.push(v.t_end); snaps.push(B.final.map(u => u * Math.exp(-(Math.PI * Math.PI / 4) * cv * (v.t_end - tSim) / (dr * dr)))); }
+  const tSim = Math.min(v.t_end, tc + 3 * dr * dr / cv), nc = 2 * Math.max(3, Math.round((Math.max(11, Math.round(v.n_x)) - 1) / (a.double ? 4 : 2)));
+  // time levels: the boundary layer is self-similar in z/√(c_v t), so the step grows in proportion to the time elapsed since the load
+  // was applied (and, for a ramp, since it stopped rising) until it reaches the plotting interval; the end of the ramp is a level
+  const lev = (t0, t1) => { const out = [], dtMax = (t1 - t0) / 64, q = 1.1; let t = (t1 - t0) * 1e-6; while (t < t1 - t0 - 1e-9 * (t1 - t0)) { out.push(t0 + t); t = Math.min(t * q, t + dtMax); } out.push(t1); return out; };
+  const tl = [0, ...(a.instant || tc >= tSim ? lev(0, tSim) : [...lev(0, tc), ...lev(tc, tSim)])];
+  const want = new Set([0, tl.length - 1]); { let k = 0; for (const tg of [...N.linspace(0, 0.02 * tSim, 13), ...N.linspace(0.02 * tSim, tSim, 49)]) { while (k < tl.length - 1 && Math.abs(tl[k + 1] - tg) <= Math.abs(tl[k] - tg)) k++; want.add(k); } }
+  // conservative finite volumes on the graded grid (lumped mass = trapezoid weights), advanced by the L-stable, second-order
+  // TR-BDF2 scheme: the initial discontinuity at a drained face is damped instead of ringing as it would with Crank–Nicolson
+  const march = n => {
+    const x = consolGrid(H, n, a.double, Math.sqrt(cv * tSim)), nx = x.length, w = new Float64Array(nx), kl = new Float64Array(nx), kr = new Float64Array(nx), sh = x.map(shape);
+    for (let i = 0; i < nx; i++) { const hl = i > 0 ? x[i] - x[i - 1] : 0, hr = i < nx - 1 ? x[i + 1] - x[i] : 0; w[i] = 0.5 * (hl + hr); kl[i] = hl > 0 ? cv / hl : 0; kr[i] = hr > 0 ? cv / hr : 0; }
+    const iR = a.double ? nx - 1 : nx, gam = 2 - Math.SQRT2;   // rows 1 … iR − 1 are unknowns; the drained faces stay at zero after t = 0
+    let u = Float64Array.from(sh, q => (a.instant ? v.dq * q : 0)), us = new Float64Array(nx); const rhs = new Float64Array(nx), cp = new Float64Array(nx);
+    const solveInto = (th, out) => {   // (W − θ A) out = rhs
+      out[0] = 0; cp[0] = 0; if (a.double) out[nx - 1] = 0;
+      for (let i = 1; i < iR; i++) { const lo = -th * kl[i], bp = w[i] + th * (kl[i] + kr[i]) - lo * cp[i - 1]; cp[i] = -th * kr[i] / bp; out[i] = (rhs[i] - lo * out[i - 1]) / bp; }
+      for (let i = iR - 2; i >= 1; i--) out[i] -= cp[i] * out[i + 1]; };
+    const mass = q => { let m = 0; for (let i = 0; i < nx; i++) m += w[i] * q[i]; return m; }, snaps = [Array.from(u)], ms = [mass(u)];
+    for (let k = 1; k < tl.length; k++) { const dt = tl[k] - tl[k - 1], th = 0.5 * gam * dt, rate = !a.instant && tl[k] <= tc * (1 + 1e-12) ? v.dq / tc : 0, c1 = 1 / (gam * (2 - gam)), c0 = (1 - gam) * (1 - gam) * c1;
+      for (let i = 1; i < iR; i++) rhs[i] = w[i] * u[i] + th * (kl[i] * (u[i - 1] - u[i]) + (i < nx - 1 ? kr[i] * (u[i + 1] - u[i]) : 0)) + gam * dt * w[i] * rate * sh[i];
+      solveInto(th, us);
+      for (let i = 1; i < iR; i++) rhs[i] = w[i] * (c1 * us[i] - c0 * u[i]) + th * w[i] * rate * sh[i];
+      solveInto(th, u);
+      if (want.has(k)) { snaps.push(Array.from(u)); ms.push(mass(u)); } }
+    return { x, snaps, ms }; };
+  // the same problem on the nested grid of half as many cells: the leading (second-order) spatial error of the pressure integral is removed by extrapolation
+  const fine = march(nc), coarse = march(nc / 2), x = fine.x, snaps = fine.snaps, times = [...want].sort((p, q) => p - q).map(k => tl[k]);
+  const ms = fine.ms.map((q, i) => q + (q - coarse.ms[i]) / 3);
+  if (tSim < v.t_end) { const f = Math.exp(-(Math.PI * Math.PI / 4) * cv * (v.t_end - tSim) / (dr * dr)); times.push(v.t_end); snaps.push(snaps[snaps.length - 1].map(q => q * f)); ms.push(ms[ms.length - 1] * f); }
   const load = t => (a.instant ? 1 : Math.min(t / tc, 1)), tot = v.dq * fMean * H;
-  const U = snaps.map((u, i) => N.clamp((load(times[i]) * tot - N.trapz(A.x, u)) / tot, 0, 1));
-  return { x: A.x, times, snaps, U, dr, tSim, fMean, exactOK: a.instant && (a.uniform || a.double) };
+  const U = ms.map((q, i) => N.clamp((load(times[i]) * tot - q) / tot, 0, 1));
+  return { x, times, snaps, U, dr, tSim, fMean, exactOK: a.instant && (a.uniform || a.double) };
 }
 const consolidation = {
   id: 'consolidation-1d',
@@ -1501,7 +1537,7 @@ const consolidation = {
   hazards: [{ hazard: 'Long-term and differential settlement', cause: 'Slow dissipation in thick or single-drained layers', mitigation: 'Preloading, vertical drains, staged construction, monitoring' }, { hazard: 'Undrained instability during construction', cause: 'Excess pore pressure reduces effective stress and strength', mitigation: 'Control the rate of loading using piezometer readings' }],
   standards: ['ISO 17892-5 (incremental loading oedometer test)', 'ASTM D2435 (one-dimensional consolidation properties of soils)', 'EN 1997 (Eurocode 7: geotechnical design)'],
   limits: 'Saturated, homogeneous clay with one-dimensional strain and flow, small strains, and constant c_v and m_v over the stress increment. Secondary compression, lateral drainage, layering and large-strain effects are not included.',
-  numerics: { method: 'Crank–Nicolson finite differences in two stages (fine steps for the first 2 % of the time, then coarser), trapezoidal integration for the degree of consolidation', order: 2, stability: 'Unconditionally stable', resolution: 'n_x' },
+  numerics: { method: 'Conservative finite volumes on a grid fitted to the drainage boundary layer of thickness √(c_v t), TR-BDF2 time stepping with steps growing in proportion to the elapsed time, trapezoidal integration for the degree of consolidation with Richardson extrapolation from the nested grid of half as many cells', order: 2, stability: 'Unconditionally stable and L-stable', resolution: 'n_x' },
   optimise: { objective: 't_90', sense: 'min', vars: ['H_c'], note: 'Time scales with the square of the drainage path; in practice the path is shortened with vertical drains.' },
   inverse: { series: 'settlement', fit: ['c_v', 'm_v'] },
   extensions: ['Vertical drains with combined radial and vertical flow', 'Multi-layer profiles with different c_v', 'Secondary compression and staged loading'],

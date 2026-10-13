@@ -329,7 +329,7 @@ function rlcCore(v, a) {
   if (stiff && a.linear_L) {
     t = N.linspace(0, tEnd, n); const ex = rlcExact(Rt, L, Cc, Rp, V, t); iL = ex.i; vC = ex.vc; method = 'exact';
   } else {
-    const r = N.rk45((tt, y) => [(V - Rt * y[0] - y[1]) / Ld(y[0]), (y[0] - (a.no_leak ? 0 : y[1] / Rp)) / Cc, V * y[0], Rt * y[0] * y[0] + (a.no_leak ? 0 : y[1] * y[1] / Rp)], [0, 0, 0, 0], 0, tEnd, n, { rtol: 1e-7, atol: 1e-11 * Math.max(V, 1e-6), maxSteps: 60000 });
+    const r = N.rk45((tt, y) => [(V - Rt * y[0] - y[1]) / Ld(y[0]), (y[0] - (a.no_leak ? 0 : y[1] / Rp)) / Cc, V * y[0], Rt * y[0] * y[0] + (a.no_leak ? 0 : y[1] * y[1] / Rp)], [0, 0, 0, 0], 0, tEnd, n, { rtol: 1e-9, atol: 1e-13 * Math.max(V, 1e-6), maxSteps: 240000 }); // tolerances tight enough for an error that accumulates over as many as sixty ringing periods
     t = r.t; iL = r.y[0]; vC = r.y[1]; method = 'rk45'; truncated = r.t.length < n;
     const k = t.length - 1, iE = iL[k], wL = a.linear_L ? 0.5 * L * iE * iE : 0.5 * L * v.I_sat ** 2 * Math.log(1 + (iE / v.I_sat) ** 2);
     eRes = r.y[2][k] !== 0 ? (r.y[2][k] - r.y[3][k] - wL - 0.5 * Cc * vC[k] ** 2) / Math.abs(r.y[2][k]) : 0;
@@ -445,8 +445,9 @@ const rlc = {
   benchmarks(v, a) {
     const out = [], c = rlcCore(v, a);
     if (a.linear_L && c.method === 'rk45') {
-      const j = Math.round(c.t.length / 3), ex = rlcExact(c.Rt, c.L, c.Cc, c.Rp, c.V, [c.t[j]]);
-      out.push(bench('Step response against the closed-form solution', c.vC[j], ex.vc[0], 'Exact solution of the linear second-order system', 1e-5));
+      // compared where the record departs most from the closed form, among the samples above half the final value (a relative error means little where a lightly damped response swings back to nearly zero)
+      const ex = rlcExact(c.Rt, c.L, c.Cc, c.Rp, c.V, c.t).vc; let j = c.t.length - 1; for (let q = 1, e = -1; q < c.t.length; q++) { const d = Math.abs(c.vC[q] - ex[q]); if (ex[q] >= 0.5 * c.vss && d > e) { e = d; j = q; } }
+      out.push(bench('Step response against the closed-form solution', c.vC[j], ex[j], 'Exact solution of the linear second-order system, at the sample of the record that departs most from it', 1e-5));
     }
     if (a.no_leak) {
       const f0 = c.w0 / TAU;
@@ -1047,21 +1048,27 @@ const radiationPressure = {
 };
 
 // ------------------------------------------------------------------ vibrating string
+/** Simpson's rule for an odd number of samples a distance h apart. */
+const simp = (ys, h) => { let q = ys[0] + ys[ys.length - 1]; for (let i = 1; i < ys.length - 1; i++) q += (i % 2 ? 4 : 2) * ys[i]; return q * h / 3; };
 function stringCore(v, a) {
   const L = v.L, T = v.T_s, mu = v.mu_l, Aw = Math.PI * v.d_w ** 2 / 4, Ia = Math.PI * v.d_w ** 4 / 64, xp = v.x_p * L, wh = 0.03 * L;
   const u0 = x => (a.plucked ? v.a_p * (x < xp ? x / xp : (L - x) / (L - xp)) : 0);
   const w0 = x => (a.plucked ? 0 : v.v_h * Math.exp(-(((x - xp) / wh) ** 2)));
-  const xq = N.linspace(0, L, 801);
-  const E0 = a.plucked ? T * v.a_p ** 2 / 2 * (1 / xp + 1 / (L - xp)) : 0.5 * mu * N.trapz(xq, xq.map(x => w0(x) ** 2));
+  // the hammer pulse is negligible beyond 6.5 widths from its centre, and is cut off by an end of the string that lies nearer than that
+  const xa = Math.max(0, xp - 6.5 * wh), xb = Math.min(L, xp + 6.5 * wh), xq = N.linspace(xa, xb, 801), W2 = a.plucked ? 0 : simp(xq.map(x => w0(x) ** 2), xq[1] - xq[0]);
+  const E0 = a.plucked ? T * v.a_p ** 2 / 2 * (1 / xp + 1 / (L - xp)) : 0.5 * mu * W2;
   const Te = a.small_amp ? T : T + v.E_y * Aw * E0 / (2 * T * L);
   const c = Math.sqrt(Te / mu), f1 = c / (2 * L), B = a.flexible ? 0 : Math.PI ** 2 * v.E_y * Ia / (Te * L * L), gam = a.undamped ? 0 : v.gamma_d;
   const fn = (n, b = B) => n * f1 * Math.sqrt(1 + b * n * n);
   // the plucked amplitudes fall only as 1/n²: both the displacement at the pluck point and the energy lack the fraction 1/(π²p(1−p)N) after N modes,
-  // so N grows as the pluck nears an end and that fraction stays at about 1 % (60 modes for a pluck between 0.2 and 0.8 of the length)
-  const nm = a.plucked ? Math.max(60, Math.ceil(9.6 / (v.x_p * (1 - v.x_p)))) : 60, An = [], Vn = [];
+  // so N grows as the pluck nears an end and that fraction stays at about 1 % (60 modes for a pluck between 0.2 and 0.8 of the length).
+  // A hammer pulse cut off by an end leaves a step J in the velocity there, whose modal velocities fall as 2J/(nπ): the energy then lacks μLJ²/(π²N) after N modes, and N is raised to keep that at 1 % as well
+  const nm = a.plucked ? Math.max(60, Math.ceil(9.6 / (v.x_p * (1 - v.x_p)))) : Math.max(60, Math.ceil(200 * L * (w0(0) ** 2 + w0(L) ** 2) / (Math.PI ** 2 * W2))), An = [], Vn = [];
+  // modal velocities by Simpson's rule over the pulse, with at least sixteen points to the shortest modal wavelength
+  const xv = a.plucked ? [] : N.linspace(xa, xb, 2 * Math.max(400, Math.ceil(4 * nm * (xb - xa) / L)) + 1), wv = xv.map(w0);
   for (let n = 1; n <= nm; n++) {
     An.push(a.plucked ? 2 * v.a_p * L * L / (n * n * Math.PI ** 2 * xp * (L - xp)) * Math.sin(n * Math.PI * xp / L) : 0);
-    Vn.push(a.plucked ? 0 : 2 / L * N.trapz(xq, xq.map(x => w0(x) * Math.sin(n * Math.PI * x / L))));
+    Vn.push(a.plucked ? 0 : 2 / L * simp(xv.map((x, i) => wv[i] * Math.sin(n * Math.PI * x / L)), xv[1] - xv[0]));
   }
   /** Modal amplitude of mode n (1-based) at time t. */
   const qn = (n, t, b = B) => {
@@ -1158,6 +1165,8 @@ const vibratingString = {
     const ns = Array.from({ length: 12 }, (_, i) => i + 1);
     const amp = ns.map(n => (a.plucked ? Math.abs(s.An[n - 1]) : Math.abs(s.Vn[n - 1]) / (TAU * s.fn(n))));
     const eModal = N.sum(ns.concat(Array.from({ length: s.nm - 12 }, (_, i) => i + 13)).map(n => 0.25 * s.mu * L * ((TAU * s.fn(n, 0)) ** 2 * s.An[n - 1] ** 2 + s.Vn[n - 1] ** 2)));
+    // a pluck stretches the string by E₀/T; with the tension rising as it does so the work done is E₀ + ½(EA/L)(E₀/T)² = E₀T_e/T, which is what the modes hold at the effective tension (a hammer supplies kinetic energy, whatever the tension)
+    const eSup = a.plucked ? s.E0 * s.Te / s.T : s.E0;
     let slope = 0; af.forEach(f => { slope = Math.max(slope, Math.abs(f[1] - f[0]) / (ax[1] - ax[0])); });
     const stress = s.Te / s.Aw, pk = 1.1e3 * Math.max(...af.map(f => N.maxOf(Array.from(f, Math.abs)))) || 1;
     if (stress > 2.5e9) warnings.push('The tensile stress exceeds about 2.5 GPa, beyond the strength of music wire.');
@@ -1170,7 +1179,7 @@ const vibratingString = {
         scalar('f_2', 'Second partial', s.fn(2), 'Hz'), scalar('f_3', 'Third partial', s.fn(3), 'Hz'),
         scalar('lambda_1', 'Wavelength of the fundamental on the string', 2 * L, 'm'),
         scalar('Z_w', 'Wave impedance √(Tμ)', Math.sqrt(s.Te * s.mu), 'kg/s'),
-        scalar('E_0', 'Energy given to the string', s.E0, 'J', { show: 'mJ' }),
+        scalar('E_0', 'Energy given to the string', s.E0, 'J', { show: 'mJ', ...(a.small_amp || !a.plucked ? {} : { note: 'At the unstretched tension; the rise in tension adds the factor T_e/T' }) }),
         scalar('T_e', 'Effective tension', s.Te, 'N'), scalar('sigma_w', 'Tensile stress', stress, 'Pa', { show: 'MPa' }),
         scalar('B_s', 'Inharmonicity coefficient', s.B, '1'),
         scalar('cents_2', 'Sharpness of the second partial relative to 2f₁', 1200 * Math.log2(s.fn(2) / (2 * s.fn(1))), '1', { note: 'cents' }),
@@ -1185,7 +1194,7 @@ const vibratingString = {
       anims: [anim('string', 'Shape of the string', 'Position', 'm', ax, af.map(f => Array.from(f, q => q * 1e3)), at, 'Displacement', 'mm', { yRange: [-pk, pk] })],
       checks: [
         check('Grid solution against the modal series at the pickup', rms, 0.02, method === 'grid' ? 'Root-mean-square difference relative to the peak displacement' : 'Not evaluated: modal solution used'),
-        check('Modal energy sum against the energy supplied', (eModal - s.E0) / s.E0, 0.03, `Parseval's relation with ${s.nm} modes`),
+        check('Modal energy sum against the energy supplied', (eModal - eSup) / eSup, 0.03, `Parseval's relation with ${s.nm} modes${a.small_amp || !a.plucked ? '' : '; the energy supplied includes the work done against the rise in tension, E₀T_e/T'}`),
       ],
       warnings,
     };
@@ -1393,72 +1402,147 @@ const coupledOsc = {
 };
 
 // ------------------------------------------------------------------ time-reversal focusing
+/**
+ * Peak of |y| near its largest sample i: offset in samples and height of the maximum of the quartic through the logarithms of the five samples about it (the parabola through three at the end of the array).
+ * The logarithm of a Gaussian is a parabola, so a Gaussian peak is located exactly wherever it falls between samples.
+ */
+const trPeak = (y, i) => {
+  const a = Math.abs(y[i]), l = k => Math.log(Math.abs(y[i + k]) / a); if (i <= 0 || i >= y.length - 1 || !(a > 0) || y[i - 1] * y[i + 1] === 0) return [0, a];
+  const m1 = l(-1), p1 = l(1), cv = m1 + p1; if (!(cv < 0)) return [0, a];
+  let o = 0.5 * (m1 - p1) / cv, a1 = 0.5 * (p1 - m1), a2 = 0.5 * cv, a3 = 0, a4 = 0;
+  if (i > 1 && i < y.length - 2 && y[i - 2] * y[i + 2] !== 0) { const m2 = l(-2), p2 = l(2); a1 = (m2 - 8 * m1 + 8 * p1 - p2) / 12; a2 = (-m2 + 16 * m1 + 16 * p1 - p2) / 24; a3 = (-m2 + 2 * m1 - 2 * p1 + p2) / 12; a4 = (m2 - 4 * m1 - 4 * p1 + p2) / 24;
+    let t = o; for (let k = 0; k < 8; k++) { const d2 = 2 * a2 + 6 * a3 * t + 12 * a4 * t * t; if (!(d2 < 0)) break; t -= (a1 + 2 * a2 * t + 3 * a3 * t * t + 4 * a4 * t ** 3) / d2; } if (Math.abs(t) <= 1) o = t; else { a1 = 0.5 * (p1 - m1); a2 = 0.5 * cv; a3 = a4 = 0; } }
+  return [o, a * Math.exp(a1 * o + a2 * o * o + a3 * o ** 3 + a4 * o ** 4)];
+};
+/** Smooth end of a record: 1 until a time tt before its end T, falling to zero at T with two continuous derivatives (times in any one unit). */
+const trTaper = (t, T, tt) => { const q = N.clamp((t - (T - tt)) / tt, 0, 1); return 1 - q * q * q * (10 - 15 * q + 6 * q * q); };
+const TR_TAPER = 0.2; // length of that taper, in transit times L/c
+/** Cubic through the four nodes about cell j (j−1 … j+2, kept inside the array) of a function tabulated at xa, which need not be equally spaced, evaluated at x. */
+const trCubic = (xa, ya, j, x) => { const k = N.clamp(j - 1, 0, xa.length - 4); let q = 0; for (let m = 0; m < 4; m++) { let w = 1; for (let n = 0; n < 4; n++) if (n !== m) w *= (x - xa[k + n]) / (xa[k + m] - xa[k + n]); q += w * ya[k + m]; } return q; };
 function trSim(v, a) {
-  let nx = Math.max(101, Math.round(v.n_x)); if (nx % 2 === 0) nx++;
-  const L = v.L, c = v.c_w, dx = L / (nx - 1), dt = dx / c, cr = a.homogeneous ? 1 : v.c_ratio;
-  const i1 = Math.round(0.62 * (nx - 1)), i2 = Math.round(0.74 * (nx - 1));
-  const C2 = new Float64Array(nx).fill(1); if (cr < 1) for (let i = i1; i <= i2; i++) C2[i] = cr * cr;
+  const L = v.L, c = v.c_w, cr = a.homogeneous ? 1 : v.c_ratio; let M = Math.max(100, Math.round(v.n_x) - 1); if (M % 2) M++;
+  // Grid. In a uniform medium, M equal intervals at unit Courant number, where the leapfrog scheme propagates exactly. With an inclusion M is rounded to a multiple of fifty, which puts its faces (0.62 L and 0.74 L)
+  // on nodes, and the inclusion is divided into the largest whole number of intervals no shorter than c_ratio dx: its Courant number is then within one part in that number of unity as well, so the scheme is
+  // almost free of dispersion there too and the pulse, shortened by c_ratio, keeps its number of points.
+  if (cr < 1) M = 50 * Math.max(2, Math.round(M / 50));
+  const dx = L / M, dt = dx / c, nL = cr < 1 ? Math.round(0.62 * M) : M, nI = cr < 1 ? Math.max(4, Math.floor(0.12 * M / cr + 1e-9)) : 0, nR = cr < 1 ? Math.round(0.26 * M) : 0, hI = cr < 1 ? 0.12 * L / nI : dx, nx = nL + nI + nR + 1, i1 = nL, i2 = nL + nI;
+  const xs = Array.from({ length: nx }, (_, i) => (i <= i1 ? i * dx : i <= i2 ? 0.62 * L + (i - i1) * hI : i === nx - 1 ? L : 0.74 * L + (i - i2) * dx));
+  // u_tt = c² u_xx as the balance of an element of string: left and right weights of each node, in units of dt². At a face the node carries half an interval of each medium, and the gradient,
+  // like the displacement, is continuous: the weights are 1/(h_l m) and 1/(h_r m) with m = ½(h_l/c_l² + h_r/c_r²), which conserves energy and at unit Courant number is the exact scattering junction.
+  const aLt = new Float64Array(nx).fill(1), aRt = new Float64Array(nx).fill(1);
+  if (cr < 1) { const hr = hI / dx, CI = (cr / hr) ** 2, m = 0.5 * (1 + hr / (cr * cr)); for (let i = i1 + 1; i < i2; i++) aLt[i] = aRt[i] = CI; aLt[i1] = aRt[i2] = 1 / m; aRt[i1] = aLt[i2] = 1 / (hr * m); }
   const gam = a.lossless ? 0 : v.zeta_L * c / L, gd = gam * dt / 2;
-  const is = Math.round(v.x_s * (nx - 1)), sig = v.w_p * L, xs = N.linspace(0, L, nx);
-  const g = xs.map(x => Math.exp(-((x - xs[is]) ** 2) / (2 * sig * sig)));
-  const Nf = Math.ceil((1.35 + (cr < 1 ? 0.12 * (1 / cr - 1) + 0.96 / cr : 0)) * (nx - 1));
-  const step = (u, up, un) => { for (let i = 1; i < nx - 1; i++) un[i] = (2 * u[i] - (1 - gd) * up[i] + C2[i] * (u[i + 1] - 2 * u[i] + u[i - 1])) / (1 + gd); };
-  // forward: emit and record at both ends (open boundaries)
+  // the source sits at x_s L wherever that falls between the nodes (is is the node nearest to it), so that nothing about the experiment moves with the grid
+  const xc = v.x_s * L, is = Math.round(v.x_s * M), sig = v.w_p * L;
+  const g = xs.map(x => Math.exp(-((x - xc) ** 2) / (2 * sig * sig)));
+  const Nf = Math.round((1.35 + (cr < 1 ? 0.12 * (1 / cr - 1) + 0.96 / cr : 0)) * M);
+  // Damping. With u = exp(−γt/2) w the equation is w_tt = c² w_xx + (γ/2)² w, in which the damping no longer multiplies a derivative: the leapfrog step is taken for w and written for u (rho = exp(−γ dt/2)),
+  // so the attenuation of every wave is exact and only the small term (γ dt/2)² w is approximated. A centred difference for γ u_t would instead leave a dispersion error of order γ dt (dx/w_p)².
+  const rho = Math.exp(-gd), g2 = 2 + gd * gd, rr = rho * rho;
+  const step = (u, up, un) => { for (let i = 1; i < nx - 1; i++) un[i] = rho * (g2 * u[i] + aLt[i] * (u[i - 1] - u[i]) + aRt[i] * (u[i + 1] - u[i])) - rr * up[i]; };
+  // forward: emit and record at both ends. The one-way condition ∂u/∂t = ±c ∂u/∂x is exact as u₀ⁿ⁺¹ = u₁ⁿ in a lossless medium at unit Courant number; with damping that form is in error by
+  // ½dt(u_tt − c²u_xx) = −½γ dt u_t, which the factor gd restores to second order
   let up = Float64Array.from(g), u = new Float64Array(nx), un = new Float64Array(nx);
-  for (let i = 1; i < nx - 1; i++) u[i] = up[i] + 0.5 * C2[i] * (up[i + 1] - 2 * up[i] + up[i - 1]);
+  for (let i = 1; i < nx - 1; i++) u[i] = rho * ((1 + gd) * up[i] + (0.5 + gd / 6) * (gd * gd * up[i] + aLt[i] * (up[i - 1] - up[i]) + aRt[i] * (up[i + 1] - up[i]))); // Taylor series of w from rest, to the third order
   u[0] = up[1]; u[nx - 1] = up[nx - 2];
   const recL = new Float64Array(Nf + 1), recR = new Float64Array(Nf + 1), every = Math.max(1, Math.floor(Nf / 36)), frames = [Array.from(up)], times = [0];
   recL[0] = up[0]; recR[0] = up[nx - 1]; recL[1] = u[0]; recR[1] = u[nx - 1];
   for (let n = 1; n < Nf; n++) {
-    step(u, up, un); un[0] = u[1]; un[nx - 1] = u[nx - 2];
+    step(u, up, un); un[0] = (u[1] + gd * u[0]) / (1 + gd); un[nx - 1] = (u[nx - 2] + gd * u[nx - 1]) / (1 + gd);
     [up, u, un] = [u, un, up]; recL[n + 1] = u[0]; recR[n + 1] = u[nx - 1];
     if ((n + 1) % every === 0) { frames.push(Array.from(u)); times.push((n + 1) * dt); }
   }
-  let resid = 0; for (let i = 0; i < nx; i++) resid = Math.max(resid, Math.abs(u[i]));
+  let resid = 0, e0 = 0; for (let i = 0; i < nx; i++) resid = Math.max(resid, Math.abs(u[i]));
+  for (let i = 1; i < nx; i++) e0 += 0.5 * (g[i] - g[i - 1]) ** 2 / (xs[i] - xs[i - 1]);
   // energy leaving through the ends, in units of the wave impedance times c
   let eOut = 0; for (let n = 1; n <= Nf; n++) eOut += ((recL[n] - recL[n - 1]) ** 2 + (recR[n] - recR[n - 1]) ** 2) / dt;
-  let e0 = 0; for (let i = 1; i < nx; i++) e0 += 0.5 * (g[i] - g[i - 1]) ** 2 / dx;
   eOut /= c; // both in the same normalisation: ½∫u_x² dx against (1/c)∫u_t² dt
   // sensors: optional additive noise
   const sL = Float64Array.from(recL), sR = Float64Array.from(recR);
-  if (!a.ideal_sensors) { const rn = N.rng(7); for (let n = 0; n <= Nf; n++) { sL[n] += v.sigma_n * rn.normal(); sR[n] += v.sigma_n * rn.normal(); } }
+  // The noise is a function of time, not of the sample: each sensor carries a stationary Gaussian process of r.m.s. sigma_n limited to the band of the pulse (power spectrum exp(−ω²w_p²L²/c²),
+  // so that it is correlated over the pulse duration), built from 64 components of fixed random frequency and phase. Sampling it more finely then reproduces the same record.
+  if (!a.ideal_sensors) { const rn = N.rng(7), Mc = 64, am = v.sigma_n * Math.sqrt(2 / Mc);
+    for (const rec of [sL, sR]) { const om = [], ph = []; for (let m = 0; m < Mc; m++) { om.push(rn.normal() / (Math.SQRT2 * v.w_p) / M); ph.push(TAU * rn()); } for (let n = 0; n <= Nf; n++) { let q = 0; for (let m = 0; m < Mc; m++) q += Math.cos(om[m] * n + ph[m]); rec[n] += am * q; } } }
+  // The mirror fades the end of each record out over 0.2 L/c before replaying it. A record that stopped abruptly while the sensor was still displaced (a damped medium does not return to rest, and
+  // reverberation or noise never ends) would start the replay with a step, which travels through the medium as a discontinuity.
+  for (let n = 0; n <= Nf; n++) { const w = trTaper(n, Nf, TR_TAPER * M); sL[n] *= w; sR[n] *= w; }
   // backward: quiescent medium driven at the sensors by the time-reversed records
   up = new Float64Array(nx); u = new Float64Array(nx); un = new Float64Array(nx);
   up[0] = sL[Nf]; u[0] = sL[Nf - 1];
   if (a.two_sided) { up[nx - 1] = sR[Nf]; u[nx - 1] = sR[Nf - 1]; }
   const src = [up[is], u[is]];
   for (let mI = 1; mI < Nf; mI++) {
-    step(u, up, un); un[0] = sL[Nf - mI - 1]; un[nx - 1] = a.two_sided ? sR[Nf - mI - 1] : u[nx - 2];
+    step(u, up, un); un[0] = sL[Nf - mI - 1]; un[nx - 1] = a.two_sided ? sR[Nf - mI - 1] : (u[nx - 2] + gd * u[nx - 1]) / (1 + gd);
     [up, u, un] = [u, un, up]; src.push(u[is]);
     if ((mI + 1) % every === 0 || mI + 1 === Nf) { frames.push(Array.from(u)); times.push((Nf + mI + 1) * dt); }
   }
-  const wF = Array.from(u);
-  let ip = 0; for (let i = 1; i < nx; i++) if (Math.abs(wF[i]) > Math.abs(wF[ip])) ip = i;
-  let sw = 0, sg = 0, swg = 0, bg = 0, nb = 0, eIn = 0;
-  for (let i = 0; i < nx; i++) { sw += wF[i] ** 2; sg += g[i] ** 2; swg += wF[i] * g[i]; if (Math.abs(xs[i] - xs[is]) > 4 * sig) { bg += wF[i] ** 2; nb++; } else if (Math.abs(xs[i] - xs[is]) <= 3 * sig) eIn += wF[i] ** 2; }
-  // full width at half maximum around the largest peak
-  const half = Math.abs(wF[ip]) / 2; let il = ip, ir = ip;
-  while (il > 0 && Math.abs(wF[il]) > half) il--; while (ir < nx - 1 && Math.abs(wF[ir]) > half) ir++;
-  const xl = il === ip ? xs[il] : xs[il] + dx * (half - Math.abs(wF[il])) / Math.max(Math.abs(wF[il + 1]) - Math.abs(wF[il]), 1e-300);
-  const xr = ir === ip ? xs[ir] : xs[ir] - dx * (half - Math.abs(wF[ir])) / Math.max(Math.abs(wF[ir - 1]) - Math.abs(wF[ir]), 1e-300);
-  return { nx, xs, dx, dt, Nf, g, wF, is, ip, sig, gam, recL: Array.from(recL), recR: Array.from(recR), src, frames, times, resid, e0, eOut,
-    q: wF[is], corr: swg / Math.sqrt(Math.max(sw * sg, 1e-300)), fwhm: xr - xl, bgRms: nb ? Math.sqrt(bg / nb) : 0, eFrac: eIn / sg, peakL: N.maxOf(Array.from(recL)) };
+  const wF = Array.from(u), aF = wF.map(Math.abs);
+  let ip = 0; for (let i = 1; i < nx; i++) if (aF[i] > aF[ip]) ip = i;
+  // The focal peak lies between samples. It is found from five samples a quarter of a pulse width apart (as near to that as the grid allows, and closer where a face of the inclusion or an end is in the way):
+  // nodes a grid spacing apart on a peak many spacings wide differ too little to locate it. The amplitude at the source is read from the refocused and the emitted field alike, by the cubic through the four nearest nodes.
+  const even = (i, k) => i - k >= 0 && i + k < nx && (i - k >= i2 || i + k <= i1 || (i - k >= i1 && i + k <= i2)), hLoc = cr < 1 && ip > i1 && ip < i2 ? hI : dx;
+  let st = Math.max(1, Math.round(0.25 * sig / hLoc)); while (st > 1 && !even(ip, 2 * st)) st--;
+  const pk = even(ip, 2 * st) ? trPeak([-2, -1, 0, 1, 2].map(k => wF[ip + k * st]), 2) : even(ip, 1) ? trPeak(wF.slice(ip - 1, ip + 2), 1) : [0, aF[ip]], xPk = xs[ip] + pk[0] * (even(ip, 2 * st) ? st : 1) * hLoc, aPk = pk[1], i0 = Math.floor(xc / dx), at = y => trCubic(xs, y, i0, xc);
+  // sums over the medium, each node weighted by the length it stands for
+  let sw = 0, sg = 0, swg = 0, bg = 0, lb = 0, eIn = 0; const wq = i => 0.5 * (xs[Math.min(i + 1, nx - 1)] - xs[Math.max(i - 1, 0)]);
+  for (let i = 0; i < nx; i++) { const w = wq(i); sw += w * wF[i] ** 2; sg += w * g[i] ** 2; swg += w * wF[i] * g[i]; if (Math.abs(xs[i] - xc) <= 3 * sig) eIn += w * wF[i] ** 2; }
+  // background: what is left beyond four pulse widths of the source once the part of the field that has the shape of the emitted pulse is taken out (the tail of the pulse itself is not background)
+  const bet = swg / sg; for (let i = 0; i < nx; i++) if (Math.abs(xs[i] - xc) > 4 * sig) { bg += wq(i) * (wF[i] - bet * g[i]) ** 2; lb += wq(i); }
+  // full width at half maximum around the largest peak: the half-height crossings of the cubic through the logarithms of the four nodes about each (a cubic that is exact for the flank of a Gaussian)
+  const half = aPk / 2, lH = Math.log(half), lF = aF.map(q => Math.log(Math.max(q, 1e-300))); let il = ip, ir = ip;
+  while (il > 0 && aF[il] > half) il--; while (ir < nx - 1 && aF[ir] > half) ir++;
+  const cross = j => { if (!((lF[j] - lH) * (lF[j + 1] - lH) <= 0)) return xs[j]; let lo = xs[j], hi = xs[j + 1]; const sLo = lF[j] - lH; for (let k = 0; k < 40; k++) { const md = 0.5 * (lo + hi); if ((trCubic(xs, lF, j, md) - lH) * sLo > 0) lo = md; else hi = md; } return 0.5 * (lo + hi); };
+  const xl = il === ip ? xs[il] : cross(il), xr = ir === ip ? xs[ir] : cross(ir - 1);
+  const rL = Array.from(recL); let iL = 0; for (let n = 1; n <= Nf; n++) if (rL[n] > rL[iL]) iL = n;
+  return { nx, M, xs, dx, dt, Nf, g, wF, is, ip, xPk, xc, sig, gam, recL: rL, recR: Array.from(recR), src, frames, times, resid, e0, eOut,
+    q: at(wF) / at(g), corr: swg / Math.sqrt(Math.max(sw * sg, 1e-300)), fwhm: xr - xl, bgRms: lb ? Math.sqrt(bg / lb) : 0, eFrac: eIn / sg, peakL: trPeak(rL, iL)[1] };
 }
+/** I₁(z)/z by its power series (z of order ten at most here). */
+const besselI1z = z => { const q = z * z / 4; let t = 0.5, sum = 0.5; for (let m = 1; m < 60 && t > 1e-17 * sum; m++) { t *= q / (m * (m + 1)); sum += t; } return sum; };
 /**
- * Refocused amplitude returned by one sensor at distance d from the source in a damped medium, for a complete record (lengths in L, times in L/c, ζ = γL/c).
- * At angular frequency ω the wavenumber is κ = √(ω² + iζω); the Gaussian pulse sends out the spectrum κ ĝ(κ)/(2ω), and replaying the reversed record
- * cancels the phase of the outward path while the attenuation acts twice: q_d = (1/π)∫₀^∞ Re[κ ĝ(κ)/(2ω)] exp(−2d Im κ) dω, ĝ(κ) = √(2π) w_p exp(−κ²w_p²/2).
- * Im κ → ζ/2 for ω ≫ ζ, which gives the ray estimate ½exp(−ζd); frequencies below ζ diffuse instead of propagating and are attenuated less.
- * Simpson's rule in s = √ω, which removes the integrable ω^(−1/2) end point.
+ * Refocused field in a uniform damped medium, for a record of finite length T made, faded out over its last tt and replayed with the terminations of the simulation
+ * (lengths in L, times in L/c, ζ = γL/c, source at x_s, pulse width w_p). Semi-analytic: nothing is taken from the grid. Returns the field at the focal instant as a function of position, with its peak and width.
+ * Recording. With κ = √(s² + ζs), the Laplace transform of the displacement at an end a distance d from the source is
+ *   U(s) = (s + ζ) ĝ (1 + R) [e^(−κd) + R e^(−κ(2−d))] / (2κ (1 − R² e^(−2κ))),   ĝ = √(2π) w_p exp(κ²w_p²/2),   R = (κ − s)/(κ + s).
+ * R is the reflection coefficient of the one-way end ∂u/∂t = ±c ∂u/∂x: it vanishes without damping, and tends to one for the frequencies below γ, which diffuse; U keeps every reverberation between the ends,
+ * and its pole at s = 0 is the uniform displacement ζ√(2π)w_p/(ζ + 2) that such ends leave in the medium for good. The record u(t) follows by Fourier-series inversion along Re s = 9/T, tabulated at intervals of w_p/16.
+ * Replay. An end driven from rest with f(t) sends into a half-space u(x, t) = e^(−ζx/2) f(t − x) + (ζx/2) ∫ₓᵗ e^(−ζτ/2) I₁(ζ√(τ² − x²)/2)/√(τ² − x²) f(t − τ) dτ: a front attenuated as exp(−γx/2c),
+ * followed by a diffusive wake. Between two driven ends the images of each end, at 2m + d and 2(m + 1) − d from the point with alternating sign, add; only those nearer than T have arrived when the record ends.
+ * With f(t) = w(T − t) u(T − t), w the fade, the field is the sum over ends and images of ±[e^(−ζd/2) w(d) u(d) + (ζd/2) ∫ over d < τ < T of e^(−ζτ/2) I₁(…)/√(…) w(τ) u(τ) dτ] — the record after T is simply absent.
  */
-function trDampedFocus(zeta, wp, d) {
-  const n = 4000, hs = Math.sqrt(9 / wp) / n; let sum = 0;
-  for (let k = 0; k <= n; k++) {
-    const s = k * hs, w = s * s; let f = Math.sqrt(zeta / 2);
-    if (k > 0) { const kr = Math.sqrt(0.5 * (w * Math.hypot(w, zeta) + w * w)), ki = zeta * w / (2 * kr), ph = -0.5 * zeta * w * wp * wp; f = (kr * Math.cos(ph) - ki * Math.sin(ph)) * Math.exp(-0.5 * w * w * wp * wp - 2 * d * ki) / s; }
-    sum += (k === 0 || k === n ? 1 : k % 2 ? 4 : 2) * f;
-  }
-  return sum * hs / 3 * Math.sqrt(2 * Math.PI) * wp / Math.PI;
+function trDampedRef(zeta, wp, xs, T, tt = TR_TAPER, sides = 2) {
+  const a = 9 / T, K = Math.ceil(8.5 * T / (Math.PI * wp)), dw = Math.PI / T, gh = Math.sqrt(TAU) * wp, n = 2 * Math.ceil(8 * T / wp), h = T / n, tg = Array.from({ length: n + 1 }, (_, i) => i * h);
+  // The emitted pulse is cut off by the ends of the medium. Its transform over the medium is that of the whole Gaussian less the part beyond each end: E(σ, z) = ∫ exp(−y²/2w_p² + σκ(y − z)) dy over y > z,
+  // z the distance of that end from the source, by Simpson's rule (nothing to subtract when the pulse is below 10⁻¹⁴ there).
+  const cut = (kp, sg, z) => { if (z > 8 * wp) return [0, 0]; const m = 2 * Math.ceil(16 * (9 * wp - z) / wp), hy = (9 * wp - z) / m; let re = 0, im = 0; for (let i = 0; i <= m; i++) { const y = i * hy, w = (i === 0 || i === m ? 1 : i % 2 ? 4 : 2) * Math.exp(-((y + z) ** 2) / (2 * wp * wp) + sg * kp[0] * y); re += w * Math.cos(kp[1] * y); im += sg * w * Math.sin(kp[1] * y); } return [re * hy / 3, im * hy / 3]; };
+  const recs = [xs, 1 - xs].slice(0, sides).map(d0 => {
+    const rec = new Float64Array(n + 1);
+    for (let k = 0; k <= K; k++) { // transform of the record at this end, at s = a + i k π/T; each Fourier component is then advanced along the table by a fixed rotation
+      const sC = [a, k * dw], kp = csqrt(cmul(sC, [a + zeta, k * dw])), R = cdiv(csub(kp, sC), cadd(kp, sC)), e2 = cexp([-2 * kp[0], -2 * kp[1]]);
+      // ∫ g e^(−κξ) dξ and ∫ g e^(−κ(2−ξ)) dξ over the medium, ξ the distance from this end, both divided by √(2π) w_p
+      const gF = cexp([0.5 * wp * wp * (kp[0] * kp[0] - kp[1] * kp[1]), wp * wp * kp[0] * kp[1]]), ex = z => cexp([-kp[0] * z, -kp[1] * z]), sc = q => [q[0] / gh, q[1] / gh];
+      const gm = csub(csub(cmul(gF, ex(d0)), sc(cut(kp, 1, d0))), cmul(ex(1), sc(cut(kp, -1, 1 - d0)))), gp = csub(csub(cmul(gF, ex(2 - d0)), cmul(ex(2), sc(cut(kp, -1, d0)))), cmul(ex(1), sc(cut(kp, 1, 1 - d0))));
+      // … and where the pulse has not died away at an end, the one-way condition transforms to U′ ∓ sU = ∓u(0): the displacement there at the start adds [g_this (1 + R e^(−2κ)) + g_other (1 + R) e^(−κ)]/((κ + s)(1 − R² e^(−2κ)))
+      const den = csub([1, 0], cmul(cmul(R, R), e2)), gE = [Math.exp(-d0 * d0 / (2 * wp * wp)) / gh, Math.exp(-((1 - d0) ** 2) / (2 * wp * wp)) / gh];
+      const edge = cdiv(cadd(cmul([gE[0], 0], cadd([1, 0], cmul(R, e2))), cmul([gE[1], 0], cmul(cadd([1, 0], R), ex(1)))), cmul(cadd(kp, sC), den));
+      const U = cadd(cdiv(cmul(cmul([a + zeta, k * dw], cadd([1, 0], R)), cadd(gm, cmul(R, gp))), cmul([2 * kp[0], 2 * kp[1]], den)), edge);
+      if (k === 0) { rec.fill(0.5 * U[0]); continue; }
+      let cs = 1, sn = 0; const cr = Math.cos(k * dw * h), sr = Math.sin(k * dw * h); for (let i = 0; i <= n; i++) { rec[i] += U[0] * cs - U[1] * sn; const t = cs * cr - sn * sr; sn = sn * cr + cs * sr; cs = t; }
+    }
+    for (let i = 0; i <= n; i++) rec[i] *= gh * Math.exp(a * tg[i]) / T * trTaper(tg[i], T, tt);
+    return rec;
+  });
+  const field = x => { let q = 0;
+    recs.forEach((rec, e) => { const d0 = e ? 1 - x : x, r = t => trCubic(tg, rec, Math.floor(t / h), t);
+      for (let m = 0; ; m++) { const ds = [2 * m + d0, 2 * (m + 1) - d0]; if (ds[0] >= T) break;
+        ds.forEach((d, j) => { if (d >= T) return; let w = 0; const nq = zeta > 0 ? 2 * Math.max(2, Math.ceil(4 * (T - d) / wp)) : 0, hq = (T - d) / (nq || 1);
+          for (let i = 0; i <= nq && nq; i++) { const tau = d + i * hq; w += (i === 0 || i === nq ? 1 : i % 2 ? 4 : 2) * Math.exp(-0.5 * zeta * tau) * besselI1z(0.5 * zeta * Math.sqrt(Math.max(tau * tau - d * d, 0))) * r(tau); }
+          q += (j ? -1 : 1) * (Math.exp(-0.5 * zeta * d) * r(d) + 0.25 * zeta * zeta * d * w * hq / 3); }); } });
+    return q; };
+  // peak of the focus from five samples a quarter of a pulse width apart about the source, as in the simulation, and the half-height crossings on either side of it by bisection
+  const hp = wp / 4, pk = trPeak([-2, -1, 0, 1, 2].map(i => field(xs + i * hp)), 2), xPk = xs + pk[0] * hp, half = pk[1] / 2;
+  const edge = sg => { let lo = xPk, hi = xPk + sg * 0.25 * wp; for (let k = 0; k < 40 && Math.abs(field(hi)) > half; k++) { lo = hi; hi += sg * 0.25 * wp; } for (let k = 0; k < 22; k++) { const md = 0.5 * (lo + hi); if (Math.abs(field(md)) > half) lo = md; else hi = md; } return 0.5 * (lo + hi); };
+  return { field, q: field(xs), xPk, fwhm: edge(1) - edge(-1) };
 }
 
 const timeReversal = {
@@ -1488,15 +1572,15 @@ const timeReversal = {
     asm('lossless', 'The medium is lossless, so the wave equation is invariant under time reversal.', { why: 'Ideal case', alt: 'A damping term γ ∂u/∂t attenuates the wave on both the outward and the replayed journey.' }),
     asm('two_sided', 'Sensors at both ends record and re-emit (the mirror encloses the source).', { why: 'Full aperture', alt: 'Only the left-hand sensor is used; the right-hand end is left open.' }),
     asm('homogeneous', 'The wave speed is uniform.', { why: 'Simplest medium', alt: 'A slower inclusion between 62 % and 74 % of the length reflects and delays part of the wave.' }),
-    asm('ideal_sensors', 'The sensors are noise-free.', { why: 'Isolates the wave physics', alt: 'Independent Gaussian noise is added to each recorded sample.' }),
+    asm('ideal_sensors', 'The sensors are noise-free.', { why: 'Isolates the wave physics', alt: 'Gaussian noise of the stated r.m.s. value, limited to the bandwidth of the pulse and independent at the two sensors, is added to each record.' }),
   ],
-  symbols: { u: ['Wave displacement', 'm'], x: ['Position', 'm'], t: ['Time', 's'], c_x: ['Local wave speed', 'm/s'], gamma_d: ['Damping rate', '1/s'], u_a: ['Emitted amplitude', 'm'], u_0: ['Initial displacement', 'm'], u_TR: ['Displacement imposed at a sensor during replay', 'm'], u_rec: ['Displacement recorded at that sensor', 'm'], n_s: ['Sensor noise', 'm'], q_f: ['Refocused amplitude over emitted amplitude', '1'], q_pred: ['Expected refocused amplitude ratio from the loss estimate', '1'], T_r: ['Recording time', 's'] },
+  symbols: { u: ['Wave displacement', 'm'], x: ['Position', 'm'], t: ['Time', 's'], c_x: ['Local wave speed', 'm/s'], gamma_d: ['Damping rate', '1/s'], u_a: ['Emitted amplitude', 'm'], u_0: ['Initial displacement', 'm'], u_TR: ['Displacement imposed at a sensor during replay', 'm'], u_rec: ['Displacement recorded at that sensor', 'm'], w_m: ['Fade weight of the mirror: 1, falling smoothly to 0 over the last 0.2 L/c of the record', '1'], n_s: ['Sensor noise', 'm'], q_f: ['Refocused amplitude over emitted amplitude', '1'], q_pred: ['Expected refocused amplitude ratio from the loss estimate', '1'], T_r: ['Recording time', 's'] },
   equations: a => [
     eq('wave', 'Wave equation', `pd2(u,t)${a.lossless ? '' : ' + gamma_d*pd(u,t)'}`, 'c_x^2*pd2(u,x)', { kind: 'law', origin: 'Newton\'s second law for the medium' }),
     a.homogeneous ? eq('cx', 'Wave speed', 'c_x', 'c_w', { kind: 'closure', needs: ['homogeneous'] }) : eq('cx', 'Wave speed inside the inclusion', 'c_x', 'c_ratio*c_w', { kind: 'closure' }),
     ...(a.lossless ? [] : [eq('gam', 'Damping rate', 'gamma_d', 'zeta_L*c_w/L', { kind: 'definition' })]),
     eq('ic', 'Emitted pulse', 'u_0', 'u_a*exp(-(x - x_s*L)^2/(2*(w_p*L)^2))', { kind: 'initial' }),
-    eq('tr', 'Replay at a sensor', 'u_TR', `u_rec${a.ideal_sensors ? '' : ' + n_s'}`, { kind: 'boundary', origin: 'Time-reversal mirror', note: 'The record is replayed in reverse order: the value imposed at time t is the one recorded at T_r − t' }),
+    eq('tr', 'Replay at a sensor', 'u_TR', `w_m*${a.ideal_sensors ? 'u_rec' : '(u_rec + n_s)'}`, { kind: 'boundary', origin: 'Time-reversal mirror', note: 'The record is replayed in reverse order: the value imposed at time t is the one recorded at T_r − t. The mirror fades the last 0.2 L/c of the record smoothly to zero, so that the replay does not begin with a step' }),
     a.lossless
       ? eq('qf', 'Expected refocused amplitude', 'q_pred', a.two_sided ? '1' : '1/2', { kind: 'derived', origin: 'Time-reversal invariance; half the wave is recorded by one sensor', note: 'Estimate for a uniform medium with noise-free sensors; the simulated ratio q_f is reported alongside' })
       : eq('qf', 'Expected refocused amplitude with damping', 'q_pred', a.two_sided ? '(exp(-zeta_L*x_s) + exp(-zeta_L*(1 - x_s)))/2' : 'exp(-zeta_L*x_s)/2', { kind: 'derived', origin: 'Attenuation exp(−γt/2) accumulated on the outward and return paths' }),
@@ -1524,12 +1608,12 @@ const timeReversal = {
         scalar('rho_f', 'Correlation of the refocused field with the emitted pulse', s.corr, '1'),
         scalar('E_f', 'Energy within ±3 pulse widths of the source / emitted energy', s.eFrac, '1'),
         scalar('w_f', 'Width of the focus (FWHM)', s.fwhm, 'm', { show: 'mm' }), scalar('w_0', 'Width of the emitted pulse (FWHM)', fw0, 'm', { show: 'mm' }),
-        scalar('x_err', 'Offset of the focal peak from the source', s.xs[s.ip] - s.xs[s.is], 'm', { show: 'mm' }),
-        scalar('bg', 'Background r.m.s. away from the focus / emitted amplitude', s.bgRms, '1'),
+        scalar('x_err', 'Offset of the focal peak from the source', s.xPk - s.xc, 'm', { show: 'mm' }),
+        scalar('bg', 'Background r.m.s. away from the focus / emitted amplitude', s.bgRms, '1', s.bgRms > 1e-12 ? {} : { text: 'Below 10⁻¹² — none above the rounding of the arithmetic' }),
         scalar('SNR_f', 'Focus-to-background ratio', dB(Math.abs(s.q) / Math.max(s.bgRms, 1e-12)), 'dB', s.bgRms > 1e-12 ? {} : { text: 'Unbounded — no background' }),
         scalar('T_r', 'Recording time', tRec, 's', { show: 'ms' }), scalar('t_tr', 'Transit time L/c', v.L / v.c_w, 's', { show: 'ms' }),
         scalar('gamma_d', 'Damping rate', s.gam, '1/s'),
-        scalar('resid', 'Largest field left in the medium when recording stopped', s.resid, '1'),
+        scalar('resid', 'Largest field left in the medium when recording stopped', s.resid, '1', s.resid > 1e-12 ? {} : { text: 'Below 10⁻¹² — only the far tail of the pulse' }),
       ],
       series: [
         line('records', 'Signals recorded at the boundary sensors', 'Time', 'ms', tm, [{ label: 'Left sensor', data: s.recL }, { label: 'Right sensor', data: s.recR }], 'Displacement / emitted amplitude', '–'),
@@ -1553,11 +1637,13 @@ const timeReversal = {
     out.push(bench('One-sided mirror refocuses half the amplitude', o.q, 0.5, 'Only one of the two outgoing pulses is recorded', 1e-9));
     const d = trSim(v, { ...id, lossless: false });
     // The round-trip estimate ½[exp(−γx_s/c) + exp(−γ(L−x_s)/c)] is the ray limit: it attenuates every frequency as exp(−γt/2), whereas the part of the pulse below
-    // ω ≈ γ diffuses and is attenuated less (6 % of the amplitude at γL/c = 2, a third at 5). The reference is the frequency-domain result for a complete record.
-    // Time reversal can return only what was recorded: the comparison is made when the field still in the medium at the end of the record is below the tolerance
-    // times the expected amplitude (a heavily damped medium holds the diffusing remainder long after the pulses have left).
-    const qd = trDampedFocus(v.zeta_L, v.w_p, v.x_s) + trDampedFocus(v.zeta_L, v.w_p, 1 - v.x_s);
-    if (d.resid <= 0.03 * qd) out.push(bench('Damped refocused amplitude against the round-trip loss estimate', d.q, qd, 'A_f/A₀ = Σ (1/π)∫ Re[κ ĝ(κ)/(2ω)] exp(−2d Im κ) dω over both paths, κ = √(ω² + iγω)/c: the round-trip loss ½[exp(−γx_s/c) + exp(−γ(L−x_s)/c)] with the low-frequency part of the pulse included. Applies when the field left unrecorded is below 3 % of this', 0.03));
+    // ω ≈ γ diffuses and is attenuated less (6 % of the amplitude at γL/c = 2, a third at 5), and a heavily damped medium still holds that part when the record ends.
+    // The reference therefore follows the simulated experiment itself — the same one-way ends, the same finite record, the same driven ends on replay — in closed form but for two quadratures.
+    const fw0 = 2 * Math.sqrt(2 * Math.log(2)) * v.w_p, ref = trDampedRef(v.zeta_L, v.w_p, v.x_s, d.Nf / d.M), how = 'Laplace-domain solution with the one-way ends for the recording, the telegraph-equation kernel exp(−γx/2c) δ(t − x/c) + wake, with its images in the driven ends, for the replay of the faded record';
+    out.push(bench('Damped refocused amplitude against the round-trip loss estimate', d.q, ref.q, 'Round-trip loss ½[exp(−γx_s/c) + exp(−γ(L−x_s)/c)] completed with the diffusing low-frequency part of the pulse, for the finite record: ' + how, 0.002));
+    out.push(bench('Width of the damped focus against the same solution', d.fwhm / v.L, ref.fwhm, 'Full width at half maximum, as a fraction of the length: ' + how, 0.003));
+    // a position has no scale of its own to be relative to: the offset of the peak is compared in units of the width of the emitted pulse
+    out.push(bench('Offset of the damped focal peak against the same solution', 1 + (d.xPk - d.xc) / (v.L * fw0), 1 + (ref.xPk - v.x_s) / fw0, 'One plus the offset of the peak from the source in widths (FWHM) of the emitted pulse: ' + how, 5e-4));
     return out;
   },
   validation: [],
@@ -1589,7 +1675,7 @@ const timeReversal = {
   hazards: [{ hazard: 'Unexpectedly high focal pressure', cause: 'Many channels adding coherently at the focus', mitigation: 'Calculate the focal gain before raising drive levels' }],
   standards: ['IEC 61391-1 (ultrasonics — pulse-echo scanners — calibration of spatial measurement systems)', 'ISO 16063 series (methods for the calibration of vibration and shock transducers)'],
   limits: 'One spatial dimension, linear waves, displacement sensors that both record and impose the field exactly. In higher dimensions a finite aperture and diffraction limit the focus. The damping model is a uniform viscous term; frequency-dependent absorption additionally distorts the pulse.',
-  numerics: { method: 'Explicit leapfrog finite differences at unit Courant number in the host medium, with exact one-way (Mur) open boundaries during recording and prescribed boundary values during replay', order: 2, stability: 'Stable for local Courant number up to one', resolution: 'n_x' },
+  numerics: { method: 'Explicit leapfrog finite differences at unit Courant number, where they propagate without dispersion: the inclusion is given its own spacing, c_ratio times that of the host to the nearest whole interval, with its faces on nodes and an energy-conserving junction there. Damping is carried by the exact factor exp(−γt/2). One-way (Mur) open boundaries during recording and prescribed boundary values during replay', order: 2, stability: 'Stable for local Courant number up to one', resolution: 'n_x' },
   optimise: { objective: 'q_f', sense: 'max', vars: ['x_s'], note: 'With damping and a one-sided mirror, sources nearer the sensor refocus more strongly.' },
   inverse: { series: 'focus', fit: ['zeta_L'] },
   extensions: ['Two-dimensional cavity with a single-channel mirror', 'Acoustic sink to beat the diffraction limit', 'Medium changed between recording and replay (Loschmidt echo sensitivity)', 'Iterative time reversal for selective focusing'],
@@ -2228,8 +2314,13 @@ const memristor = {
     const f = Math.max(v.f_d, 4 * fc, v.V_0 / (Math.PI * Math.max(phiL, 1e-300))), phi = v.V_0 / (Math.PI * f), s = memSim(v, b, f, 1, 2000, x0);
     const q = 2 * phi / (R0 + Math.sqrt(Math.max(R0 * R0 - 2 * dR * k * phi, 0)));
     out.push(bench('State after half a cycle against the charge–flux solution', s.x[1000], x0 + k * q, 'Closed form for linear drift without a window', 1e-6));
-    const s1 = memSim(v, b, 40 * fc, 2, 1000), s2 = memSim(v, b, 400 * fc, 2, 1000);
-    out.push(bench('Loop area falls inversely with frequency well above f_c', s2.areaP / s1.areaP, 0.1, 'First-order perturbation in f_c/f', 0.06));
+    // Lobe area from the same charge–flux relation: with u = cos(2πft) and e = ΔR k φ/R₀², φ = V₀/(πf) the flux of a half-cycle, i = v/(R₀ √(1 − e(1 − u))) and the lobe area is (V₀²/R₀) |∫ u du/√(1 − e(1 − u))| over −1 < u < 1,
+    // which is e/3 to first order — the inverse-frequency law — and exact as long as the boundary stays inside the film. The frequencies are therefore taken high enough that it covers at most half of the way to the electrode.
+    const R1 = v.R_on * v.x_0 + v.R_off * (1 - v.x_0) + (a.no_series ? 0 : v.R_s), qS = 0.5 * (1 - v.x_0) / k, f1 = Math.max(40 * fc, v.V_0 / (Math.PI * (R1 * qS - dR * k * qS * qS / 2)));
+    const lobe = ff => { const e = dR * k * v.V_0 / (Math.PI * ff * R1 * R1), r = Math.sqrt(1 - 2 * e); let g = 0; if (Math.abs(e) < 0.02) { let c = 1, w = 1; for (let m = 1; m < 40; m++) { c *= (2 * m - 1) / (2 * m) * e; w *= 2; g -= c * w * m / ((m + 1) * (m + 2)); } g *= 2; } else g = 2 * (3 * e - 2 + (2 - e) * r) / (3 * e * e); return v.V_0 ** 2 / R1 * Math.abs(g); };
+    const s1 = memSim(v, b, f1, 2, 1000), s2 = memSim(v, b, 10 * f1, 2, 1000);
+    out.push(bench('Loop-lobe area against the charge–flux solution', s1.areaP, lobe(f1), 'Closed form for linear drift without a window, at a frequency high enough that the boundary stays inside the film', 1e-4));
+    if (dR !== 0) out.push(bench('Loop area falls inversely with frequency well above f_c', s2.areaP / s1.areaP, lobe(10 * f1) / lobe(f1), 'Ratio of the closed-form lobe areas at frequencies a decade apart: one tenth, less the second-order term in f_c/f. Not asserted when R_off = R_on, where there is no loop', 1e-4));
     return out;
   },
   validation: [],

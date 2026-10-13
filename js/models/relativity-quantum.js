@@ -413,7 +413,8 @@ const elevator = {
     const g = v.g, h = v.h, eps = g * h / c2;
     const z = a.weak ? eps : eps / (1 + eps);
     const sag = g * v.w * v.w / (2 * c2), angle = g * v.w / c2;
-    const tf = a.vacuum ? Math.sqrt(2 * h / g) : v.v_t / g * Math.acosh(Math.exp(Math.min(g * h / (v.v_t * v.v_t), 700)));
+    // arcosh(eˣ) = x + ln(1 + √(1 − e⁻²ˣ)): free of the cancellation in eˣ − 1 at small x = gh/v_t² and of overflow at large x
+    const xd = g * h / (v.v_t * v.v_t), tf = a.vacuum ? Math.sqrt(2 * h / g) : v.v_t / g * (xd + Math.log1p(Math.sqrt(-Math.expm1(-2 * xd))));
     const vi = a.vacuum ? g * tf : v.v_t * Math.tanh(g * tf / v.v_t);
     let daV = 0, daH = 0;
     if (!a.uniform) { if (a.in_gravity) { daV = 2 * g * h / v.R_p; daH = g * v.w / v.R_p; } else { daV = g * g * h / c2; } }

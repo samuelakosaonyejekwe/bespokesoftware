@@ -113,7 +113,7 @@ function frame(inv, c, wsKey) {
       </div>
       ${inv.worlds.length > 1 ? html`<div><label class="f" for="world-sel">Active world</label><select id="world-sel">${join(inv.worlds, w => html`<option value="${w.id}" ${w.id === inv.activeWorld ? raw('selected') : ''}>${w.name}</option>`)}</select></div>` : ''}
     </div>
-    <div class="tabs" role="tablist" aria-label="Workspaces">${join(tabs, (t, k) => html`<button class="tab" role="tab" aria-selected="${t.key === ws.key}" data-ws="${t.key}" title="${t.blurb}"><span class="n">${k + 1}</span>${t.title}</button>`)}</div>
+    <div class="tabs" role="tablist" aria-label="Workspaces"><button class="tabscroll l" data-tabscroll="-1" aria-label="Show earlier stages" title="Earlier stages" hidden>‹</button>${join(tabs, (t, k) => html`<button class="tab" role="tab" aria-selected="${t.key === ws.key}" data-ws="${t.key}" title="${t.blurb}"><span class="n">${k + 1}</span>${t.title}</button>`)}<button class="tabscroll r" data-tabscroll="1" aria-label="Show later stages" title="Later stages" hidden>›</button></div>
     <p class="small dim" style="margin:.1rem 0 .5rem">The numbered tabs are the stages of the investigation, in order; this is stage ${i + 1} of ${tabs.length}. Under each panel heading a purple line says what the panel shows — open it for how to read it. Tap any coloured label to see what it means.</p>
     <div class="row spread" style="margin:.2rem 0 .8rem"><div><h2 style="margin:0">${ws.title}</h2><span class="small dim">${ws.blurb}${ws.from ? ` · catalogue outputs ${ws.from}–${ws.to}` : ''}</span></div></div>
     <div id="ws" class="stack"></div>
@@ -159,8 +159,13 @@ export async function investigationView([id, wsKey = 'concept']) {
         t.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); t.blur(); } });
         $('#world-sel', root)?.addEventListener('change', e => { inv.activeWorld = e.target.value; X.refresh(); });
         $('.tab[aria-selected="true"]', root)?.scrollIntoView({ block: 'nearest', inline: 'center' });
+        // the strip of stages scrolls sideways: arrows appear at whichever end has more, and the mouse wheel moves it
+        const strip = $('.tabs', root), ends = () => { const more = strip.scrollWidth - strip.clientWidth; $('.tabscroll.l', strip).hidden = strip.scrollLeft < 8; $('.tabscroll.r', strip).hidden = strip.scrollLeft > more - 8; };
+        strip.addEventListener('scroll', ends, { passive: true }); strip.addEventListener('wheel', e => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && strip.scrollWidth > strip.clientWidth) { strip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+        setTimeout(ends, 60); window.addEventListener('resize', ends); X.onDispose(() => window.removeEventListener('resize', ends));
       };
       on(root, 'click', '[data-ws]', (_, el) => go(`#/i/${inv.id}/${el.dataset.ws}`));
+      on(root, 'click', '[data-tabscroll]', (_, el) => { const strip = el.closest('.tabs'); strip.scrollBy({ left: +el.dataset.tabscroll * strip.clientWidth * 0.7, behavior: 'smooth' }); });
       // "Show ›" on a catalogue entry: find the panel of this workspace that holds that output and bring it into view
       on(root, 'click', '[data-show]', (_, el) => {
         const host = $('#ws', root), cards = $$('h3', host).map(h => ({ h, card: h.closest('.card') || h.parentElement, text: h.textContent.toLowerCase() })); if (!cards.length) return;

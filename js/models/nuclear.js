@@ -246,6 +246,17 @@ const shielding = {
 };
 
 // ------------------------------------------------------------------ decay chain
+// Divided differences of the exponential, exp[a, b] and exp[a, b, c]: the Bateman sums written so that no difference of
+// nearly equal exponentials is formed, for any ratio of the decay constants (including equal ones).
+const dd1 = (a, b) => { const hi = Math.max(a, b), d = Math.min(a, b) - hi; return Math.exp(hi) * (d === 0 ? 1 : Math.expm1(d) / d); };
+const dd2 = (a, b, c) => {
+  const [x1, x2, x3] = [a, b, c].sort((p, q) => p - q); if (x3 - x1 > 0.1) return (dd1(x2, x3) - dd1(x1, x2)) / (x3 - x1);
+  // nearly coincident arguments: e^m Σ h_k(d)/(k + 2)!, h_k the complete homogeneous polynomials of the deviations from the mean
+  const m = (x1 + x2 + x3) / 3, d1 = x1 - m, d2 = x2 - m, d3 = x3 - m, e2 = d1 * d2 + d1 * d3 + d2 * d3, e3 = d1 * d2 * d3;
+  let h0 = 1, h1 = 0, h2 = -e2, s = 0.5, fac = 6; for (let k = 2; k <= 12; k++) { fac *= k + 2; s += h2 / fac; const h3 = -e2 * h1 + e3 * h0; h0 = h1; h1 = h2; h2 = h3; }
+  return Math.exp(m) * s;
+};
+const tPeak = (l1, l2) => { const d = l2 - l1; return d === 0 ? 1 / l1 : Math.abs(d) < 0.5 * l1 ? Math.log1p(d / l1) / d : Math.log(l2 / l1) / d; };
 const decay = {
   id: 'decay-chain',
   title: 'Radioactive decay chain',
@@ -288,18 +299,18 @@ const decay = {
   ],
   solve(v, a) {
     const l1 = LN2 / v.T_1, l2 = LN2 / v.T_2, l3 = LN2 / v.T_3, f = v.f_b, N0 = v.N_0, n = 400, t = N.linspace(0, v.t_end, n);
-    const same = Math.abs(l2 - l1) < 1e-9 * Math.max(l1, l2);
-    const N20 = a.no_initial_daughter || same || l2 <= l1 ? 0 : f * l1 * N0 / (l2 - l1);
+    const N20 = a.no_initial_daughter || l2 <= l1 * (1 + 1e-9) ? 0 : f * l1 * N0 / (l2 - l1);
     const n1 = x => N0 * Math.exp(-l1 * x);
-    const n2c = (x, start) => (same ? f * l1 * N0 * x * Math.exp(-l1 * x) : f * l1 * N0 / (l2 - l1) * (Math.exp(-l1 * x) - Math.exp(-l2 * x))) + start * Math.exp(-l2 * x);
+    const n2c = (x, start) => f * N0 * l1 * x * dd1(-l1 * x, -l2 * x) + start * Math.exp(-l2 * x);
     let N2;
     if (a.closed) N2 = t.map(x => n2c(x, N20));
-    else { const day = 86400; N2 = t.map(x => { const t0 = Math.floor(x / day) * day, dt = x - t0, p0 = n1(t0); return (same ? f * l1 * p0 * dt * Math.exp(-l1 * dt) : f * l1 * p0 / (l2 - l1) * (Math.exp(-l1 * dt) - Math.exp(-l2 * dt))) + (t0 === 0 ? N20 * Math.exp(-l2 * dt) : 0); }); }
-    // granddaughter by an exponential integrator: exact for a source that is constant over a step, for any ratio of half-lives
-    const N3 = [0]; for (let i = 1; i < n; i++) { const h = t[i] - t[i - 1], src = 0.5 * l2 * (N2[i] + N2[i - 1]), q = l3 * h; N3.push(N3[i - 1] * Math.exp(-q) + src * h * (q > 1e-8 ? -Math.expm1(-q) / q : 1 - q / 2)); }
+    else { const day = 86400; N2 = t.map(x => { const t0 = Math.floor(x / day) * day, dt = x - t0, p0 = n1(t0); return f * p0 * l1 * dt * dd1(-l1 * dt, -l2 * dt) + (t0 === 0 ? N20 * Math.exp(-l2 * dt) : 0); }); }
+    // granddaughter: closed-form Bateman sum for the sealed source (exact however fast the parent or daughter decays within one
+    // plotting interval); with daily removal of the daughter, an exponential integrator over the saw-tooth daughter inventory
+    const N3 = a.closed ? t.map(x => f * N0 * (l1 * x) * (l2 * x) * dd2(-l1 * x, -l2 * x, -l3 * x) + N20 * l2 * x * dd1(-l2 * x, -l3 * x)) : [0]; for (let i = 1; i < n && !a.closed; i++) { const h = t[i] - t[i - 1], src = 0.5 * l2 * (N2[i] + N2[i - 1]), q = l3 * h; N3.push(N3[i - 1] * Math.exp(-q) + src * h * (q > 1e-8 ? -Math.expm1(-q) / q : 1 - q / 2)); }
     const N1 = t.map(n1), A1 = N1.map(x => x * l1), A2 = N2.map(x => x * l2);
     // with the daughter initially in equilibrium its activity only falls, so the maximum is at the start
-    const tmax = N20 > 0 ? 0 : !same && l2 > 0 && l1 > 0 ? Math.log(l2 / l1) / (l2 - l1) : 1 / l1;
+    const tmax = N20 > 0 ? 0 : tPeak(l1, l2);
     const total = N1[n - 1] + N2[n - 1] + N3[n - 1] + (1 - f) * (N0 - N1[n - 1]);
     return {
       scalars: [scalar('lambda_1', 'Parent decay constant', l1, '1/s'), scalar('lambda_2', 'Daughter decay constant', l2, '1/s'), scalar('A_0', 'Initial parent activity', N0 * l1, 'Bq', { show: 'GBq' }),
@@ -315,12 +326,13 @@ const decay = {
   },
   benchmarks(v, a) {
     const r = this.solve({ ...v, t_end: v.T_1 }, { no_initial_daughter: true, closed: true });
-    const l1 = LN2 / v.T_1, l2 = LN2 / v.T_2, tm = Math.log(l2 / l1) / (l2 - l1), q = this.solve({ ...v, t_end: 2 * tm }, { no_initial_daughter: true, closed: true }), s = q.series[0], i = s.y[1].data.indexOf(N.maxOf(s.y[1].data));
+    // the time of the peak does not depend on the branching fraction; with f_b = 0 no daughter is fed at all, so the curve is traced with f_b = 1
+    const l1 = LN2 / v.T_1, l2 = LN2 / v.T_2, tm = tPeak(l1, l2), q = this.solve({ ...v, f_b: v.f_b > 0 ? v.f_b : 1, t_end: 2 * tm }, { no_initial_daughter: true, closed: true }), s = q.series[0], i = s.y[1].data.indexOf(N.maxOf(s.y[1].data));
     // molybdenum-99 → technetium-99m → technetium-99: the three balances integrated independently by Runge–Kutta
     const mo = { ...v, N_0: 1, T_1: 2.75 * 86400, T_2: 6.01 * 3600, T_3: 2.11e5 * 3.15576e7, f_b: 0.875, t_end: 5 * 86400 }, k1 = LN2 / mo.T_1, k2 = LN2 / mo.T_2, k3 = LN2 / mo.T_3;
     const ode = N.rk45((t, y) => [-k1 * y[0], mo.f_b * k1 * y[0] - k2 * y[1], k2 * y[1] - k3 * y[2]], [1, 0, 0], 0, mo.t_end, 3, { rtol: 1e-11, atol: 1e-14 });
     const am = this.solve(mo, { no_initial_daughter: true, closed: true }).series[1];
-    return [bench('Half the parent remains after one half-life', r.scalars.find(s2 => s2.sym === 'N_1_end').value / v.N_0, 0.5, 'Decay law', 1e-12), bench('Computed peak of daughter activity at the analytic time', s.x.data[i] * 86400 / tm, 1, 't_max = ln(λ₂/λ₁)/(λ₂ − λ₁)', 0.01),
+    return [bench('Half the parent remains after one half-life', r.scalars.find(s2 => s2.sym === 'N_1_end').value / v.N_0, 0.5, 'Decay law', 1e-12), bench('Computed peak of daughter activity at the analytic time', s.x.data[i] * 86400 / tm, 1, 't_max = ln(λ₂/λ₁)/(λ₂ − λ₁), independent of the branching fraction (traced with f_b = 1 when none of the parent feeds the daughter)', 0.01),
       bench('Daughter inventory after five days vs numerical integration', am.y[1].data.at(-1), ode.y[1].at(-1), 'Dormand–Prince integration of the three decay balances', 1e-8),
       bench('Granddaughter inventory after five days vs numerical integration', am.y[2].data.at(-1), ode.y[2].at(-1), 'Dormand–Prince integration of the three decay balances', 1e-4)];
   },
@@ -336,7 +348,7 @@ const decay = {
   hazards: [{ hazard: 'In-growth of a more hazardous daughter', cause: 'Storage of a parent whose progeny emit more penetrating radiation', mitigation: 'Assess the whole chain, not the parent alone' }],
   standards: ['IAEA Specific Safety Guide SSG-46 (radiation protection in medical uses)', 'ISO 2919 (sealed radioactive sources)'],
   limits: 'Three-member linear chain with one branching fraction, constant decay constants. No neutron activation, no chemical fractionation other than the optional complete daily removal of the daughter.',
-  numerics: { method: 'Closed-form Bateman expressions for parent and daughter; exponential-integrator quadrature for the granddaughter' },
+  numerics: { method: 'Closed-form Bateman expressions for parent, daughter and granddaughter, written with divided differences of the exponential so that nearly equal decay constants cause no cancellation; exponential-integrator quadrature for the granddaughter when the daughter is removed daily' },
   inverse: { series: 'activity', fit: ['T_1'] },
   extensions: ['Arbitrary chains and branches by matrix exponential', 'Production by irradiation (activation and burn-up)', 'Partial elution efficiency'],
 };
