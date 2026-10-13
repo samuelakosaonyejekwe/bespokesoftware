@@ -46,7 +46,8 @@ export function lineChart(canvas, spec, opts = {}) {
   yt.forEach(v => { const py = m.t + ph - (v - y0) / (y1 - y0) * ph; ctx.beginPath(); ctx.moveTo(m.l, py); ctx.lineTo(m.l + pw, py); ctx.stroke(); ctx.fillText(spec.logy ? `10^${v}` : tickLabel(v), m.l - 6, py); });
   ctx.fillStyle = th.fg; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
   ctx.fillText(`${spec.x.label}${spec.x.unit && spec.x.unit !== '–' && spec.x.unit !== '1' ? ` (${spec.x.unit})` : ''}`, m.l + pw / 2, h - 4);
-  ctx.save(); ctx.translate(12, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'top'; ctx.fillText(`${spec.yLabel || ''}${spec.yUnit && spec.yUnit !== '–' && spec.yUnit !== '1' ? ` (${spec.yUnit})` : ''}`, 0, 0); ctx.restore();
+  { const un = spec.yUnit && spec.yUnit !== '–' && spec.yUnit !== '1' ? ` (${spec.yUnit})` : ''; let name = spec.yLabel || ''; while (name.length > 8 && ctx.measureText(name + '…' + un).width > h - 8) name = name.slice(0, -2); if (name !== (spec.yLabel || '')) name = name.trimEnd() + '…';
+    ctx.save(); ctx.translate(12, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'top'; ctx.fillText(name + un, 0, 0); ctx.restore(); }
   ctx.save(); ctx.beginPath(); ctx.rect(m.l, m.t, pw, ph); ctx.clip();
   if (spec.band) { ctx.fillStyle = PALETTE[0] + '33'; ctx.beginPath(); spec.x.data.forEach((v, i) => { const px = X(v), py = Y(spec.band.hi[i]); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); for (let i = spec.x.data.length - 1; i >= 0; i--) ctx.lineTo(X(spec.x.data[i]), Y(spec.band.lo[i])); ctx.closePath(); ctx.fill(); }
   const draw = (xd, yd, color, dash, scatter, fill) => {

@@ -10,6 +10,18 @@ export const variance = a => { const m = mean(a); return sum(a.map(x => (x - m) 
 export const std = a => Math.sqrt(variance(a));
 export const minOf = a => a.reduce((m, x) => (x < m ? x : m), Infinity);
 export const maxOf = a => a.reduce((m, x) => (x > m ? x : m), -Infinity);
+/**
+ * Largest value of a sampled curve, read between the samples: a parabola through the highest sample and its two
+ * neighbours gives the peak value and its position as a fractional index. Reading the highest sample alone makes the
+ * result jump by a grid step when an input changes slightly. `interp(arr)` reads any other sampled quantity at the peak.
+ */
+export function peak(ys) {
+  let i = 0; for (let k = 1; k < ys.length; k++) if (ys[k] > ys[i]) i = k;
+  let o = 0, y = ys[i];
+  if (i > 0 && i < ys.length - 1) { const a = ys[i - 1], b = ys[i], c = ys[i + 1], den = a - 2 * b + c; if (den < 0) { o = clamp(0.5 * (a - c) / den, -0.5, 0.5); y = b - 0.25 * (a - c) * o; } }
+  const interp = arr => { const j = clamp(i + (o > 0 ? 1 : -1), 0, arr.length - 1); return arr[i] + (arr[j] - arr[i]) * Math.abs(o); };
+  return { i, offset: o, value: y, interp };
+}
 export function quantile(a, q) {
   const s = [...a].sort((x, y) => x - y); const p = (s.length - 1) * q; const i = Math.floor(p);
   return s[i] + (s[Math.min(i + 1, s.length - 1)] - s[i]) * (p - i);

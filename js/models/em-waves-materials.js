@@ -336,8 +336,8 @@ const rlc = {
   solve(v, a) {
     const c = rlcCore(v, a), { t, iL, vC, V, Rt } = c, k = t.length - 1, warnings = [];
     const regime = c.zeta < 0.999 ? 'Under-damped (ringing)' : c.zeta <= 1.001 ? 'Critically damped' : 'Over-damped';
-    let ip = 0; for (let j = 1; j <= k; j++) if (vC[j] > vC[ip]) ip = j;
-    const os = Math.max(0, (vC[ip] - c.vss) / c.vss);
+    const pk = N.peak(vC), ip = pk.i, vPk = pk.value;
+    const os = Math.max(0, (vPk - c.vss) / c.vss);
     let js = 0; for (let j = k; j >= 0; j--) if (Math.abs(vC[j] - c.vss) > 0.02 * Math.abs(c.vss)) { js = Math.min(j + 1, k); break; }
     if (c.truncated) warnings.push('The transient is too stiff for the explicit integrator with a saturating inductor; the response shown is truncated.');
     if (!a.linear_L) { const im = N.maxOf(iL.map(Math.abs)); if (im < 0.1 * v.I_sat) warnings.push('The current stays far below the saturation scale, so the saturating inductor behaves linearly here.'); }
@@ -354,7 +354,7 @@ const rlc = {
         scalar('f_dmp', 'Damped (ringing) frequency', c.zeta < 1 ? c.wn * Math.sqrt(1 - c.zeta * c.zeta) / TAU : 0, 'Hz', c.zeta < 1 ? {} : { text: 'None — no oscillation' }),
         scalar('tau_env', 'Decay time constant of the envelope', 1 / c.alpha, 's', { show: 'ms' }),
         scalar('BW', 'Half-power bandwidth', c.wn / (TAU * c.Q), 'Hz'),
-        scalar('v_pk', 'Peak capacitor voltage after the step', vC[ip], 'V'), scalar('OS', 'Overshoot', os, '1', { show: '%' }),
+        scalar('v_pk', 'Peak capacitor voltage after the step', vPk, 'V'), scalar('OS', 'Overshoot', os, '1', { show: '%' }),
         scalar('t_set', 'Settling time to within 2 %', t[js], 's', { show: 'ms' }),
         scalar('i_pk', 'Peak current after the step', N.maxOf(iL), 'A'),
         scalar('Z_d', 'Impedance magnitude at the drive frequency', Zd, 'ohm'), scalar('I_d', 'Current amplitude at the drive frequency', Id, 'A'),
@@ -1224,7 +1224,7 @@ const coupledOsc = {
     const c = coCore(v, a), r = c.run(), t = r.t, n = t.length, x1 = r.y[0], x2 = r.y[2], warnings = [];
     const E0 = c.energy(v.x_0, 0, 0, 0), e1 = t.map((_, i) => 0.5 * c.m * r.y[1][i] ** 2 + 0.5 * c.k1 * x1[i] ** 2 + 0.25 * c.k3 * x1[i] ** 4), e2 = t.map((_, i) => 0.5 * c.m * r.y[3][i] ** 2 + 0.5 * c.k2 * x2[i] ** 2 + 0.25 * c.k3 * x2[i] ** 4);
     const eEnd = c.energy(x1[n - 1], r.y[1][n - 1], x2[n - 1], r.y[3][n - 1]), eRes = (eEnd + r.y[4][n - 1] - E0) / E0;
-    const w0 = Math.sqrt(c.k1 / c.m), trNum = N.maxOf(e2) / E0;
+    const w0 = Math.sqrt(c.k1 / c.m), trNum = Math.min(1, N.peak(e2).value / E0);
     if (n < 600) warnings.push('The integration stopped early at its step limit; the time series is truncated.');
     if (c.kc / c.k1 > 0.5) warnings.push('The coupling is strong: the motion is no longer a slow beat on a fast carrier, and the weak-coupling estimates do not apply.');
     if (!a.linear && c.k3 * v.x_0 ** 2 > 0.3 * c.k1) warnings.push('The cubic term is comparable with the linear stiffness at this amplitude; the linear mode frequencies are only indicative.');

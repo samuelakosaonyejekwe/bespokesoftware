@@ -602,7 +602,7 @@ const rocket = {
   ],
   solve(v, a) {
     const r = ascent(v, a), [hbo, vbo, gl, dl, tl] = r.yb;
-    const iq = r.q.indexOf(N.maxOf(r.q)), amax = N.maxOf(r.acc), warnings = [];
+    const pq = N.peak(r.q), iq = pq.i, amax = N.maxOf(r.acc), warnings = [];
     if (!a.const_thrust && r.Fv - 101325 * v.rho_0 / 1.225 * v.A_e < v.m_0 * v.g_s) warnings.push('With the ambient-pressure correction the sea-level thrust is below the lift-off weight: the vehicle stays on the pad until enough propellant has burned.');
     if (a.gravity && !r.apogee) warnings.push('The vehicle does not reach an apogee within the simulated coast: its burnout speed is close to or above the local escape speed.');
     if (a.drag && vbo > 1500 && hbo < 3e4) warnings.push('High speed deep in the atmosphere: aerodynamic heating and transonic drag rise, neither of which is modelled, would be severe.');
@@ -616,7 +616,7 @@ const rocket = {
         scalar('dv_g', 'Gravity loss', gl, 'm/s'), scalar('dv_d', 'Drag loss', dl, 'm/s'), scalar('dv_p', 'Back-pressure thrust loss', r.dvId - tl, 'm/s'),
         scalar('h_ap', 'Apogee altitude', a.gravity && r.apogee ? r.hAp : NaN, 'm', { show: 'km', text: !a.gravity ? 'No apogee without gravity' : r.apogee ? undefined : 'Not reached within the simulated coast' }),
         scalar('t_ap', 'Time to apogee', a.gravity && r.apogee ? r.tAp : NaN, 's', { text: !a.gravity ? 'No apogee without gravity' : r.apogee ? undefined : 'Not reached within the simulated coast' }),
-        scalar('q_max', 'Maximum dynamic pressure', r.q[iq], 'Pa', { show: 'kPa' }), scalar('h_q', 'Altitude of maximum dynamic pressure', r.h[iq], 'm', { show: 'km' }),
+        scalar('q_max', 'Maximum dynamic pressure', pq.value, 'Pa', { show: 'kPa' }), scalar('h_q', 'Altitude of maximum dynamic pressure', pq.interp(r.h), 'm', { show: 'km' }),
         scalar('a_max', 'Peak acceleration', amax, 'm/s^2', { show: 'g0' }), scalar('m_f', 'Burnout mass', r.mf, 'kg'),
       ],
       series: [

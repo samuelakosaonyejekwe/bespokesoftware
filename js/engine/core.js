@@ -368,8 +368,10 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
   const solve = x => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true), col = {}; r.scalars.forEach(s => { meta[s.sym] = meta[s.sym] || s; col[s.sym] = Number.isFinite(s.value) ? s.value : NaN; }); cols.set(x, col); };
   xs.forEach(solve);
   // refinement: where the middle of three neighbours lies far from the chord through the outer two, halve both intervals
-  const budget = (model.heavy ? 2 : 4) * nPts;
-  for (let pass = 0; pass < 4 && !i.integer && xs.length < budget; pass++) {
+  // a quick model can afford many more solves than a slow one: the allowance is about a second of computing
+  const t0 = Date.now(); xs.slice(0, 3).forEach(x => runModel(model, { ...c.v, [sym]: x }, c.a, true)); const each = Math.max(0.05, (Date.now() - t0) / 3);
+  const budget = Math.max(xs.length, Math.min(480, Math.floor(1200 / each)));
+  for (let pass = 0; pass < 6 && !i.integer && xs.length < budget && Date.now() - t0 < 2500; pass++) {
     const span = {}; Object.keys(meta).forEach(k => { const d = xs.map(x => cols.get(x)[k]).filter(Number.isFinite); span[k] = d.length ? Math.max(...d) - Math.min(...d) : 0; });
     const add = new Set();
     for (let k = 1; k < xs.length - 1; k++) {
@@ -378,10 +380,40 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
       if (bent) { add.add((x0 + x1) / 2); add.add((x1 + x2) / 2); }
     }
     const fresh = [...add].filter(x => !cols.has(x)).slice(0, budget - xs.length); if (!fresh.length) break;
-    fresh.forEach(solve); xs = [...xs, ...fresh].sort((p, q) => p - q);
+    const done = []; for (const x of fresh) { if (Date.now() - t0 > 3000) break; solve(x); done.push(x); }
+    xs = [...xs, ...done].sort((p, q) => p - q);
   }
   const outputs = Object.keys(meta).map(k => ({ ...meta[k], data: xs.map(x => { const v = cols.get(x)[k]; return v === undefined ? NaN : v; }) })).filter(o => o.data.some(Number.isFinite));
+  outputs.forEach(o => Object.assign(o, curveShape(xs, o)));
+  // an irregular response is often a switch between distinct states: name the whole-number output that records the switching
+  const state = outputs.filter(o => o.shape === 'steps' && o.data.filter(Number.isFinite).every(Number.isInteger)).map(o => { const f = o.data.filter(Number.isFinite); let n = 0; for (let k = 1; k < f.length; k++) if (f[k] !== f[k - 1]) n++; return { name: o.name, n }; }).sort((p, q) => q.n - p.n)[0];
+  if (state && state.n >= 2) outputs.forEach(o => { if (o.shape === 'scattered') o.switches = state; });
   return { input: i, xs, outputs };
+}
+/**
+ * How a swept output behaves, so that it is drawn as what it is and not as a line through unrelated points:
+ * level (no dependence), steady (changes by under half a per cent), steps (a count or a category), residual (a numerical
+ * error measure at rounding level), scattered (irregular: neighbouring inputs give unrelated results) or line.
+ */
+export function curveShape(xs, o) {
+  const pts = xs.map((x, k) => [x, o.data[k]]).filter(p => Number.isFinite(p[1])), d = pts.map(p => p[1]);
+  if (d.length < 3) return { shape: 'line' };
+  const lo = Math.min(...d), hi = Math.max(...d), span = hi - lo, scale = Math.max(Math.abs(lo), Math.abs(hi));
+  if (!(span > 1e-9 * scale)) return { shape: 'level' };
+  const distinct = new Set(d.map(v => +v.toPrecision(9))).size;
+  if (d.every(Number.isInteger) && (!o.unit || o.unit === '1') ? distinct <= Math.max(12, d.length / 3) : distinct <= 6 && d.length >= 4 * distinct) return { shape: 'steps' };
+  // direction reversals between successive points, ignoring wiggles below a thousandth of the range
+  let rev = 0, last = 0, moves = 0; for (let k = 1; k < d.length; k++) { const s = d[k] - d[k - 1]; if (Math.abs(s) <= 1e-3 * span) continue; moves++; if (last && Math.sign(s) !== last) rev++; last = Math.sign(s); }
+  // total up-and-down travel against the range: 1 for a monotonic curve, 2 for a single peak, large for noise
+  let tv = 0; for (let k = 1; k < d.length; k++) tv += Math.abs(d[k] - d[k - 1]);
+  const rough = moves > 4 && rev / moves > 0.3 && tv > 2.5 * span;
+  if (rough && (scale < 1e-9 || /residual|error|drift|defect|imbalance|closure|conservation|discrepanc|mismatch|left in the medium/i.test(o.name || ''))) return { shape: 'residual', peak: scale };
+  if (span < 5e-3 * scale) return { shape: 'steady', rel: span / scale };
+  if (rough) { const sorted = [...d].sort((a, b) => a - b), q = f => sorted[Math.min(sorted.length - 1, Math.floor(f * sorted.length))]; // the trend is a running median over about a seventh of the points: it follows the typical level and ignores the scatter
+    const w = Math.max(2, Math.round(pts.length / 14)), trend = pts.map((_, k) => { const win = d.slice(Math.max(0, k - w), k + w + 1).sort((a, b) => a - b); return win[win.length >> 1]; });
+    const tr = new Array(o.data.length).fill(NaN); let j = 0; o.data.forEach((v, k) => { if (Number.isFinite(v)) tr[k] = trend[j++]; });
+    return { shape: 'scattered', q1: q(0.25), median: q(0.5), q3: q(0.75), trend: tr, sampled: /simulat|random|sampled|percentile|monte carlo/i.test(o.name || '') }; }
+  return { shape: 'line' };
 }
 
 /** Which conclusions depend on which assumptions: flip each assumption alone and measure the change in every output. */
