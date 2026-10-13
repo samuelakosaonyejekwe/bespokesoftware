@@ -62,7 +62,8 @@ export function lineChart(canvas, spec, opts = {}) {
   if (spec.kind === 'bar') { const n = spec.x.data.length, bw = pw / n * 0.7; spec.y.forEach((s, k) => { ctx.fillStyle = PALETTE[k % 8]; s.data.forEach((v, i) => { const px = m.l + (i + 0.5) / n * pw - bw / 2 + k * bw / spec.y.length, py = Y(v), base = Y(Math.max(y0, Math.min(0, y1))); ctx.fillRect(px, Math.min(py, base), bw / spec.y.length, Math.abs(base - py)); }); legend.push([s.label, PALETTE[k % 8]]); }); }
   else spec.y.forEach((s, k) => { draw(spec.x.data, s.data, s.color || PALETTE[k % 8], s.dash, spec.kind === 'scatter' || s.scatter, spec.fill && k === 0); legend.push([s.label, s.color || PALETTE[k % 8], s.dash]); });
   (spec.overlay || []).forEach((o, k) => { const col = PALETTE[(spec.y.length + k) % 8]; draw(o.x, o.y, col, o.dash, o.scatter); legend.push([o.label, col, o.dash]); });
-  if (spec.points) { ctx.fillStyle = th.fg; ctx.strokeStyle = th.bg; spec.points.forEach(p => { ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 4.5, 0, 7); ctx.fill(); ctx.stroke(); }); if (spec.pointsLabel) legend.push([spec.pointsLabel, th.fg, false, true]); }
+  if (spec.points && spec.pointsRing) { ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; spec.points.forEach(p => { ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 6, 0, 7); ctx.stroke(); }); legend.push([spec.pointsLabel || 'Check failed', '#f59e0b', false, true]); }
+  else if (spec.points) { ctx.fillStyle = th.fg; ctx.strokeStyle = th.bg; spec.points.forEach(p => { ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 4.5, 0, 7); ctx.fill(); ctx.stroke(); }); if (spec.pointsLabel) legend.push([spec.pointsLabel, th.fg, false, true]); }
   if (spec.vline != null) { ctx.strokeStyle = th.dim; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(spec.vline), m.t); ctx.lineTo(X(spec.vline), m.t + ph); ctx.stroke(); ctx.setLineDash([]); }
   ctx.restore();
   ctx.strokeStyle = th.dim; ctx.lineWidth = 1; ctx.strokeRect(m.l, m.t, pw, ph);

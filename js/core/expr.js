@@ -122,7 +122,9 @@ export function evaluate(e, env = {}) {
     case 'neg': return -evaluate(e.a, env);
     case 'op': {
       const a = evaluate(e.a, env), b = evaluate(e.b, env);
-      switch (e.o) { case '+': return a + b; case '-': return a - b; case '*': return a * b; case '/': return a / b; case '^': return Math.pow(a, b); }
+      switch (e.o) { case '+': return a + b; case '-': return a - b; case '*': { // x·ln x → 0 as x → 0: the limit, where plain arithmetic would give 0·(−∞) = NaN
+          if ((a === 0 && b === -Infinity && e.b.t === 'fn' && /^(ln|log|log10|log2)$/.test(e.b.n)) || (b === 0 && a === -Infinity && e.a.t === 'fn' && /^(ln|log|log10|log2)$/.test(e.a.n))) return 0;
+          return a * b; } case '/': return a / b; case '^': return Math.pow(a, b); }
       break;
     }
     case 'fn': {

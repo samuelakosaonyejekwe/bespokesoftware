@@ -365,7 +365,9 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
   if (i.si >= a && i.si <= b) xs.push(i.si);
   xs = [...new Set(xs)].sort((p, q) => p - q);
   const cols = new Map(), meta = {};
-  const solve = x => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true), col = {}; r.scalars.forEach(s => { meta[s.sym] = meta[s.sym] || s; col[s.sym] = Number.isFinite(s.value) ? s.value : NaN; }); cols.set(x, col); };
+  // each solve carries the model's own conservation and consistency checks: a point is trusted only where they pass
+  const failed = new Map();
+  const solve = x => { const r = runModel(model, { ...c.v, [sym]: x }, c.a, true), col = {}; const f = r.status === 'computed' ? (r.checks || []).filter(q => q.pass === false).map(q => q.name) : ['The solve did not complete']; if (f.length) failed.set(x, f); r.scalars.forEach(s => { meta[s.sym] = meta[s.sym] || s; col[s.sym] = Number.isFinite(s.value) ? s.value : NaN; }); cols.set(x, col); };
   xs.forEach(solve);
   // refinement: where the middle of three neighbours lies far from the chord through the outer two, halve both intervals
   // a quick model can afford many more solves than a slow one: the allowance is about a second of computing
@@ -388,7 +390,8 @@ export function sweep(c, sym, nPts = 30, lo, hi) {
   // an irregular response is often a switch between distinct states: name the whole-number output that records the switching
   const state = outputs.filter(o => o.shape === 'steps' && o.data.filter(Number.isFinite).every(Number.isInteger)).map(o => { const f = o.data.filter(Number.isFinite); let n = 0; for (let k = 1; k < f.length; k++) if (f[k] !== f[k - 1]) n++; return { name: o.name, n }; }).sort((p, q) => q.n - p.n)[0];
   if (state && state.n >= 2) outputs.forEach(o => { if (o.shape === 'scattered') o.switches = state; });
-  return { input: i, xs, outputs };
+  const bad = xs.map(x => failed.get(x) || null), names = [...new Set(bad.flatMap(f => f || []))];
+  return { input: i, xs, outputs, bad, failedChecks: names, nChecks: (c.result && c.result.checks ? c.result.checks.length : 0), resolution: model.numerics && model.numerics.resolution ? (c.inputs.find(q => q.sym === model.numerics.resolution) || {}).name : null };
 }
 /**
  * How a swept output behaves, so that it is drawn as what it is and not as a line through unrelated points:

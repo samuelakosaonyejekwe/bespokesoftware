@@ -31,10 +31,12 @@ for (const m of models) {
       while (progress) { progress = false; for (const p of pend) { if (p.done || p.L.t !== 'sym' || inputs.has(p.L.n) || E.hasDiffOps(p.R)) continue; if (![...E.symbols(p.R)].every(s => s in env)) continue; try { env[p.L.n] = E.evaluate(p.R, env); } catch { env[p.L.n] = NaN; } p.done = true; p.val = env[p.L.n]; progress = true; } }
       for (const p of pend) {
         if (!p.done) continue; const s = r.scalars.find(x => x.sym === p.L.n); if (!s || typeof s.value !== 'number') continue;
-        if (!Number.isFinite(s.value) || !Number.isFinite(p.val)) { if (Number.isFinite(s.value) !== Number.isFinite(p.val) && !s.text) { /* one side non-finite */ } else continue; }
+        if (!Number.isFinite(s.value) && !Number.isFinite(p.val)) continue;
+        // the solver reports no value where the quantity is undefined; a displayed equation that yields no value where the solver has one is a fault
+        if (!Number.isFinite(s.value)) continue;
         compared++;
-        if (Math.abs(p.val - s.value) > TOL * Math.abs(s.value) + 1e-12 * (1 + Math.abs(s.value))) {
-          const key = `${p.q.id}|${flip || ''}`; const e = seen.get(key) || { n: 0, eq: p.q, flip, ex: null, def: false }; e.n++; if (pi === 0) e.def = true; if (!e.ex) e.ex = `equation ${p.val.toPrecision(5)} vs solver ${s.value.toPrecision(5)}`; seen.set(key, e);
+        if (!Number.isFinite(p.val) || Math.abs(p.val - s.value) > TOL * Math.abs(s.value) + 1e-12 * (1 + Math.abs(s.value))) {
+          const key = `${p.q.id}|${flip || ''}`; const e = seen.get(key) || { n: 0, eq: p.q, flip, ex: null, def: false }; e.n++; if (pi === 0) e.def = true; if (!e.ex) e.ex = `equation ${Number(p.val).toPrecision(5)} vs solver ${s.value.toPrecision(5)}`; seen.set(key, e);
         }
       }
     });
